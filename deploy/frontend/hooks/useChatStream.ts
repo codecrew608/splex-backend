@@ -8,6 +8,13 @@ import { useSidebarStore } from "@/state/sidebarStore";
 
 export interface LocalChatMessage extends ChatMessage {
   streaming?: boolean;
+  // Attached to the specific assistant message that produced it, not kept
+  // as a single session-wide "latest decision" — so each message's own
+  // disclosure (MessageCortexDisclosure) still shows the right data after
+  // later messages are sent, matching the reference design's per-message
+  // Cortex pill instead of one panel that only ever reflects the last turn.
+  cortexDecision?: CortexDecisionPayload | null;
+  workflowSteps?: WorkflowStepView[] | null;
 }
 
 export interface WorkflowStepView {
@@ -56,6 +63,21 @@ export function useChatStream(
   // resolves, in the same tick that flips isStreaming off. Avoids a stale
   // closure over "status" inside the onDone handler.
   const doneAwaitingClarification = useRef(false);
+  // run() is memoized via useCallback with a deps array that doesn't
+  // include `workflow` — so onDone's closure over the plain `workflow`
+  // variable would be stale (whatever it was when run() was last
+  // reconstructed, not what accumulated via onWorkflowPlan/
+  // onWorkflowStepStatus during THIS call). Kept in sync at every
+  // setWorkflow call site instead, so onDone can read the true current
+  // value synchronously.
+  const workflowRef = useRef<WorkflowView | null>(initialWorkflow);
+  function updateWorkflow(next: WorkflowView | null | ((prev: WorkflowView | null) => WorkflowView | null)) {
+    setWorkflow((prev) => {
+      const resolved = typeof next === "function" ? next(prev) : next;
+      workflowRef.current = resolved;
+      return resolved;
+    });
+  }
 
   const run = useCallback(
     async (text: string, regenerateMessageId?: string, fileIds?: string[]) => {
@@ -66,7 +88,7 @@ export function useChatStream(
       if (!session) return;
 
       setCortexDecision(null);
-      setWorkflow(null);
+      updateWorkflow(null);
       setIsStreaming(true);
       setStatus("understanding");
       setStatusLabel("Understanding task...");
@@ -118,7 +140,12 @@ export function useChatStream(
             setStatus(stage);
             setStatusLabel(label);
           },
-          onCortexDecision: (decision) => setCortexDecision(decision),
+          onCortexDecision: (decision) => {
+            setCortexDecision(decision);
+            setMessages((prev) =>
+              prev.map((m) => (m.id === assistantLocalId ? { ...m, cortexDecision: decision } : m)),
+            );
+          },
           onToken: ({ delta }) => {
             setMessages((prev) =>
               prev.map((m) => (m.id === assistantLocalId ? { ...m, content: m.content + delta } : m)),
@@ -132,7 +159,12 @@ export function useChatStream(
           onDone: ({ messageId, userMessageId, awaitingClarification }) => {
             setMessages((prev) =>
               prev.map((m) => {
-                if (m.id === assistantLocalId) return { ...m, id: messageId ?? m.id, streaming: false };
+                if (m.id === assistantLocalId) {
+                  // Snapshot the live workflow's steps onto this message so
+                  // its own disclosure keeps showing them after the next
+                  // message starts and clears the top-level `workflow` state.
+                  return { ...m, id: messageId ?? m.id, streaming: false, workflowSteps: workflowRef.current?.steps ?? null };
+                }
                 // Swap the user message's client-generated placeholder id
                 // for its real DB id — without this, "Edit" on that message
                 // calls the truncate endpoint with an id that matches
@@ -147,7 +179,7 @@ export function useChatStream(
             if (awaitingClarification) doneAwaitingClarification.current = true;
           },
           onWorkflowPlan: ({ steps }) => {
-            setWorkflow({
+            updateWorkflow({
               steps: steps.map((s) => ({ title: s.title, categoryLabel: s.categoryLabel, status: "pending" })),
               clarificationQuestion: null,
             });
@@ -161,7 +193,7 @@ export function useChatStream(
             // until this was traced back and fixed server-side. Growing
             // the array to fit is a strictly better fallback than losing
             // the update.
-            setWorkflow((prev) => {
+            updateWorkflow((prev) => {
               const steps = prev ? [...prev.steps] : [];
               while (steps.length <= stepIndex) {
                 steps.push({ title, categoryLabel: "", status: "pending" });
@@ -171,7 +203,7 @@ export function useChatStream(
             });
           },
           onWorkflowClarification: ({ question }) => {
-            setWorkflow((prev) => (prev ? { ...prev, clarificationQuestion: question } : { steps: [], clarificationQuestion: question }));
+            updateWorkflow((prev) => (prev ? { ...prev, clarificationQuestion: question } : { steps: [], clarificationQuestion: question }));
           },
         },
         controller.signal,

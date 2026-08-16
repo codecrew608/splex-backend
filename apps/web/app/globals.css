@@ -1,175 +1,157 @@
 @import "tailwindcss";
 
-/* Light theme tokens — the default, always defined on bare :root.
-   Ported from the "Splex Design System" reference (light, airy,
-   gradient-canvas language; coral accent #FE6745) — see
-   ~/Downloads/Splex Design System (2)/readme.md and tokens/*.css. Values
-   below are the same numbers, renamed onto this app's existing token
-   names so every component that already reads --accent/--surface/etc.
-   picks up the new look with zero call-site changes. */
+/* Design tokens ported from the "SPLEX Chat" reference
+   (~/Downloads/SPLEX Chat.html) — a warm, flat, editorial palette
+   (Inter + JetBrains Mono, amber accent) replacing the earlier
+   coral/gradient-glass system. Deliberately flat: no gradient canvas, no
+   backdrop-blur chrome, no glow blooms anywhere in the reference — every
+   surface is a plain, opaque fill. Token NAMES mostly kept from the prior
+   system so call sites didn't all need touching; a few tokens tied
+   specifically to the retired glass/canvas look (--surface-glass,
+   --sidebar, --border-hairline, --accent-glow, --canvas-*, --glass-*,
+   --shadow-chrome) are gone, with call sites updated alongside. */
 :root {
-  --background: #ffffff;
-  /* --surface is the opaque, readable default every card/panel already
-     assumes (settings sections, message bubbles, panels) — --surface-glass
-     is the translucent variant, only used where a component explicitly
-     also applies backdrop-blur (sidebar chrome, composer), matching the
-     reference's own solid vs glass card distinction. */
-  --surface: #fbf8fe;
-  --surface-glass: rgba(255, 255, 255, 0.62);
-  --surface-raised: #ffffff;
-  --sidebar: rgba(255, 255, 255, 0.55);
-  --foreground: #000000;
-  --muted-foreground: #5a5c65;
-  --border: rgba(28, 29, 31, 0.06);
-  --border-strong: rgba(28, 29, 31, 0.12);
-  --border-hairline: rgba(255, 255, 255, 0.7);
-  --accent: #fe6745;
-  --accent-hover: #e8492a;
-  --accent-foreground: #ffffff;
-  --accent-soft: #fff1ed;
-  --accent-glow: rgba(254, 103, 69, 0.22);
-  --danger: #dc2626;
-  --danger-foreground: #fef2f2;
-  --code-background: #f4f0f8;
+  --background: #faf7f2;
+  --surface: #f3efe8;
+  --surface-raised: #fdfbf7;
+  --foreground: #221f1b;
+  --muted-foreground: #6f6b63;
+  --border: rgba(34, 31, 27, 0.08);
+  --border-strong: rgba(34, 31, 27, 0.16);
+  --hover: rgba(34, 31, 27, 0.045);
+  --accent: #c9852e;
+  --accent-hover: #b3752a;
+  --accent-foreground: #fffcf5;
+  --accent-soft: rgba(201, 133, 46, 0.1);
+  --danger: #c1442a;
+  --danger-foreground: #fff7f4;
+  --code-background: #efeae1;
+  --shadow-card: 0 1px 2px rgba(34, 31, 27, 0.05), 0 10px 30px -18px rgba(34, 31, 27, 0.28);
 
-  /* canvas — the page-level gradient wash + corner blooms, full-bleed
-     behind the main content, fading to plain white before the fold ends */
-  --canvas-gradient: linear-gradient(180deg, #d5edf9 0%, #e4f1fb 14%, #faf5ff 42%, #fdfbff 64%, #ffffff 82%);
-  --canvas-bloom-left: radial-gradient(60% 42% at 6% 0%, rgba(198, 228, 244, 0.85) 0%, rgba(198, 228, 244, 0) 70%);
-  --canvas-bloom-right: radial-gradient(52% 40% at 96% 8%, rgba(227, 217, 245, 0.7) 0%, rgba(227, 217, 245, 0) 72%);
-  --glass-blur-chrome: blur(18px) saturate(1.4);
-  --glass-blur-card: blur(12px) saturate(1.2);
-  --glass-inner-highlight: inset 0 1px 0 rgba(255, 255, 255, 0.75);
-  --shadow-chrome: 0 1px 2px rgba(28, 29, 31, 0.04), 0 8px 24px rgba(28, 29, 31, 0.05);
-  --shadow-card: 0 1px 1px rgba(28, 29, 31, 0.03), 0 12px 40px rgba(28, 29, 31, 0.06);
+  /* Syntax highlight colors — used by CodeBlock's react-syntax-highlighter theme. */
+  --syn-comment: #a39c91;
+  --syn-string: #6d7c4b;
+  --syn-keyword: #9c5a2c;
+  --syn-number: #7c6a3e;
+  --syn-function: #43697a;
 }
 
-/* Dark theme, OS-driven default — only applies when the user hasn't made an
-   explicit in-app choice ([data-theme="light"] wins over this).
-   The source design system was light-only (a single reference screenshot,
-   per its own readme) — this dark variant is my own extrapolation, keeping
-   the same structural relationships (glass surfaces, coral accent, soft
-   colorless shadows, pill radii) with polarity flipped, rather than a
-   literal port. Worth a look before treating it as final. */
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
-    --background: #131217;
-    --surface: #1b1a20;
-    --surface-glass: rgba(255, 255, 255, 0.06);
-    --surface-raised: #211f26;
-    --sidebar: rgba(20, 19, 24, 0.7);
-    --foreground: #f5f3f7;
-    --muted-foreground: #a6a2ad;
-    --border: rgba(255, 255, 255, 0.08);
-    --border-strong: rgba(255, 255, 255, 0.14);
-    --border-hairline: rgba(255, 255, 255, 0.12);
-    --accent: #ff8261;
-    --accent-hover: #ff6a45;
-    --accent-foreground: #1a0e09;
-    --accent-soft: rgba(255, 130, 97, 0.14);
-    --accent-glow: rgba(255, 130, 97, 0.4);
-    --danger: #f87171;
-    --danger-foreground: #2a0f0f;
-    --code-background: #1b1a20;
+    --background: #1c1a17;
+    --surface: #262320;
+    --surface-raised: #2c2925;
+    --foreground: #f6f4ef;
+    --muted-foreground: #9c978d;
+    --border: rgba(246, 244, 239, 0.08);
+    --border-strong: rgba(246, 244, 239, 0.17);
+    --hover: rgba(246, 244, 239, 0.05);
+    --accent: #e3a83b;
+    --accent-hover: #f0b754;
+    --accent-foreground: #221f1b;
+    --accent-soft: rgba(227, 168, 59, 0.13);
+    --danger: #e8846b;
+    --danger-foreground: #2a140d;
+    --code-background: #211e1b;
+    --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.25), 0 10px 30px -18px rgba(0, 0, 0, 0.6);
 
-    --canvas-gradient: linear-gradient(180deg, #1c2a38 0%, #201f2e 18%, #17151c 45%, #131217 72%, #131217 100%);
-    --canvas-bloom-left: radial-gradient(60% 42% at 6% 0%, rgba(60, 92, 122, 0.35) 0%, rgba(60, 92, 122, 0) 70%);
-    --canvas-bloom-right: radial-gradient(52% 40% at 96% 8%, rgba(90, 70, 120, 0.3) 0%, rgba(90, 70, 120, 0) 72%);
-    --glass-blur-chrome: blur(18px) saturate(1.2);
-    --glass-blur-card: blur(12px) saturate(1.1);
-    --glass-inner-highlight: inset 0 1px 0 rgba(255, 255, 255, 0.06);
-    --shadow-chrome: 0 1px 2px rgba(0, 0, 0, 0.3), 0 8px 24px rgba(0, 0, 0, 0.35);
-    --shadow-card: 0 1px 1px rgba(0, 0, 0, 0.25), 0 12px 40px rgba(0, 0, 0, 0.4);
+    --syn-comment: #79736a;
+    --syn-string: #a9bc80;
+    --syn-keyword: #e0a56b;
+    --syn-number: #c9b48a;
+    --syn-function: #93b7c4;
   }
 }
 
-/* Explicit in-app dark toggle — wins over OS preference in both directions
-   via the [data-theme="dark"] attribute selector's higher specificity. */
 :root[data-theme="dark"] {
-  --background: #131217;
-  --surface: #1b1a20;
-  --surface-glass: rgba(255, 255, 255, 0.06);
-  --surface-raised: #211f26;
-  --sidebar: rgba(20, 19, 24, 0.7);
-  --foreground: #f5f3f7;
-  --muted-foreground: #a6a2ad;
-  --border: rgba(255, 255, 255, 0.08);
-  --border-strong: rgba(255, 255, 255, 0.14);
-  --border-hairline: rgba(255, 255, 255, 0.12);
-  --accent: #ff8261;
-  --accent-hover: #ff6a45;
-  --accent-foreground: #1a0e09;
-  --accent-soft: rgba(255, 130, 97, 0.14);
-  --accent-glow: rgba(255, 130, 97, 0.4);
-  --danger: #f87171;
-  --danger-foreground: #2a0f0f;
-  --code-background: #1b1a20;
+  --background: #1c1a17;
+  --surface: #262320;
+  --surface-raised: #2c2925;
+  --foreground: #f6f4ef;
+  --muted-foreground: #9c978d;
+  --border: rgba(246, 244, 239, 0.08);
+  --border-strong: rgba(246, 244, 239, 0.17);
+  --hover: rgba(246, 244, 239, 0.05);
+  --accent: #e3a83b;
+  --accent-hover: #f0b754;
+  --accent-foreground: #221f1b;
+  --accent-soft: rgba(227, 168, 59, 0.13);
+  --danger: #e8846b;
+  --danger-foreground: #2a140d;
+  --code-background: #211e1b;
+  --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.25), 0 10px 30px -18px rgba(0, 0, 0, 0.6);
 
-  --canvas-gradient: linear-gradient(180deg, #1c2a38 0%, #201f2e 18%, #17151c 45%, #131217 72%, #131217 100%);
-  --canvas-bloom-left: radial-gradient(60% 42% at 6% 0%, rgba(60, 92, 122, 0.35) 0%, rgba(60, 92, 122, 0) 70%);
-  --canvas-bloom-right: radial-gradient(52% 40% at 96% 8%, rgba(90, 70, 120, 0.3) 0%, rgba(90, 70, 120, 0) 72%);
-  --glass-blur-chrome: blur(18px) saturate(1.2);
-  --glass-blur-card: blur(12px) saturate(1.1);
-  --glass-inner-highlight: inset 0 1px 0 rgba(255, 255, 255, 0.06);
-  --shadow-chrome: 0 1px 2px rgba(0, 0, 0, 0.3), 0 8px 24px rgba(0, 0, 0, 0.35);
-  --shadow-card: 0 1px 1px rgba(0, 0, 0, 0.25), 0 12px 40px rgba(0, 0, 0, 0.4);
+  --syn-comment: #79736a;
+  --syn-string: #a9bc80;
+  --syn-keyword: #e0a56b;
+  --syn-number: #c9b48a;
+  --syn-function: #93b7c4;
 }
 
 @theme inline {
   --color-background: var(--background);
   --color-surface: var(--surface);
-  --color-surface-glass: var(--surface-glass);
   --color-surface-raised: var(--surface-raised);
-  --color-sidebar: var(--sidebar);
   --color-foreground: var(--foreground);
   --color-muted-foreground: var(--muted-foreground);
   --color-border: var(--border);
   --color-border-strong: var(--border-strong);
-  --color-border-hairline: var(--border-hairline);
+  --color-hover: var(--hover);
   --color-accent: var(--accent);
   --color-accent-hover: var(--accent-hover);
   --color-accent-foreground: var(--accent-foreground);
   --color-accent-soft: var(--accent-soft);
-  --color-accent-glow: var(--accent-glow);
   --color-danger: var(--danger);
   --color-danger-foreground: var(--danger-foreground);
   --color-code-background: var(--code-background);
-  --font-sans: var(--font-plus-jakarta), ui-sans-serif, system-ui, -apple-system, sans-serif;
+  --font-sans: var(--font-inter), ui-sans-serif, system-ui, -apple-system, sans-serif;
   --font-mono: var(--font-jetbrains-mono), ui-monospace, "SF Mono", Menlo, monospace;
-  --font-display: var(--font-plus-jakarta), ui-sans-serif, system-ui, sans-serif;
+  --font-display: var(--font-inter), ui-sans-serif, system-ui, sans-serif;
 
   --animate-fade-in-up: fade-in-up 0.4s cubic-bezier(0.16, 1, 0.3, 1) both;
-  --animate-shimmer: shimmer 2.2s linear infinite;
-  --animate-pulse-soft: pulse-soft 1.8s ease-in-out infinite;
+  --animate-fade-in: splex-fade 0.2s ease-out both;
+  --animate-blink: splex-blink 1.05s step-end infinite;
+  --animate-pulse-soft: splex-pulse 1.5s ease-in-out infinite;
 }
 
 @keyframes fade-in-up {
   from {
     opacity: 0;
-    transform: translateY(8px);
+    transform: translateY(5px);
   }
   to {
     opacity: 1;
-    transform: translateY(0);
+    transform: none;
   }
 }
 
-@keyframes shimmer {
-  0% {
-    background-position: -200% 0;
+@keyframes splex-fade {
+  from {
+    opacity: 0;
   }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes splex-blink {
+  0%,
+  48% {
+    opacity: 1;
+  }
+  49%,
   100% {
-    background-position: 200% 0;
+    opacity: 0;
   }
 }
 
-@keyframes pulse-soft {
+@keyframes splex-pulse {
   0%,
   100% {
     opacity: 1;
   }
   50% {
-    opacity: 0.45;
+    opacity: 0.35;
   }
 }
 
@@ -182,26 +164,33 @@ body {
   height: 100%;
 }
 
-/* Full-bleed page canvas: a soft vertical wash plus two corner blooms,
-   fixed so it never scrolls away — the reference's "the canvas is the
-   only colour field on the page" rule. Individual sections/cards should
-   never carry their own background tint on top of this. */
 body {
   background-color: var(--background);
-  background-image: var(--canvas-bloom-left), var(--canvas-bloom-right), var(--canvas-gradient);
-  background-attachment: fixed;
   color: var(--foreground);
   font-family: var(--font-sans);
+  font-size: 15px;
+  line-height: 1.6;
+  letter-spacing: -0.005em;
   -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
   transition: background-color 0.15s ease, color 0.15s ease;
+}
+
+a {
+  color: var(--accent);
+  text-decoration: none;
+}
+
+a:hover {
+  text-decoration: underline;
 }
 
 h1,
 h2,
 h3,
 h4 {
-  font-weight: 700;
-  letter-spacing: -0.035em;
+  font-weight: 500;
+  letter-spacing: -0.025em;
 }
 
 ::selection {
@@ -216,11 +205,9 @@ h4 {
 
 ::-webkit-scrollbar-thumb {
   background: var(--border-strong);
-  border-radius: 9999px;
-}
-
-::-webkit-scrollbar-thumb:hover {
-  background: var(--accent);
+  border-radius: 10px;
+  border: 3px solid transparent;
+  background-clip: content-box;
 }
 
 ::-webkit-scrollbar-track {
@@ -228,12 +215,7 @@ h4 {
 }
 
 .shimmer-text {
-  background: linear-gradient(
-    90deg,
-    var(--muted-foreground) 0%,
-    var(--foreground) 50%,
-    var(--muted-foreground) 100%
-  );
+  background: linear-gradient(90deg, var(--muted-foreground) 0%, var(--foreground) 50%, var(--muted-foreground) 100%);
   background-size: 200% 100%;
   -webkit-background-clip: text;
   background-clip: text;

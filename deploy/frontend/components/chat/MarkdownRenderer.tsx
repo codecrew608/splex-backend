@@ -16,7 +16,7 @@ interface CodeElementProps {
 
 export function MarkdownRenderer({ content }: MarkdownRendererProps) {
   return (
-    <div className="prose-splex max-w-none text-[0.95rem] leading-relaxed text-foreground">
+    <div className="max-w-none text-[15px] leading-[1.68] text-foreground [text-wrap:pretty]">
       <ReactMarkdown
         remarkPlugins={[remarkGfm]}
         components={{
@@ -32,7 +32,11 @@ export function MarkdownRenderer({ content }: MarkdownRendererProps) {
           },
           code({ className, children }) {
             return (
-              <code className={className ?? "rounded bg-code-background px-1.5 py-0.5 text-[0.85em]"}>
+              <code
+                className={
+                  className ?? "rounded-[4px] border border-border bg-code-background px-[5px] py-px font-mono text-[0.86em]"
+                }
+              >
                 {children}
               </code>
             );
@@ -45,10 +49,19 @@ export function MarkdownRenderer({ content }: MarkdownRendererProps) {
             );
           },
           ul({ children }) {
-            return <ul className="my-2 list-disc space-y-1 pl-5">{children}</ul>;
+            return <ul className="my-2 list-disc space-y-1.5 pl-5">{children}</ul>;
           },
           ol({ children }) {
-            return <ol className="my-2 list-decimal space-y-1 pl-5">{children}</ol>;
+            return <ol className="my-2 list-decimal space-y-1.5 pl-5">{children}</ol>;
+          },
+          h1({ children }) {
+            return <h1 className="mt-1 text-[15px] font-semibold tracking-[-0.01em]">{children}</h1>;
+          },
+          h2({ children }) {
+            return <h2 className="mt-1 text-[15px] font-semibold tracking-[-0.01em]">{children}</h2>;
+          },
+          h3({ children }) {
+            return <h3 className="mt-1 text-[15px] font-semibold tracking-[-0.01em]">{children}</h3>;
           },
           p({ children }) {
             return <p className="mb-3 last:mb-0">{children}</p>;
@@ -56,19 +69,19 @@ export function MarkdownRenderer({ content }: MarkdownRendererProps) {
           table({ children }) {
             return (
               <div className="my-3 overflow-x-auto rounded-lg border border-border">
-                <table className="w-full border-collapse text-sm">{children}</table>
+                <table className="w-full border-collapse text-[13.5px]">{children}</table>
               </div>
             );
           },
           th({ children }) {
             return (
-              <th className="border-b border-border bg-surface-raised px-3 py-1.5 text-left font-medium">
+              <th className="whitespace-nowrap border-b border-border bg-surface px-3.5 py-2.5 text-left text-xs font-medium text-muted-foreground">
                 {children}
               </th>
             );
           },
           td({ children }) {
-            return <td className="border-b border-border px-3 py-1.5">{children}</td>;
+            return <td className="border-t border-border px-3.5 py-2.5 align-top">{children}</td>;
           },
         }}
       >

@@ -48,3 +48,17 @@ export function requireSupabaseEnv(): SupabaseEnv {
   }
   return env;
 }
+
+// Next.js throws its own internal, digest-tagged errors as control flow —
+// DYNAMIC_SERVER_USAGE when a route using cookies() is attempted during
+// static-generation (every page under (app)/layout.tsx, since it reads
+// cookies for auth), NEXT_REDIRECT for redirect(). A blanket try/catch
+// around createClient()/getUser() (see app/page.tsx, app/(app)/layout.tsx)
+// must let these pass through untouched — swallowing them here doesn't
+// break the build (Next still classifies the route correctly), but logs a
+// misleading "Supabase unavailable" for a routine, expected build-time
+// signal that has nothing to do with Supabase.
+export function isNextInternalControlFlowError(err: unknown): boolean {
+  const digest = (err as { digest?: unknown } | null)?.digest;
+  return typeof digest === "string" && (digest.startsWith("DYNAMIC_SERVER_USAGE") || digest.startsWith("NEXT_REDIRECT"));
+}

@@ -17,7 +17,7 @@ export default async function ConversationPage({ params }: PageProps) {
   // RLS (owner-scoped via conversations -> projects join) is the actual
   // authorization gate here — this query simply returns nothing if the
   // conversation isn't this user's.
-  const { data: conversation } = await supabase.from("conversations").select("id").eq("id", conversationId).single();
+  const { data: conversation } = await supabase.from("conversations").select("id, title").eq("id", conversationId).single();
 
   if (!conversation) {
     notFound();
@@ -87,6 +87,7 @@ export default async function ConversationPage({ params }: PageProps) {
       conversationId={conversationId}
       initialMessages={initialMessages}
       initialWorkflow={initialWorkflow}
+      initialTitle={conversation.title}
     />
   );
 }

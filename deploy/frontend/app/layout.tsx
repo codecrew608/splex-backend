@@ -1,13 +1,15 @@
 import type { Metadata } from "next";
-import { Plus_Jakarta_Sans, JetBrains_Mono } from "next/font/google";
+import { Inter, JetBrains_Mono } from "next/font/google";
 import Script from "next/script";
 import "./globals.css";
 
-const plusJakarta = Plus_Jakarta_Sans({
+// Variable font (no fixed weight array) — the reference design uses
+// in-between weights like 450 for body text, which only a variable font
+// range supports.
+const inter = Inter({
   subsets: ["latin"],
-  variable: "--font-plus-jakarta",
+  variable: "--font-inter",
   display: "swap",
-  weight: ["400", "500", "600", "700", "800"],
 });
 const jetbrainsMono = JetBrains_Mono({
   subsets: ["latin"],
@@ -36,7 +38,7 @@ try {
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="en" className={`${plusJakarta.variable} ${jetbrainsMono.variable}`} suppressHydrationWarning>
+    <html lang="en" className={`${inter.variable} ${jetbrainsMono.variable}`} suppressHydrationWarning>
       <head>
         <Script id="theme-init" strategy="beforeInteractive">
           {THEME_INIT_SCRIPT}

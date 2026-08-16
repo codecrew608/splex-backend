@@ -1,7 +1,7 @@
 "use client";
 
-import { useRef, useState, type KeyboardEvent } from "react";
-import { ArrowUp, Paperclip, Square } from "lucide-react";
+import { useEffect, useRef, useState, type KeyboardEvent } from "react";
+import { ArrowUp, Paperclip, Mic, Square } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { createClient } from "@/lib/supabase/client";
 import { useUserPlanTier } from "@/hooks/useUserPlanTier";
@@ -27,14 +27,87 @@ interface ComposerProps {
   disabled?: boolean;
 }
 
+// Minimal ambient typing for the Web Speech API — not in lib.dom.d.ts.
+interface SpeechRecognitionResultLike {
+  0: { transcript: string };
+  isFinal: boolean;
+}
+interface SpeechRecognitionEventLike {
+  resultIndex: number;
+  results: ArrayLike<SpeechRecognitionResultLike>;
+}
+interface SpeechRecognitionLike {
+  continuous: boolean;
+  interimResults: boolean;
+  lang: string;
+  start: () => void;
+  stop: () => void;
+  onresult: ((e: SpeechRecognitionEventLike) => void) | null;
+  onerror: (() => void) | null;
+  onend: (() => void) | null;
+}
+
 export function Composer({ onSend, onStop, isStreaming, disabled }: ComposerProps) {
   const [value, setValue] = useState("");
   const [attachments, setAttachments] = useState<StagedAttachment[]>([]);
+  const [listening, setListening] = useState(false);
+  const [voiceSupported, setVoiceSupported] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const recognitionRef = useRef<SpeechRecognitionLike | null>(null);
+  const voiceBaseRef = useRef("");
   const planTier = useUserPlanTier();
 
   const attachmentsBusy = attachments.some((a) => a.status === "uploading" || a.status === "processing");
+
+  useEffect(() => {
+    const w = window as unknown as {
+      SpeechRecognition?: new () => SpeechRecognitionLike;
+      webkitSpeechRecognition?: new () => SpeechRecognitionLike;
+    };
+    setVoiceSupported(Boolean(w.SpeechRecognition || w.webkitSpeechRecognition));
+  }, []);
+
+  function autosize() {
+    const el = textareaRef.current;
+    if (!el) return;
+    el.style.height = "auto";
+    el.style.height = `${Math.min(el.scrollHeight, 196)}px`;
+  }
+
+  function toggleVoice() {
+    if (listening) {
+      recognitionRef.current?.stop();
+      return;
+    }
+    const w = window as unknown as {
+      SpeechRecognition?: new () => SpeechRecognitionLike;
+      webkitSpeechRecognition?: new () => SpeechRecognitionLike;
+    };
+    const Ctor = w.SpeechRecognition || w.webkitSpeechRecognition;
+    if (!Ctor) return;
+
+    const recognition = new Ctor();
+    recognition.continuous = true;
+    recognition.interimResults = true;
+    recognition.lang = "en-US";
+    voiceBaseRef.current = value ? `${value} ` : "";
+
+    recognition.onresult = (e) => {
+      let transcript = "";
+      for (let i = 0; i < e.results.length; i++) {
+        transcript += e.results[i][0].transcript;
+      }
+      setValue(voiceBaseRef.current + transcript);
+      requestAnimationFrame(autosize);
+    };
+    recognition.onerror = () => setListening(false);
+    recognition.onend = () => setListening(false);
+
+    recognitionRef.current = recognition;
+    recognition.start();
+    setListening(true);
+  }
 
   async function handleFilesPicked(fileList: FileList | null) {
     if (!fileList || fileList.length === 0) return;
@@ -117,6 +190,7 @@ export function Composer({ onSend, onStop, isStreaming, disabled }: ComposerProp
   function handleSend() {
     const trimmed = value.trim();
     if (!trimmed || isStreaming || disabled || attachmentsBusy) return;
+    if (listening) recognitionRef.current?.stop();
     const readyFileIds = attachments.filter((a) => a.status === "ready").map((a) => a.id);
     onSend(trimmed, readyFileIds.length > 0 ? readyFileIds : undefined);
     setValue("");
@@ -131,15 +205,8 @@ export function Composer({ onSend, onStop, isStreaming, disabled }: ComposerProp
     }
   }
 
-  function handleInput() {
-    const el = textareaRef.current;
-    if (!el) return;
-    el.style.height = "auto";
-    el.style.height = `${Math.min(el.scrollHeight, 200)}px`;
-  }
-
   return (
-    <div className="mx-auto w-full max-w-3xl px-4 pb-4">
+    <div className="mx-auto w-full max-w-[720px] px-6 pb-[22px] pt-3.5">
       {attachments.length > 0 && (
         <div className="mb-2 flex flex-wrap gap-2">
           {attachments.map((a) => (
@@ -153,7 +220,7 @@ export function Composer({ onSend, onStop, isStreaming, disabled }: ComposerProp
       )}
 
       <div
-        className="flex items-end gap-2 rounded-[22px] border border-border-hairline bg-surface-glass p-2 backdrop-blur-md backdrop-saturate-150 transition-shadow focus-within:border-accent focus-within:shadow-[0_0_0_3px_var(--accent-soft)]"
+        className="flex flex-col gap-[9px] rounded-[18px] border border-border-strong bg-surface-raised px-[15px] pb-[11px] pt-[14px]"
         style={{ boxShadow: "var(--shadow-card)" }}
       >
         <input
@@ -167,57 +234,75 @@ export function Composer({ onSend, onStop, isStreaming, disabled }: ComposerProp
             e.target.value = "";
           }}
         />
-        <button
-          type="button"
-          onClick={() => fileInputRef.current?.click()}
-          disabled={disabled || attachments.length >= MAX_ATTACHMENTS}
-          title="Attach a file"
-          className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-surface-raised hover:text-foreground disabled:opacity-40"
-        >
-          <Paperclip size={18} strokeWidth={1.75} />
-        </button>
-
         <textarea
           ref={textareaRef}
           value={value}
           onChange={(e) => {
             setValue(e.target.value);
-            handleInput();
+            autosize();
           }}
           onKeyDown={handleKeyDown}
           rows={1}
-          placeholder="Describe what you want to get done..."
-          className="max-h-[200px] flex-1 resize-none bg-transparent py-1.5 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none"
+          placeholder="Describe what you want to get done"
+          className="max-h-[196px] w-full resize-none overflow-y-auto bg-transparent p-0.5 pt-0 text-[15px] leading-[1.6] text-foreground placeholder:text-muted-foreground focus:outline-none"
           disabled={disabled}
         />
-
-        {isStreaming ? (
+        <div className="flex items-center gap-1">
           <button
             type="button"
-            onClick={onStop}
-            className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-foreground text-background transition-colors hover:opacity-80"
-            title="Stop"
+            onClick={() => fileInputRef.current?.click()}
+            disabled={disabled || attachments.length >= MAX_ATTACHMENTS}
+            title="Attach a file"
+            className="flex h-[31px] w-[31px] shrink-0 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-hover hover:text-foreground disabled:opacity-40"
           >
-            <Square size={14} fill="currentColor" />
+            <Paperclip size={17} strokeWidth={1.4} />
           </button>
-        ) : (
-          <button
-            type="button"
-            onClick={handleSend}
-            disabled={!value.trim() || disabled || attachmentsBusy}
-            className={cn(
-              "flex h-9 w-9 shrink-0 items-center justify-center rounded-full transition-all active:scale-90",
-              value.trim() && !disabled && !attachmentsBusy
-                ? "bg-accent text-accent-foreground hover:bg-accent-hover hover:shadow-[0_0_16px_-2px_var(--accent-glow)]"
-                : "bg-surface-raised text-muted-foreground",
-            )}
-            title="Send"
-          >
-            <ArrowUp size={18} strokeWidth={2} />
-          </button>
-        )}
+          {voiceSupported && (
+            <button
+              type="button"
+              onClick={toggleVoice}
+              disabled={disabled}
+              title={listening ? "Stop voice input" : "Voice input"}
+              className={cn(
+                "flex h-[31px] w-[31px] shrink-0 items-center justify-center rounded-lg transition-colors disabled:opacity-40",
+                listening ? "text-accent" : "text-muted-foreground hover:bg-hover hover:text-foreground",
+              )}
+            >
+              <Mic size={17} strokeWidth={1.4} />
+            </button>
+          )}
+          <span className="flex-1" />
+          <span className="pr-1 font-mono text-[9.5px] tracking-[0.08em] text-muted-foreground">
+            {value.trim() ? "ENTER TO SEND" : ""}
+          </span>
+          {isStreaming ? (
+            <button
+              type="button"
+              onClick={onStop}
+              className="flex h-[31px] w-[31px] shrink-0 items-center justify-center rounded-full bg-foreground text-background transition-colors hover:opacity-80"
+              title="Stop"
+            >
+              <Square size={13} fill="currentColor" />
+            </button>
+          ) : (
+            <button
+              type="button"
+              onClick={handleSend}
+              disabled={!value.trim() || disabled || attachmentsBusy}
+              className={cn(
+                "flex h-[31px] w-[31px] shrink-0 items-center justify-center rounded-full transition-colors",
+                value.trim() && !disabled && !attachmentsBusy
+                  ? "bg-accent text-accent-foreground"
+                  : "bg-hover text-muted-foreground",
+              )}
+              title="Send"
+            >
+              <ArrowUp size={16} strokeWidth={1.6} />
+            </button>
+          )}
+        </div>
       </div>
-      <p className="mt-2 text-center text-[11px] text-muted-foreground">
+      <p className="mt-2.5 text-center text-[11px] text-muted-foreground">
         SPLEX can make mistakes. Consider checking important information.
       </p>
     </div>

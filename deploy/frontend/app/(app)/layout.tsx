@@ -1,6 +1,8 @@
 import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
+import { isNextInternalControlFlowError } from "@/lib/supabase/env";
 import { Sidebar } from "@/components/sidebar/Sidebar";
+import { SidebarReopenButton } from "@/components/sidebar/SidebarReopenButton";
 
 export default async function AppLayout({ children }: { children: React.ReactNode }) {
   // createClient() throws if Supabase env vars are missing/invalid — fail
@@ -13,6 +15,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
       data: { user },
     } = await supabase.auth.getUser());
   } catch (err) {
+    if (isNextInternalControlFlowError(err)) throw err;
     console.error("[(app)/layout] Supabase unavailable, treating as logged out:", err);
   }
 
@@ -21,14 +24,9 @@ export default async function AppLayout({ children }: { children: React.ReactNod
   }
 
   return (
-    // No bg-background here, deliberately — the gradient canvas wash lives
-    // on <body> (globals.css) and would otherwise be covered by this
-    // wrapper across every page in the app (chat, projects, settings,
-    // memory, upgrade). The sidebar is glass/translucent specifically so
-    // it reads as chrome floating over that same canvas rather than a
-    // flat opaque panel.
-    <div className="flex h-screen overflow-hidden">
+    <div className="flex h-screen overflow-hidden bg-background">
       <Sidebar email={user.email ?? ""} />
+      <SidebarReopenButton />
       <main className="min-w-0 flex-1">{children}</main>
     </div>
   );

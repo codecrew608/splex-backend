@@ -1,5 +1,6 @@
 import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
+import { isNextInternalControlFlowError } from "@/lib/supabase/env";
 
 export default async function RootPage() {
   // createClient() throws if Supabase env vars are missing/invalid — fail
@@ -12,6 +13,7 @@ export default async function RootPage() {
       data: { user },
     } = await supabase.auth.getUser());
   } catch (err) {
+    if (isNextInternalControlFlowError(err)) throw err;
     console.error("[/] Supabase unavailable, treating as logged out:", err);
   }
 
