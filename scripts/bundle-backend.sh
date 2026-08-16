@@ -97,6 +97,14 @@ EXPOSE 4000
 CMD ["node", "dist/server.js"]
 EOF
 
+cat > "$OUT/.dockerignore" <<'EOF'
+node_modules
+dist
+.env
+.env.local
+*.log
+EOF
+
 cat > "$OUT/.env.example" <<'EOF'
 PORT=4000
 FRONTEND_ORIGIN=
@@ -108,6 +116,7 @@ OPENROUTER_SITE_URL=
 OPENROUTER_APP_NAME=SPLEX
 CORTEX_CLASSIFIER_MODEL_ID=
 CREDITS_PER_USD=25000
+# Optional -- payments stay disabled (503) until all four are set.
 RAZORPAY_KEY_ID=
 RAZORPAY_KEY_SECRET=
 RAZORPAY_WEBHOOK_SECRET=
