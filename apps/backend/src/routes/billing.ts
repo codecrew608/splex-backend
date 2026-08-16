@@ -1,4 +1,4 @@
-import type { FastifyPluginAsync } from "fastify";
+import type { FastifyInstance, FastifyPluginAsync } from "fastify";
 import Razorpay from "razorpay";
 
 // Razorpay's Subscriptions API has no true "infinite, renews until
@@ -6,11 +6,27 @@ import Razorpay from "razorpay";
 // is the standard stand-in for "indefinite until the user cancels".
 const INDEFINITE_MONTHLY_CYCLES = 120;
 
-function razorpayClient(fastify: Parameters<FastifyPluginAsync>[0]) {
-  return new Razorpay({
-    key_id: fastify.config.RAZORPAY_KEY_ID,
-    key_secret: fastify.config.RAZORPAY_KEY_SECRET,
-  });
+interface RazorpayConfig {
+  keyId: string;
+  keySecret: string;
+  webhookSecret: string;
+  proPlanId: string;
+}
+
+// All four Razorpay env vars are optional (see plugins/env.ts) so the
+// backend can boot before payments are set up. Partial config (e.g. keys
+// set but not the webhook secret) is still treated as "not configured" —
+// a half-wired payment integration is worse than a cleanly disabled one.
+function getRazorpayConfig(fastify: FastifyInstance): RazorpayConfig | null {
+  const { RAZORPAY_KEY_ID, RAZORPAY_KEY_SECRET, RAZORPAY_WEBHOOK_SECRET, RAZORPAY_PRO_PLAN_ID } = fastify.config;
+  if (!RAZORPAY_KEY_ID || !RAZORPAY_KEY_SECRET || !RAZORPAY_WEBHOOK_SECRET || !RAZORPAY_PRO_PLAN_ID) {
+    return null;
+  }
+  return { keyId: RAZORPAY_KEY_ID, keySecret: RAZORPAY_KEY_SECRET, webhookSecret: RAZORPAY_WEBHOOK_SECRET, proPlanId: RAZORPAY_PRO_PLAN_ID };
+}
+
+function razorpayClient(config: RazorpayConfig) {
+  return new Razorpay({ key_id: config.keyId, key_secret: config.keySecret });
 }
 
 interface RazorpaySubscriptionWebhookEntity {
@@ -42,7 +58,11 @@ const EVENT_MAP: Record<string, { status: string; planTier?: "free" | "pro" }> =
 
 const billingRoutes: FastifyPluginAsync = async (fastify) => {
   fastify.post("/billing/create-subscription", { preHandler: fastify.authenticate }, async (request, reply) => {
-    const razorpay = razorpayClient(fastify);
+    const razorpayConfig = getRazorpayConfig(fastify);
+    if (!razorpayConfig) {
+      return reply.code(503).send({ message: "Payments are not yet available. Please try again later." });
+    }
+    const razorpay = razorpayClient(razorpayConfig);
 
     const { data: existing } = await fastify.supabaseAdmin
       .from("subscriptions")
@@ -77,7 +97,7 @@ const billingRoutes: FastifyPluginAsync = async (fastify) => {
     let subscription;
     try {
       subscription = await razorpay.subscriptions.create({
-        plan_id: fastify.config.RAZORPAY_PRO_PLAN_ID,
+        plan_id: razorpayConfig.proPlanId,
         customer_notify: 1,
         total_count: INDEFINITE_MONTHLY_CYCLES,
         notes: { user_id: request.user.id },
@@ -91,7 +111,7 @@ const billingRoutes: FastifyPluginAsync = async (fastify) => {
       .from("subscriptions")
       .update({
         razorpay_subscription_id: subscription.id,
-        razorpay_plan_id: fastify.config.RAZORPAY_PRO_PLAN_ID,
+        razorpay_plan_id: razorpayConfig.proPlanId,
         status: "created",
       })
       .eq("user_id", request.user.id);
@@ -101,12 +121,21 @@ const billingRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(500).send({ message: "Could not start checkout. Please try again." });
     }
 
-    return reply.send({ subscriptionId: subscription.id, keyId: fastify.config.RAZORPAY_KEY_ID });
+    return reply.send({ subscriptionId: subscription.id, keyId: razorpayConfig.keyId });
   });
 
   // NOT behind fastify.authenticate — Razorpay calls this directly. Auth is
   // HMAC signature verification over the raw body, not a Bearer token.
   fastify.post("/billing/webhook", async (request, reply) => {
+    const razorpayConfig = getRazorpayConfig(fastify);
+    if (!razorpayConfig) {
+      // No webhook secret means no way to verify this request is really
+      // from Razorpay — reject rather than skip verification and accept
+      // it blind, which would be a spoofable "flip anyone to pro" hole.
+      fastify.log.warn("razorpay webhook received but Razorpay is not configured");
+      return reply.code(503).send({ message: "Payments are not yet available." });
+    }
+
     const signature = request.headers["x-razorpay-signature"];
     if (typeof signature !== "string" || !request.rawBody) {
       return reply.code(400).send({ message: "Missing signature." });
@@ -115,7 +144,7 @@ const billingRoutes: FastifyPluginAsync = async (fastify) => {
     const valid = Razorpay.validateWebhookSignature(
       request.rawBody.toString("utf-8"),
       signature,
-      fastify.config.RAZORPAY_WEBHOOK_SECRET,
+      razorpayConfig.webhookSecret,
     );
     if (!valid) {
       fastify.log.warn("razorpay webhook signature verification failed");
