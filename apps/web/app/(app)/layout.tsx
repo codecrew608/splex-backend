@@ -3,10 +3,18 @@ import { createClient } from "@/lib/supabase/server";
 import { Sidebar } from "@/components/sidebar/Sidebar";
 
 export default async function AppLayout({ children }: { children: React.ReactNode }) {
-  const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  // createClient() throws if Supabase env vars are missing/invalid — fail
+  // closed to /login (same as an unauthenticated user) rather than 500
+  // every protected route nested under this layout. See lib/supabase/env.ts.
+  let user = null;
+  try {
+    const supabase = await createClient();
+    ({
+      data: { user },
+    } = await supabase.auth.getUser());
+  } catch (err) {
+    console.error("[(app)/layout] Supabase unavailable, treating as logged out:", err);
+  }
 
   if (!user) {
     redirect("/login");
