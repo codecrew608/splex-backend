@@ -1,0 +1,16 @@
+node_modules/
+dist/
+.next/
+.env
+.env.local
+.env.*.local
+*.log
+.DS_Store
+.turbo/
+*.tsbuildinfo
+
+# Python (services/intelligence)
+.venv/
+__pycache__/
+*.pyc
+*.pyo

@@ -1,0 +1,722 @@
+import type { FastifyInstance } from "fastify";
+import type { AuthedUser } from "../../types/index.js";
+import { SplexSSEWriter } from "../../sse/writer.js";
+import { selectModelCandidates } from "../modelSelect.js";
+import { categoryToLabel } from "../labels.js";
+import { completeOnce, streamCompletion, isRetryableOpenRouterError } from "../../openrouter/client.js";
+import type { ModelRegistryRow } from "../../types/index.js";
+import { resolveCreditGateEstimate } from "../../credits/costBand.js";
+import { checkCredits } from "../../credits/checkCredits.js";
+import { computeRealCost } from "../../credits/realCost.js";
+import { consumeCredits } from "../../credits/consumeCredits.js";
+import { insertMessage } from "../../persistence/messages.js";
+import { insertCortexDecision } from "../../persistence/cortexDecisions.js";
+import { planWorkflow, type PlannedStep } from "./plan.js";
+import { getWorkflowLimits } from "./limits.js";
+
+const STALE_MS = 5 * 60 * 1000;
+// Workflow steps are substantial generation tasks by nature — gate/charge
+// every step at the "complex" band regardless of the triggering message's
+// own complexity (which was already required to be "complex" for the
+// workflow to trigger in the first place — see trigger.ts).
+const STEP_COMPLEXITY = "complex" as const;
+
+interface WorkflowPlanStored {
+  steps: Array<{ title: string; category: string; categoryLabel: string; detailedPrompt: string }>;
+}
+
+export interface WorkflowRunRow {
+  id: string;
+  conversation_id: string;
+  user_message_id: string;
+  status: "planning" | "awaiting_clarification" | "running" | "completed" | "failed" | "cancelled";
+  plan: WorkflowPlanStored | null;
+  clarification_question: string | null;
+  clarification_step_index: number | null;
+  current_step_index: number;
+  updated_at: string;
+}
+
+export async function getActiveWorkflow(fastify: FastifyInstance, conversationId: string): Promise<WorkflowRunRow | null> {
+  const { data, error } = await fastify.supabaseAdmin
+    .from("workflow_runs")
+    .select("*")
+    .eq("conversation_id", conversationId)
+    .in("status", ["planning", "awaiting_clarification", "running"])
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  if (error || !data) return null;
+  const run = data as WorkflowRunRow;
+
+  // Dev server restarts (tsx watch) or a killed request leave a run stuck
+  // 'planning'/'running' forever otherwise — no background job/queue owns
+  // this, the whole step loop lives inside one HTTP request's lifetime.
+  if (
+    (run.status === "planning" || run.status === "running") &&
+    Date.now() - new Date(run.updated_at).getTime() > STALE_MS
+  ) {
+    await fastify.supabaseAdmin.from("workflow_runs").update({ status: "failed" }).eq("id", run.id);
+    return null;
+  }
+
+  return run;
+}
+
+// Editing or regenerating anything invalidates in-flight workflow context
+// for that conversation, regardless of exact message overlap — simpler and
+// more predictable than computing precise overlap.
+export async function cancelActiveWorkflow(fastify: FastifyInstance, conversationId: string): Promise<void> {
+  await fastify.supabaseAdmin
+    .from("workflow_runs")
+    .update({ status: "cancelled" })
+    .eq("conversation_id", conversationId)
+    .in("status", ["planning", "awaiting_clarification", "running"]);
+}
+
+interface StepEnvelope {
+  status: "complete" | "needs_clarification";
+  output?: string;
+  question?: string;
+}
+
+function buildPriorStepsBlock(completedOutputs: Array<{ title: string; output: string }>): string {
+  if (completedOutputs.length === 0) return "";
+  return `\n\nPrior steps completed so far:\n${completedOutputs
+    .map((s) => `[Step: ${s.title}]\n${s.output}`)
+    .join("\n\n")}`;
+}
+
+type StepOutcome =
+  | { kind: "completed"; output: string; creditsCharged: number }
+  | { kind: "needs_clarification"; question: string }
+  | { kind: "failed"; reason: string };
+
+interface RunCtx {
+  fastify: FastifyInstance;
+  sse: SplexSSEWriter;
+  user: AuthedUser;
+  workflowRunId: string;
+  systemPromptText: string;
+  abortSignal: AbortSignal;
+}
+
+async function markStep(
+  fastify: FastifyInstance,
+  workflowRunId: string,
+  stepIndex: number,
+  fields: Record<string, unknown>,
+): Promise<void> {
+  await fastify.supabaseAdmin
+    .from("workflow_steps")
+    .update(fields)
+    .eq("workflow_run_id", workflowRunId)
+    .eq("step_index", stepIndex);
+}
+
+// Tries each ranked model candidate in order, retrying only on a
+// transient/rate-limited upstream failure (see isRetryableOpenRouterError)
+// — same fallback mechanism as the single-shot chat path, applied here too
+// since workflow steps hit the exact same shared-:free-pool rate limits.
+async function runWithModelFallback<T>(
+  fastify: FastifyInstance,
+  candidates: ModelRegistryRow[],
+  category: string,
+  attempt: (model: ModelRegistryRow) => Promise<T>,
+): Promise<{ model: ModelRegistryRow; result: T }> {
+  for (let i = 0; i < candidates.length; i++) {
+    const model = candidates[i];
+    try {
+      const result = await attempt(model);
+      return { model, result };
+    } catch (err) {
+      const isLast = i === candidates.length - 1;
+      if (!isLast && isRetryableOpenRouterError(err)) {
+        fastify.log.warn(
+          { err, model: model.openrouter_model_id, category },
+          "workflow step model call failed, retrying with fallback candidate",
+        );
+        continue;
+      }
+      throw err;
+    }
+  }
+  throw new Error("unreachable: candidates is guaranteed non-empty by caller");
+}
+
+// Runs one step. Non-final steps use a non-streaming JSON-envelope call
+// (reliable, same proven pattern as planning/memory extraction, no
+// buffering needed since these are never shown live). The final step
+// streams normally via the existing token SSE events, exactly like
+// today's single-shot flow — if it needs to ask something, it just asks
+// as part of its normal answer; there's no further step to resume into,
+// so no special clarification handling is needed there.
+async function executeStep(
+  ctx: RunCtx,
+  step: PlannedStep,
+  stepIndex: number,
+  isFinal: boolean,
+  priorOutputs: Array<{ title: string; output: string }>,
+): Promise<StepOutcome> {
+  const { fastify, sse, user, workflowRunId } = ctx;
+
+  await markStep(fastify, workflowRunId, stepIndex, { status: "running" });
+  sse.workflowStepStatus({ stepIndex, status: "running", title: step.title });
+
+  const modelCandidates = await selectModelCandidates(fastify, step.category, user.planTier, 2);
+  if (modelCandidates.length === 0) {
+    await markStep(fastify, workflowRunId, stepIndex, { status: "failed" });
+    sse.workflowStepStatus({ stepIndex, status: "failed", title: step.title });
+    return { kind: "failed", reason: "This capability is temporarily unavailable." };
+  }
+  let model = modelCandidates[0];
+
+  const gateEstimate = await resolveCreditGateEstimate(fastify, STEP_COMPLEXITY, user.planTier);
+  const allowed = await checkCredits(fastify, user.id, gateEstimate);
+  if (!allowed) {
+    await markStep(fastify, workflowRunId, stepIndex, { status: "failed" });
+    sse.workflowStepStatus({ stepIndex, status: "failed", title: step.title });
+    return { kind: "failed", reason: "You're out of SPLEX credits." };
+  }
+
+  const userContent = `${step.detailedPrompt}${buildPriorStepsBlock(priorOutputs)}`;
+
+  if (!isFinal) {
+    const envelopeInstruction = `\n\nRespond with ONLY a JSON object, no prose, no markdown fences: {"status": "complete"|"needs_clarification", "output": string, "question": string}. Use "output" when status is "complete" (this is internal — not shown to the user directly, later steps will build on it). Use "question" only when status is "needs_clarification" and you genuinely cannot proceed without more information from the user.`;
+
+    let result;
+    try {
+      ({ model, result } = await runWithModelFallback(fastify, modelCandidates, step.category, (m) =>
+        completeOnce({
+          fastify,
+          model: m.openrouter_model_id,
+          messages: [
+            { role: "system", content: ctx.systemPromptText },
+            { role: "user", content: `${userContent}${envelopeInstruction}` },
+          ],
+          // Reasoning-category models "think out loud" at length before
+          // answering, and content-generation steps (e.g. full HTML/CSS) are
+          // themselves long — 2000 wasn't enough headroom for a reasoning
+          // preamble plus a full JSON response (nvidia/nemotron-3-super-120b
+          // spent its whole budget on chain-of-thought and never closed the
+          // envelope), and even 4000 wasn't enough for a full multi-page
+          // markup step (cohere/north-mini-code hit the cap with an empty
+          // message.content, all 4000 tokens apparently spent on a channel
+          // this code doesn't read) — both discovered live.
+          maxTokens: 6000,
+        }),
+      ));
+    } catch (err) {
+      fastify.log.error({ err, stepIndex }, "workflow step generation failed");
+      await markStep(fastify, workflowRunId, stepIndex, { status: "failed" });
+      sse.workflowStepStatus({ stepIndex, status: "failed", title: step.title });
+      return { kind: "failed", reason: "Something went wrong running this step." };
+    }
+
+    const realCost = await computeRealCost(fastify, step.category, model, result.usage);
+    await consumeCredits(fastify, {
+      userId: user.id,
+      creditCost: realCost.creditsCharged,
+      intent: `workflow_step:${step.category}`,
+      complexity: STEP_COMPLEXITY,
+      openrouterModelId: model.openrouter_model_id,
+      realCostEstimate: realCost.realCostEstimateUsd,
+      realInputTokens: realCost.inputTokens,
+      realOutputTokens: realCost.outputTokens,
+    });
+
+    let envelope: StepEnvelope | null = null;
+    try {
+      const jsonMatch = result.content.match(/\{[\s\S]*\}/);
+      if (jsonMatch) envelope = JSON.parse(jsonMatch[0]) as StepEnvelope;
+    } catch {
+      envelope = null;
+    }
+
+    if (envelope?.status === "needs_clarification" && envelope.question) {
+      await markStep(fastify, workflowRunId, stepIndex, {
+        status: "awaiting_clarification",
+        routed_model: model.openrouter_model_id,
+        credits_charged: realCost.creditsCharged,
+        real_input_tokens: realCost.inputTokens,
+        real_output_tokens: realCost.outputTokens,
+      });
+      return { kind: "needs_clarification", question: envelope.question };
+    }
+
+    // Fall back to the raw response whenever the envelope didn't produce
+    // something usable — either it never parsed (e.g. a reasoning model
+    // ran out of room, or ignored the JSON-only instruction), or it parsed
+    // fine but claimed "complete" with an empty/near-empty output
+    // (discovered live: a weak free-tier coding model returned valid JSON
+    // with "output": "" while claiming success on a large HTML-generation
+    // step). Capped, since an ungated dump would otherwise get pushed into
+    // every later step's prompt as "prior context" and balloon their
+    // token cost. The tail is kept, not the head, since a model that
+    // reasoned first usually puts its actual answer at the end.
+    const FALLBACK_OUTPUT_CAP = 3000;
+    const MIN_PLAUSIBLE_OUTPUT_LENGTH = 10;
+    const output =
+      envelope?.output && envelope.output.trim().length >= MIN_PLAUSIBLE_OUTPUT_LENGTH
+        ? envelope.output
+        : result.content.slice(-FALLBACK_OUTPUT_CAP);
+
+    // Both the envelope AND the raw fallback came up empty — the model
+    // burned its whole token budget without ever producing user-visible
+    // content (observed live: a "thinking"-style model emitting only to a
+    // reasoning channel, leaving message.content empty). Charging for and
+    // silently chaining an empty step into the next one's context is worse
+    // than an honest failure — the credits were still fairly charged for
+    // the generation attempt above, but the step itself did not complete.
+    if (output.trim().length < MIN_PLAUSIBLE_OUTPUT_LENGTH) {
+      await markStep(fastify, workflowRunId, stepIndex, {
+        status: "failed",
+        routed_model: model.openrouter_model_id,
+        credits_charged: realCost.creditsCharged,
+        real_input_tokens: realCost.inputTokens,
+        real_output_tokens: realCost.outputTokens,
+      });
+      sse.workflowStepStatus({ stepIndex, status: "failed", title: step.title });
+      return { kind: "failed", reason: "This step didn't produce usable output, please try again." };
+    }
+
+    await markStep(fastify, workflowRunId, stepIndex, {
+      status: "completed",
+      output,
+      routed_model: model.openrouter_model_id,
+      credits_charged: realCost.creditsCharged,
+      real_input_tokens: realCost.inputTokens,
+      real_output_tokens: realCost.outputTokens,
+    });
+    sse.workflowStepStatus({ stepIndex, status: "completed", title: step.title });
+    return { kind: "completed", output, creditsCharged: realCost.creditsCharged };
+  }
+
+  // Final step — streams live via the normal token events. Fallback is
+  // still safe here: a retryable failure is always thrown from
+  // streamCompletion's initial response.ok check, before onToken has ever
+  // fired, so no partial tokens have reached the client yet.
+  let generation;
+  try {
+    ({ model, result: generation } = await runWithModelFallback(fastify, modelCandidates, step.category, (m) =>
+      streamCompletion({
+        fastify,
+        model: m.openrouter_model_id,
+        messages: [
+          { role: "system", content: ctx.systemPromptText },
+          { role: "user", content: userContent },
+        ],
+        signal: ctx.abortSignal,
+        onToken: (delta) => sse.token({ delta }),
+      }),
+    ));
+  } catch (err) {
+    fastify.log.error({ err, stepIndex }, "workflow final step generation failed");
+    await markStep(fastify, workflowRunId, stepIndex, { status: "failed" });
+    sse.workflowStepStatus({ stepIndex, status: "failed", title: step.title });
+    return { kind: "failed", reason: "Something went wrong running this step." };
+  }
+  const { fullText, usage, aborted } = generation;
+
+  if (aborted || fullText.trim().length === 0) {
+    await markStep(fastify, workflowRunId, stepIndex, { status: "failed" });
+    sse.workflowStepStatus({ stepIndex, status: "failed", title: step.title });
+    return { kind: "failed", reason: "The response was interrupted." };
+  }
+
+  const realCost = await computeRealCost(fastify, step.category, model, usage);
+  await consumeCredits(fastify, {
+    userId: user.id,
+    creditCost: realCost.creditsCharged,
+    intent: `workflow_step:${step.category}`,
+    complexity: STEP_COMPLEXITY,
+    openrouterModelId: model.openrouter_model_id,
+    realCostEstimate: realCost.realCostEstimateUsd,
+    realInputTokens: realCost.inputTokens,
+    realOutputTokens: realCost.outputTokens,
+  });
+  await markStep(fastify, workflowRunId, stepIndex, {
+    status: "completed",
+    output: fullText,
+    routed_model: model.openrouter_model_id,
+    credits_charged: realCost.creditsCharged,
+    real_input_tokens: realCost.inputTokens,
+    real_output_tokens: realCost.outputTokens,
+  });
+  sse.workflowStepStatus({ stepIndex, status: "completed", title: step.title });
+  return { kind: "completed", output: fullText, creditsCharged: realCost.creditsCharged };
+}
+
+// Shared sequential loop used by both a fresh start and a resume. Persists
+// the final step's output as a normal assistant message (indistinguishable
+// from a single-shot response in history) plus its own cortex_decisions
+// row for CortexStatusPanel consistency. Earlier steps are internal —
+// tracked only in workflow_steps, never inserted into `messages`.
+async function runSteps(
+  ctx: RunCtx,
+  conversationId: string,
+  steps: PlannedStep[],
+  startIndex: number,
+  priorOutputsSoFar: Array<{ title: string; output: string }>,
+  priorCreditsSoFar = 0,
+): Promise<
+  | { outcome: "completed"; creditsCharged: number }
+  | { outcome: "clarify" }
+  | { outcome: "failed"; reason: string }
+> {
+  const { fastify, sse, workflowRunId } = ctx;
+  const priorOutputs = [...priorOutputsSoFar];
+  let totalCredits = priorCreditsSoFar;
+
+  for (let i = startIndex; i < steps.length; i++) {
+    const step = steps[i];
+    const isFinal = i === steps.length - 1;
+    const result = await executeStep(ctx, step, i, isFinal, priorOutputs);
+
+    if (result.kind === "needs_clarification") {
+      await fastify.supabaseAdmin
+        .from("workflow_runs")
+        .update({
+          status: "awaiting_clarification",
+          clarification_question: result.question,
+          clarification_step_index: i,
+          current_step_index: i,
+        })
+        .eq("id", workflowRunId);
+      sse.workflowClarification({ question: result.question });
+      return { outcome: "clarify" };
+    }
+
+    if (result.kind === "failed") {
+      await fastify.supabaseAdmin
+        .from("workflow_runs")
+        .update({ status: "failed", current_step_index: i })
+        .eq("id", workflowRunId);
+      return { outcome: "failed", reason: result.reason };
+    }
+
+    totalCredits += result.creditsCharged;
+    priorOutputs.push({ title: step.title, output: result.output });
+
+    if (isFinal) {
+      const assistantMessageId = await insertMessage(fastify, {
+        conversationId,
+        role: "assistant",
+        content: result.output,
+        intent: "workflow",
+        complexity: STEP_COMPLEXITY,
+        creditsCharged: totalCredits,
+        routedModel: undefined,
+      });
+      await insertCortexDecision(fastify, {
+        messageId: assistantMessageId,
+        intent: "workflow",
+        complexity: STEP_COMPLEXITY,
+        capabilities: [step.category],
+        category: step.category,
+        reason: `Final step of a ${steps.length}-step workflow.`,
+        modelSelected: "workflow",
+      });
+      await fastify.supabaseAdmin
+        .from("workflow_runs")
+        .update({ status: "completed", current_step_index: i })
+        .eq("id", workflowRunId);
+    } else {
+      await fastify.supabaseAdmin.from("workflow_runs").update({ current_step_index: i + 1 }).eq("id", workflowRunId);
+    }
+  }
+
+  return { outcome: "completed", creditsCharged: totalCredits };
+}
+
+export interface StartWorkflowResult {
+  handled: boolean; // false means: fall through to ordinary single-shot chat
+}
+
+export async function startWorkflow(params: {
+  fastify: FastifyInstance;
+  sse: SplexSSEWriter;
+  user: AuthedUser;
+  conversationId: string;
+  userMessageId: string;
+  message: string;
+  contextBlock: string;
+  systemPromptText: string;
+  abortSignal: AbortSignal;
+}): Promise<StartWorkflowResult> {
+  const { fastify, sse, user, conversationId, userMessageId, message, contextBlock, systemPromptText, abortSignal } =
+    params;
+
+  const limits = await getWorkflowLimits(fastify, user.planTier);
+  const plan = await planWorkflow(fastify, message, contextBlock, limits.maxSteps);
+
+  if (plan.outcome === "fallback") {
+    return { handled: false };
+  }
+
+  if (plan.outcome === "clarify") {
+    const { data: run, error } = await fastify.supabaseAdmin
+      .from("workflow_runs")
+      .insert({
+        conversation_id: conversationId,
+        user_message_id: userMessageId,
+        status: "awaiting_clarification",
+        clarification_question: plan.question,
+        clarification_step_index: null,
+      })
+      .select("id")
+      .single();
+
+    if (error || !run) {
+      fastify.log.error({ error }, "failed to persist workflow_runs clarification row");
+      return { handled: false };
+    }
+
+    sse.workflowClarification({ question: plan.question });
+    sse.done({ conversationId, userMessageId, awaitingClarification: true });
+    sse.end();
+    return { handled: true };
+  }
+
+  // plan.outcome === "workflow"
+  // Two distinct upfront checks, both UX courtesies only, not correctness
+  // guarantees — the real gate is the per-step checkCredits call inside
+  // executeStep, which re-checks the live balance immediately before each
+  // step actually runs (self-correcting for two-tabs-drain-the-pool, and
+  // for a plan-period rollover during a multi-day clarification pause).
+  const perStepEstimate = await resolveCreditGateEstimate(fastify, STEP_COMPLEXITY, user.planTier);
+  const estimatedTotal = perStepEstimate * plan.steps.length;
+
+  // 1. Plan-tier workflow-cost ceiling — a structural cap independent of
+  // the user's remaining balance (protects against one runaway-expensive
+  // workflow, distinct from "you're just low on credits").
+  if (estimatedTotal > limits.maxCostCredits) {
+    sse.error({
+      message: `This request is too large for your plan's per-workflow limit (${limits.maxCostCredits.toLocaleString()} credits). Try breaking it into smaller requests, or upgrade for a higher limit.`,
+    });
+    sse.done({ conversationId, userMessageId, blocked: true });
+    sse.end();
+    return { handled: true };
+  }
+
+  // 2. Live balance check.
+  const affordable = await checkCredits(fastify, user.id, estimatedTotal);
+  if (!affordable) {
+    sse.error({ message: "You don't have enough SPLEX credits to complete this multi-step request." });
+    sse.done({ conversationId, userMessageId, blocked: true });
+    sse.end();
+    return { handled: true };
+  }
+
+  const stepsWithLabels = plan.steps.map((s) => ({ ...s, categoryLabel: categoryToLabel(s.category) }));
+
+  const { data: run, error: runError } = await fastify.supabaseAdmin
+    .from("workflow_runs")
+    .insert({
+      conversation_id: conversationId,
+      user_message_id: userMessageId,
+      status: "running",
+      plan: { steps: stepsWithLabels },
+    })
+    .select("id")
+    .single();
+
+  if (runError || !run) {
+    fastify.log.error({ error: runError }, "failed to persist workflow_runs row");
+    return { handled: false };
+  }
+
+  const workflowRunId = run.id as string;
+
+  const { error: stepsError } = await fastify.supabaseAdmin.from("workflow_steps").insert(
+    plan.steps.map((s, index) => ({
+      workflow_run_id: workflowRunId,
+      step_index: index,
+      title: s.title,
+      category: s.category,
+      category_label: categoryToLabel(s.category),
+      detailed_prompt: s.detailedPrompt,
+    })),
+  );
+
+  if (stepsError) {
+    fastify.log.error({ error: stepsError }, "failed to persist workflow_steps rows");
+    await fastify.supabaseAdmin.from("workflow_runs").update({ status: "failed" }).eq("id", workflowRunId);
+    return { handled: false };
+  }
+
+  sse.workflowPlan({ steps: stepsWithLabels.map((s) => ({ title: s.title, categoryLabel: s.categoryLabel })) });
+
+  const ctx: RunCtx = { fastify, sse, user, workflowRunId, systemPromptText, abortSignal };
+  const result = await runSteps(ctx, conversationId, plan.steps, 0, []);
+  return finishRun(sse, conversationId, userMessageId, result);
+}
+
+export async function resumeWorkflow(params: {
+  fastify: FastifyInstance;
+  sse: SplexSSEWriter;
+  user: AuthedUser;
+  conversationId: string;
+  answer: string;
+  run: WorkflowRunRow;
+  contextBlock: string;
+  systemPromptText: string;
+  abortSignal: AbortSignal;
+}): Promise<StartWorkflowResult> {
+  const { fastify, sse, user, conversationId, answer, run, contextBlock, systemPromptText, abortSignal } = params;
+
+  // Atomic claim — a no-op if another request already resumed this run.
+  const { data: claimed } = await fastify.supabaseAdmin
+    .from("workflow_runs")
+    .update({ status: "running" })
+    .eq("id", run.id)
+    .eq("status", "awaiting_clarification")
+    .select("id")
+    .maybeSingle();
+
+  if (!claimed) {
+    return { handled: false };
+  }
+
+  const ctx: RunCtx = { fastify, sse, user, workflowRunId: run.id, systemPromptText, abortSignal };
+
+  // Planning-stage clarification (no plan existed yet) — re-plan with the
+  // answer folded in as extra context. This can naturally chain across
+  // multiple user turns if the planner keeps needing more detail; each
+  // round is its own request, not an unbounded in-request loop.
+  if (run.clarification_step_index === null || run.plan === null) {
+    const limits = await getWorkflowLimits(fastify, user.planTier);
+    const augmentedContext = `${contextBlock}\n\nThe user was previously asked: "${run.clarification_question ?? ""}"\nTheir answer: ${answer}`;
+    const plan = await planWorkflow(fastify, "(see clarification above)", augmentedContext, limits.maxSteps);
+
+    if (plan.outcome === "fallback") {
+      await fastify.supabaseAdmin.from("workflow_runs").update({ status: "cancelled" }).eq("id", run.id);
+      return { handled: false };
+    }
+
+    if (plan.outcome === "clarify") {
+      await fastify.supabaseAdmin
+        .from("workflow_runs")
+        .update({ status: "awaiting_clarification", clarification_question: plan.question })
+        .eq("id", run.id);
+      sse.workflowClarification({ question: plan.question });
+      sse.done({ conversationId, userMessageId: run.user_message_id, awaitingClarification: true });
+      sse.end();
+      return { handled: true };
+    }
+
+    // Same two-stage affordability check as a fresh start (startWorkflow)
+    // — this re-plan branch produces a brand new step list that has never
+    // been checked against either the workflow-cost ceiling or the live
+    // balance.
+    const perStepEstimate = await resolveCreditGateEstimate(fastify, STEP_COMPLEXITY, user.planTier);
+    const estimatedTotal = perStepEstimate * plan.steps.length;
+
+    if (estimatedTotal > limits.maxCostCredits) {
+      await fastify.supabaseAdmin.from("workflow_runs").update({ status: "cancelled" }).eq("id", run.id);
+      sse.error({
+        message: `This request is too large for your plan's per-workflow limit (${limits.maxCostCredits.toLocaleString()} credits). Try breaking it into smaller requests, or upgrade for a higher limit.`,
+      });
+      sse.done({ conversationId, userMessageId: run.user_message_id, blocked: true });
+      sse.end();
+      return { handled: true };
+    }
+
+    const affordable = await checkCredits(fastify, user.id, estimatedTotal);
+    if (!affordable) {
+      await fastify.supabaseAdmin.from("workflow_runs").update({ status: "cancelled" }).eq("id", run.id);
+      sse.error({ message: "You don't have enough SPLEX credits to complete this multi-step request." });
+      sse.done({ conversationId, userMessageId: run.user_message_id, blocked: true });
+      sse.end();
+      return { handled: true };
+    }
+
+    const stepsWithLabels = plan.steps.map((s) => ({ ...s, categoryLabel: categoryToLabel(s.category) }));
+    await fastify.supabaseAdmin
+      .from("workflow_runs")
+      .update({ plan: { steps: stepsWithLabels }, clarification_question: null })
+      .eq("id", run.id);
+    await fastify.supabaseAdmin.from("workflow_steps").insert(
+      plan.steps.map((s, index) => ({
+        workflow_run_id: run.id,
+        step_index: index,
+        title: s.title,
+        category: s.category,
+        category_label: categoryToLabel(s.category),
+        detailed_prompt: s.detailedPrompt,
+      })),
+    );
+
+    sse.workflowPlan({ steps: stepsWithLabels.map((s) => ({ title: s.title, categoryLabel: s.categoryLabel })) });
+
+    const result = await runSteps(ctx, conversationId, plan.steps, 0, []);
+    return finishRun(sse, conversationId, run.user_message_id, result);
+  }
+
+  // Mid-execution clarification — fold the answer into the paused step and
+  // re-run it, then continue the sequential loop from there.
+  const stepIndex = run.clarification_step_index;
+  const steps: PlannedStep[] = run.plan.steps.map((s) => ({
+    title: s.title,
+    category: s.category,
+    detailedPrompt: s.detailedPrompt,
+  }));
+
+  const { data: priorRows } = await fastify.supabaseAdmin
+    .from("workflow_steps")
+    .select("title, output, credits_charged")
+    .eq("workflow_run_id", run.id)
+    .lt("step_index", stepIndex)
+    .order("step_index", { ascending: true });
+
+  const priorStepRows = (priorRows as Array<{ title: string; output: string | null; credits_charged: number | null }> | null) ?? [];
+  const priorOutputs = priorStepRows
+    .filter((r) => r.output !== null)
+    .map((r) => ({ title: r.title, output: r.output as string }));
+  const priorCreditsSoFar = priorStepRows.reduce((sum, r) => sum + (r.credits_charged ?? 0), 0);
+
+  steps[stepIndex] = {
+    ...steps[stepIndex],
+    detailedPrompt: `${steps[stepIndex].detailedPrompt}\n\nYou previously asked: "${run.clarification_question ?? ""}"\nThe user's answer: ${answer}`,
+  };
+
+  // The frontend clears its workflow panel state at the start of every
+  // send (including this resume reply) and only rebuilds it from
+  // workflow_plan/workflow_step_status events — re-emit the plan here so
+  // the panel reappears instead of staying blank for the rest of the run
+  // (discovered live: a resumed workflow completed correctly server-side,
+  // but the UI showed no step progress at all afterward, since nothing
+  // had re-seeded its state). Backfill "completed" for the steps that
+  // were already done before the pause — runSteps below only emits
+  // status updates for stepIndex onward, never re-touching earlier ones.
+  sse.workflowPlan({ steps: run.plan.steps.map((s) => ({ title: s.title, categoryLabel: s.categoryLabel })) });
+  for (let i = 0; i < stepIndex; i++) {
+    sse.workflowStepStatus({ stepIndex: i, status: "completed", title: steps[i].title });
+  }
+
+  const result = await runSteps(ctx, conversationId, steps, stepIndex, priorOutputs, priorCreditsSoFar);
+  return finishRun(sse, conversationId, run.user_message_id, result);
+}
+
+function finishRun(
+  sse: SplexSSEWriter,
+  conversationId: string,
+  userMessageId: string,
+  result: { outcome: "completed"; creditsCharged: number } | { outcome: "clarify" } | { outcome: "failed"; reason: string },
+): StartWorkflowResult {
+  if (result.outcome === "clarify") {
+    sse.done({ conversationId, userMessageId, awaitingClarification: true });
+    sse.end();
+    return { handled: true };
+  }
+  if (result.outcome === "failed") {
+    sse.error({ message: result.reason });
+    sse.done({ conversationId, userMessageId, partial: true });
+    sse.end();
+    return { handled: true };
+  }
+  sse.done({ conversationId, userMessageId, creditsCharged: result.creditsCharged });
+  sse.end();
+  return { handled: true };
+}

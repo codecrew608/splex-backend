@@ -1,0 +1,13 @@
+{
+  "name": "splex",
+  "private": true,
+  "engines": {
+    "node": ">=22",
+    "pnpm": ">=9"
+  },
+  "scripts": {
+    "dev": "pnpm -r --parallel --filter=./apps/* dev",
+    "build": "pnpm -r --filter=./apps/* build",
+    "typecheck": "pnpm -r --filter=./apps/* typecheck"
+  }
+}

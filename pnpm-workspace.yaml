@@ -1,0 +1,15 @@
+packages:
+  - apps/*
+  - packages/*
+
+# Without this, `pnpm install --frozen-lockfile` hard-fails (exit 1) the
+# first time it's run anywhere with no prior interactive `pnpm approve-builds`
+# history — e.g. a fresh CI runner or Docker build — because esbuild (a
+# transitive dep of tsx) has a postinstall script pnpm won't run
+# unapproved. Discovered via a real Docker build-verification run, not
+# theoretically. `onlyBuiltDependencies` was pnpm v10's key for this and is
+# silently ignored (not an error, just a no-op) under the v11 this repo
+# and its Docker base image both use — `allowBuilds` replaced it, as a
+# {package: boolean} map rather than a plain list.
+allowBuilds:
+  esbuild: true
