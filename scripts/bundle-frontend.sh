@@ -45,4 +45,9 @@ NEXT_PUBLIC_SUPABASE_ANON_KEY=
 NEXT_PUBLIC_BACKEND_URL=
 EOF
 
+# Regenerate the lockfile every time so it never silently falls out of
+# sync with (or gets wiped by) a fresh bundle — package-lock-only skips
+# actually installing node_modules, so this stays fast.
+( cd "$OUT" && npm install --package-lock-only --silent )
+
 echo "Bundle written to $OUT"
