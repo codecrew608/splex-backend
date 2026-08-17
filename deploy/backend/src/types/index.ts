@@ -10,11 +10,6 @@ export interface AuthedUser {
 declare module "fastify" {
   interface FastifyRequest {
     user: AuthedUser;
-    // Raw JSON body bytes, stashed by the custom content-type parser in
-    // server.ts — needed only by the Razorpay webhook route to verify the
-    // HMAC signature over the exact bytes Razorpay signed (parsed-then-
-    // re-stringified JSON is not guaranteed to match byte-for-byte).
-    rawBody?: Buffer;
   }
 }
 

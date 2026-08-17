@@ -16,17 +16,6 @@ const envSchema = z.object({
   // SPLEX Credits <-> USD conversion rate. Deliberately NOT a token=credit
   // mapping — see credits/realCost.ts. Tunable without changing what users see.
   CREDITS_PER_USD: z.coerce.number().positive().default(25_000),
-  // Razorpay billing — deliberately optional. Deploys without payment keys
-  // configured yet must still boot; routes/billing.ts checks all four are
-  // present before constructing a Razorpay client and returns 503 rather
-  // than crashing or accepting unverified webhooks if they're not. Any
-  // one of these set without the others is still treated as "not
-  // configured" — see isRazorpayConfigured. RAZORPAY_PRO_PLAN_ID comes
-  // from running scripts/create-razorpay-plan.ts once real keys exist.
-  RAZORPAY_KEY_ID: z.string().min(1).optional(),
-  RAZORPAY_KEY_SECRET: z.string().min(1).optional(),
-  RAZORPAY_WEBHOOK_SECRET: z.string().min(1).optional(),
-  RAZORPAY_PRO_PLAN_ID: z.string().min(1).optional(),
   // Local FastAPI sidecar — Tesseract OCR + BGE-small embeddings. See
   // services/intelligence/main.py.
   INTELLIGENCE_SERVICE_URL: z.string().url().default("http://127.0.0.1:8100"),

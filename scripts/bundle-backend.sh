@@ -45,7 +45,6 @@ cat > "$OUT/package.json" <<'EOF'
     "fastify-sse-v2": "^4.2.2",
     "mammoth": "^1.12.1",
     "pdf-parse": "^2.4.5",
-    "razorpay": "^2.9.8",
     "zod": "^3.23.8"
   },
   "devDependencies": {
@@ -116,11 +115,6 @@ OPENROUTER_SITE_URL=
 OPENROUTER_APP_NAME=SPLEX
 CORTEX_CLASSIFIER_MODEL_ID=
 CREDITS_PER_USD=25000
-# Optional -- payments stay disabled (503) until all four are set.
-RAZORPAY_KEY_ID=
-RAZORPAY_KEY_SECRET=
-RAZORPAY_WEBHOOK_SECRET=
-RAZORPAY_PRO_PLAN_ID=
 INTELLIGENCE_SERVICE_URL=
 LOG_LEVEL=info
 EOF

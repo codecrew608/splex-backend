@@ -1,209 +1,70 @@
-import type { FastifyInstance, FastifyPluginAsync } from "fastify";
-import Razorpay from "razorpay";
+import { randomUUID } from "node:crypto";
+import type { FastifyPluginAsync } from "fastify";
 
-// Razorpay's Subscriptions API has no true "infinite, renews until
-// cancelled" mode — total_count is mandatory. 120 monthly cycles (10 years)
-// is the standard stand-in for "indefinite until the user cancels".
-const INDEFINITE_MONTHLY_CYCLES = 120;
-
-interface RazorpayConfig {
-  keyId: string;
-  keySecret: string;
-  webhookSecret: string;
-  proPlanId: string;
-}
-
-// All four Razorpay env vars are optional (see plugins/env.ts) so the
-// backend can boot before payments are set up. Partial config (e.g. keys
-// set but not the webhook secret) is still treated as "not configured" —
-// a half-wired payment integration is worse than a cleanly disabled one.
-function getRazorpayConfig(fastify: FastifyInstance): RazorpayConfig | null {
-  const { RAZORPAY_KEY_ID, RAZORPAY_KEY_SECRET, RAZORPAY_WEBHOOK_SECRET, RAZORPAY_PRO_PLAN_ID } = fastify.config;
-  if (!RAZORPAY_KEY_ID || !RAZORPAY_KEY_SECRET || !RAZORPAY_WEBHOOK_SECRET || !RAZORPAY_PRO_PLAN_ID) {
-    return null;
-  }
-  return { keyId: RAZORPAY_KEY_ID, keySecret: RAZORPAY_KEY_SECRET, webhookSecret: RAZORPAY_WEBHOOK_SECRET, proPlanId: RAZORPAY_PRO_PLAN_ID };
-}
-
-function razorpayClient(config: RazorpayConfig) {
-  return new Razorpay({ key_id: config.keyId, key_secret: config.keySecret });
-}
-
-interface RazorpaySubscriptionWebhookEntity {
-  id: string;
-  status: string;
-  current_start: number | null;
-  current_end: number | null;
-}
-
-interface RazorpayWebhookPayload {
-  event: string;
-  payload?: {
-    subscription?: { entity: RazorpaySubscriptionWebhookEntity };
-  };
-}
-
-// Razorpay event -> {subscriptions.status, users.plan_tier}. 'pending' keeps
-// plan_tier unchanged deliberately — it's a retry/grace period, not a hard
-// failure; every other terminal state reverts the user to free.
-const EVENT_MAP: Record<string, { status: string; planTier?: "free" | "pro" }> = {
-  "subscription.activated": { status: "active", planTier: "pro" },
-  "subscription.charged": { status: "active" },
-  "subscription.pending": { status: "pending" },
-  "subscription.halted": { status: "halted", planTier: "free" },
-  "subscription.cancelled": { status: "cancelled", planTier: "free" },
-  "subscription.completed": { status: "completed", planTier: "free" },
-  "subscription.expired": { status: "expired", planTier: "free" },
-};
-
+// Fake payment gateway — no real Razorpay (or any other) integration.
+// Every checkout here succeeds immediately and synchronously; no money or
+// external gateway is ever involved. Reuses the same `subscriptions`
+// table shape a real gateway integration populated (fake IDs prefixed
+// "fake_") so nothing else in the app — settings page, plan_tier gating,
+// credit limits — needs to know the difference.
 const billingRoutes: FastifyPluginAsync = async (fastify) => {
-  fastify.post("/billing/create-subscription", { preHandler: fastify.authenticate }, async (request, reply) => {
-    const razorpayConfig = getRazorpayConfig(fastify);
-    if (!razorpayConfig) {
-      return reply.code(503).send({ message: "Payments are not yet available. Please try again later." });
-    }
-    const razorpay = razorpayClient(razorpayConfig);
+  fastify.post("/billing/fake-checkout", { preHandler: fastify.authenticate }, async (request, reply) => {
+    const now = new Date();
+    const periodEnd = new Date(now);
+    periodEnd.setMonth(periodEnd.getMonth() + 1);
 
-    const { data: existing } = await fastify.supabaseAdmin
-      .from("subscriptions")
-      .select("razorpay_customer_id")
-      .eq("user_id", request.user.id)
-      .maybeSingle();
+    const { error: subError } = await fastify.supabaseAdmin.from("subscriptions").upsert(
+      {
+        user_id: request.user.id,
+        razorpay_customer_id: `fake_cus_${randomUUID()}`,
+        razorpay_subscription_id: `fake_sub_${randomUUID()}`,
+        razorpay_plan_id: "fake_plan_pro",
+        status: "active",
+        current_start: now.toISOString(),
+        current_end: periodEnd.toISOString(),
+      },
+      { onConflict: "user_id" },
+    );
 
-    let customerId = existing?.razorpay_customer_id as string | undefined;
-
-    if (!customerId) {
-      try {
-        const customer = await razorpay.customers.create({
-          email: request.user.email,
-          fail_existing: 0,
-        });
-        customerId = customer.id;
-      } catch (err) {
-        fastify.log.error({ err }, "razorpay customer creation failed");
-        return reply.code(502).send({ message: "Could not start checkout. Please try again." });
-      }
-
-      const { error: upsertError } = await fastify.supabaseAdmin
-        .from("subscriptions")
-        .upsert({ user_id: request.user.id, razorpay_customer_id: customerId }, { onConflict: "user_id" });
-
-      if (upsertError) {
-        fastify.log.error({ upsertError }, "failed to persist razorpay customer id");
-        return reply.code(500).send({ message: "Could not start checkout. Please try again." });
-      }
+    if (subError) {
+      fastify.log.error({ subError }, "failed to persist fake subscription");
+      return reply.code(500).send({ message: "Could not complete checkout. Please try again." });
     }
 
-    let subscription;
-    try {
-      subscription = await razorpay.subscriptions.create({
-        plan_id: razorpayConfig.proPlanId,
-        customer_notify: 1,
-        total_count: INDEFINITE_MONTHLY_CYCLES,
-        notes: { user_id: request.user.id },
-      });
-    } catch (err) {
-      fastify.log.error({ err }, "razorpay subscription creation failed");
-      return reply.code(502).send({ message: "Could not start checkout. Please try again." });
+    const { error: userError } = await fastify.supabaseAdmin
+      .from("users")
+      .update({ plan_tier: "pro" })
+      .eq("id", request.user.id);
+
+    if (userError) {
+      fastify.log.error({ userError }, "failed to flip plan_tier to pro");
+      return reply.code(500).send({ message: "Could not complete checkout. Please try again." });
     }
 
-    const { error: updateError } = await fastify.supabaseAdmin
-      .from("subscriptions")
-      .update({
-        razorpay_subscription_id: subscription.id,
-        razorpay_plan_id: razorpayConfig.proPlanId,
-        status: "created",
-      })
-      .eq("user_id", request.user.id);
-
-    if (updateError) {
-      fastify.log.error({ updateError }, "failed to persist razorpay subscription id");
-      return reply.code(500).send({ message: "Could not start checkout. Please try again." });
-    }
-
-    return reply.send({ subscriptionId: subscription.id, keyId: razorpayConfig.keyId });
+    return reply.send({ status: "active", planTier: "pro" });
   });
 
-  // NOT behind fastify.authenticate — Razorpay calls this directly. Auth is
-  // HMAC signature verification over the raw body, not a Bearer token.
-  fastify.post("/billing/webhook", async (request, reply) => {
-    const razorpayConfig = getRazorpayConfig(fastify);
-    if (!razorpayConfig) {
-      // No webhook secret means no way to verify this request is really
-      // from Razorpay — reject rather than skip verification and accept
-      // it blind, which would be a spoofable "flip anyone to pro" hole.
-      fastify.log.warn("razorpay webhook received but Razorpay is not configured");
-      return reply.code(503).send({ message: "Payments are not yet available." });
+  fastify.post("/billing/fake-cancel", { preHandler: fastify.authenticate }, async (request, reply) => {
+    const { error: subError } = await fastify.supabaseAdmin
+      .from("subscriptions")
+      .update({ status: "cancelled" })
+      .eq("user_id", request.user.id);
+
+    if (subError) {
+      fastify.log.error({ subError }, "failed to mark fake subscription cancelled");
     }
 
-    const signature = request.headers["x-razorpay-signature"];
-    if (typeof signature !== "string" || !request.rawBody) {
-      return reply.code(400).send({ message: "Missing signature." });
+    const { error: userError } = await fastify.supabaseAdmin
+      .from("users")
+      .update({ plan_tier: "free" })
+      .eq("id", request.user.id);
+
+    if (userError) {
+      fastify.log.error({ userError }, "failed to flip plan_tier to free");
+      return reply.code(500).send({ message: "Could not cancel. Please try again." });
     }
 
-    const valid = Razorpay.validateWebhookSignature(
-      request.rawBody.toString("utf-8"),
-      signature,
-      razorpayConfig.webhookSecret,
-    );
-    if (!valid) {
-      fastify.log.warn("razorpay webhook signature verification failed");
-      return reply.code(400).send({ message: "Invalid signature." });
-    }
-
-    const body = request.body as RazorpayWebhookPayload;
-    const eventId = request.headers["x-razorpay-event-id"];
-
-    // Idempotency: on conflict (already-processed event), ignoreDuplicates
-    // means no row comes back — treat that as "nothing to do".
-    const { data: inserted, error: insertError } = await fastify.supabaseAdmin
-      .from("payment_events")
-      .upsert(
-        { razorpay_event_id: String(eventId ?? `${body.event}:${Date.now()}`), event_type: body.event, payload: body },
-        { onConflict: "razorpay_event_id", ignoreDuplicates: true },
-      )
-      .select("id");
-
-    if (insertError) {
-      fastify.log.error({ insertError }, "failed to record webhook event");
-      return reply.code(500).send({ message: "Failed to process webhook." });
-    }
-    if (!inserted || inserted.length === 0) {
-      return reply.code(200).send({ received: true, duplicate: true });
-    }
-
-    const mapping = EVENT_MAP[body.event];
-    const entity = body.payload?.subscription?.entity;
-
-    if (mapping && entity) {
-      const { data: subRow } = await fastify.supabaseAdmin
-        .from("subscriptions")
-        .select("user_id")
-        .eq("razorpay_subscription_id", entity.id)
-        .maybeSingle();
-
-      if (subRow?.user_id) {
-        await fastify.supabaseAdmin
-          .from("subscriptions")
-          .update({
-            status: mapping.status,
-            current_start: entity.current_start ? new Date(entity.current_start * 1000).toISOString() : null,
-            current_end: entity.current_end ? new Date(entity.current_end * 1000).toISOString() : null,
-          })
-          .eq("razorpay_subscription_id", entity.id);
-
-        if (mapping.planTier) {
-          await fastify.supabaseAdmin
-            .from("users")
-            .update({ plan_tier: mapping.planTier })
-            .eq("id", subRow.user_id as string);
-        }
-      } else {
-        fastify.log.warn({ subscriptionId: entity.id }, "webhook for unknown subscription id");
-      }
-    }
-
-    return reply.code(200).send({ received: true });
+    return reply.send({ status: "cancelled", planTier: "free" });
   });
 };
 

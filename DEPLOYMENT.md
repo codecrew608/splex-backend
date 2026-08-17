@@ -41,18 +41,16 @@ fixed in the process — see "Dockerfile notes" below.
 | `OPENROUTER_APP_NAME` | no | `SPLEX` |
 | `CORTEX_CLASSIFIER_MODEL_ID` | no | Copy from local `.env` |
 | `CREDITS_PER_USD` | no | `25000` (business-tunable, not a secret) |
-| `RAZORPAY_KEY_ID` | no* | **Currently a placeholder locally — see "Razorpay" below before this can work in prod** |
-| `RAZORPAY_KEY_SECRET` | **yes** | **Currently a placeholder locally — see "Razorpay" below** |
-| `RAZORPAY_WEBHOOK_SECRET` | **yes** | **Currently a placeholder locally — see "Razorpay" below** |
-| `RAZORPAY_PRO_PLAN_ID` | no | **Currently a placeholder locally — see "Razorpay" below.** Renamed from `RAZORPAY_STARTER_PLAN_ID` today — see "What changed" |
 | `INTELLIGENCE_SERVICE_URL` | no | The intelligence service's **deployed** URL, not `127.0.0.1` — ideally a private/internal network address, not a public one (see "Intelligence service" below) |
 | `LOG_LEVEL` | no | `info` |
 
-\* Razorpay's key ID is not sensitive the way the secret is (it's also used
-client-side in checkout), but still shouldn't be committed to version
-control.
-
 **Backend health check:** `GET /health` → `{"status":"ok"}`.
+
+**Billing is a fake gateway, not real payments.** There is no Razorpay (or
+any other) integration — `/billing/fake-checkout` and `/billing/fake-cancel`
+flip `plan_tier` between `free`/`pro` directly and synchronously, no
+external gateway, no webhook, no payment env vars required. See "What
+changed" below.
 
 ## Intelligence service (`services/intelligence`) — environment variables
 
@@ -61,7 +59,7 @@ control.
 | `PORT` | no | Platform-injected, or defaults to `8100` |
 | `HOST` | no | **Must be set to `0.0.0.0` in production.** Defaults to `127.0.0.1` (loopback-only), which was fine when the backend calls it on the same machine in local dev, but is unreachable from anywhere else — this was a real gap fixed today (`main.py`, `run.sh`) precisely because it would otherwise silently fail to be reachable once deployed. |
 
-No Supabase/OpenRouter/Razorpay credentials needed here — it's a stateless
+No Supabase/OpenRouter credentials needed here — it's a stateless
 OCR/embedding sidecar, called only by the backend.
 
 **This service has no authentication on its endpoints** (`/embed`,
@@ -93,23 +91,21 @@ You're handling this deploy, but for completeness, here's everything
 - [ ] Backend's `FRONTEND_ORIGIN` = the exact Vercel production URL (protocol + host, no trailing slash) — a mismatch here means every request fails CORS, not a partial failure
 - [ ] Frontend's `NEXT_PUBLIC_BACKEND_URL` = the backend's real public URL
 - [ ] Backend's `INTELLIGENCE_SERVICE_URL` = the intelligence service's real deployed URL (private network address, per above)
-- [ ] Razorpay dashboard webhook is configured to point at `<backend-public-url>/billing/webhook` — this is what actually flips a user to `pro` after checkout; without it, payment succeeds in Razorpay but SPLEX never finds out
-- [ ] `RAZORPAY_PRO_PLAN_ID` is a **real** plan id, not the local placeholder (see below)
 
-## Razorpay — must be set up for real before billing works
+## Billing — fake gateway, nothing to configure
 
-Locally, all four `RAZORPAY_*` values are placeholders
-(`RAZORPAY_KEY_ID=rzp_test_PLACEHOLDER_NOT_REAL`, etc.) — billing has never
-been exercised against the real Razorpay API this session. Before Pro
-upgrades can work in production:
+There is no real payment gateway integration. `POST /billing/fake-checkout`
+and `POST /billing/fake-cancel` (both authenticated) flip the caller's own
+`plan_tier` between `free` and `pro` directly, synchronously, no external
+call involved — see `apps/backend/src/routes/billing.ts`. No env vars, no
+webhook, no dashboard setup. The frontend's upgrade flow
+(`FakeCheckoutModal`) is deliberately, visibly labeled "Test mode" so
+there's no chance of it reading as a real charge.
 
-1. Get real Razorpay API keys (test mode first, then live mode when ready).
-2. Run `apps/backend/scripts/create-razorpay-plan.ts` with those keys
-   (usage instructions are in the script's header comment) to create the
-   real ₹299/month Pro plan via Razorpay's API — it prints the plan id to
-   set as `RAZORPAY_PRO_PLAN_ID`.
-3. Configure the webhook URL + webhook secret in the Razorpay dashboard,
-   pointing at your deployed backend's `/billing/webhook`.
+If real payments are wired up later, that integration would replace these
+two routes and reintroduce webhook-driven `plan_tier` updates — worth
+keeping in mind that `/billing/fake-checkout` succeeding unconditionally
+is fine only as long as nothing behind it is real money.
 
 ## Database
 
@@ -188,3 +184,14 @@ of anything else in this document.
   notes") — fixes a `pnpm install --frozen-lockfile` failure that would
   otherwise hit any fresh environment with no prior local install history,
   not just Docker (a new CI runner, a teammate's first clone, etc.).
+
+## What changed later (Razorpay removed, replaced with a fake gateway)
+
+The `RAZORPAY_PRO_PLAN_ID` rename above is now moot — the entire Razorpay
+integration was removed at the user's explicit request, not just repointed.
+`razorpay` is gone from `apps/backend/package.json`,
+`scripts/create-razorpay-plan.ts` is deleted, all four `RAZORPAY_*` env
+vars are gone from the schema/`.env`/`.env.example`, and the raw-body
+content-type parser in `server.ts` (which existed solely for webhook HMAC
+verification) is gone too. See "Billing — fake gateway" above for what
+replaced it.

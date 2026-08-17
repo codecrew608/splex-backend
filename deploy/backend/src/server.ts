@@ -16,24 +16,6 @@ async function main() {
     logger: { level: process.env.LOG_LEVEL ?? "info" },
   });
 
-  // Stashes the raw request bytes alongside the normally-parsed JSON body.
-  // Only the Razorpay webhook route needs this (HMAC signature verification
-  // must run over the exact bytes Razorpay signed) — every other route just
-  // gets the parsed body exactly as before, this is a strict superset.
-  fastify.addContentTypeParser("application/json", { parseAs: "buffer" }, (req, body, done) => {
-    const buffer = body as Buffer;
-    req.rawBody = buffer;
-    if (buffer.length === 0) {
-      done(null, {});
-      return;
-    }
-    try {
-      done(null, JSON.parse(buffer.toString("utf-8")));
-    } catch (err) {
-      done(err as Error, undefined);
-    }
-  });
-
   await fastify.register(envPlugin);
   await fastify.register(supabaseAdminPlugin);
   await fastify.register(authPlugin);

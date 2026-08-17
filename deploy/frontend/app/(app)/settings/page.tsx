@@ -3,10 +3,10 @@ import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import { SecuritySection } from "@/components/settings/SecuritySection";
 import { DangerZoneSection } from "@/components/settings/DangerZoneSection";
+import { CancelSubscriptionButton } from "@/components/settings/CancelSubscriptionButton";
 
 const PLAN_LABEL: Record<string, string> = {
   free: "Free",
-  starter: "Starter",
   pro: "Pro",
 };
 
@@ -67,9 +67,7 @@ export default async function SettingsPage() {
               Upgrade
             </Link>
           ) : (
-            <span className="rounded-full border border-border px-3 py-2 text-sm text-muted-foreground">
-              Current plan
-            </span>
+            <CancelSubscriptionButton />
           )}
         </div>
         <div className="mt-3 h-1.5 w-full overflow-hidden rounded-full bg-surface-raised">

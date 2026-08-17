@@ -14,7 +14,7 @@ export interface CreditsInfo {
 // Long backstop only — the real trigger is creditsVersion below, bumped
 // the instant a message actually finishes (see useChatStream). This
 // interval just catches changes this tab wouldn't otherwise know about,
-// e.g. a Razorpay webhook flipping the plan tier in another tab/session.
+// e.g. the fake checkout (or a cancellation) completing in another tab.
 const REFRESH_INTERVAL_MS = 60_000;
 
 // Same query settings/page.tsx already runs server-side — pulled into a
