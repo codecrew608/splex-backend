@@ -48,6 +48,7 @@ export function useChatStream(
   initialWorkflow: WorkflowView | null = null,
 ) {
   const upsertConversation = useSidebarStore((s) => s.upsertConversation);
+  const bumpCredits = useSidebarStore((s) => s.bumpCredits);
 
   const [conversationId, setConversationId] = useState<string | undefined>(initialConversationId);
   const [messages, setMessages] = useState<LocalChatMessage[]>(initialMessages);
@@ -201,6 +202,11 @@ export function useChatStream(
               steps[stepIndex] = { ...steps[stepIndex], title, status: stepStatus };
               return { steps, clarificationQuestion: prev?.clarificationQuestion ?? null };
             });
+            // Each completed step charges credits server-side as it
+            // finishes, not just once at the very end of the workflow —
+            // refresh the sidebar as each one lands rather than only after
+            // the whole (possibly long) run completes.
+            if (stepStatus === "completed") bumpCredits();
           },
           onWorkflowClarification: ({ question }) => {
             updateWorkflow((prev) => (prev ? { ...prev, clarificationQuestion: question } : { steps: [], clarificationQuestion: question }));
@@ -213,8 +219,12 @@ export function useChatStream(
       setStatus(doneAwaitingClarification.current ? "awaiting_clarification" : "idle");
       setStatusLabel("");
       doneAwaitingClarification.current = false;
+      // A real credit charge just landed (or a workflow charged per step
+      // along the way) — tell the sidebar's credits bar to refetch now
+      // rather than wait for its own timer/focus tick.
+      bumpCredits();
     },
-    [conversationId, initialProjectId, upsertConversation],
+    [conversationId, initialProjectId, upsertConversation, bumpCredits],
   );
 
   const sendMessage = useCallback((text: string, fileIds?: string[]) => run(text, undefined, fileIds), [run]);

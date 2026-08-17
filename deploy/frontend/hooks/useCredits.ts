@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { createClient } from "@/lib/supabase/client";
+import { useSidebarStore } from "@/state/sidebarStore";
 
 export interface CreditsInfo {
   used: number;
@@ -10,18 +11,18 @@ export interface CreditsInfo {
   loading: boolean;
 }
 
-const REFRESH_INTERVAL_MS = 20_000;
+// Long backstop only — the real trigger is creditsVersion below, bumped
+// the instant a message actually finishes (see useChatStream). This
+// interval just catches changes this tab wouldn't otherwise know about,
+// e.g. a Razorpay webhook flipping the plan tier in another tab/session.
+const REFRESH_INTERVAL_MS = 60_000;
 
 // Same query settings/page.tsx already runs server-side — pulled into a
 // hook so the sidebar's credits bar reads the same real numbers instead
-// of a placeholder. The sidebar has no direct line to "a message just
-// finished streaming" (that state lives in ChatThread/useChatStream, a
-// separate component) — rather than wire a cross-component event for it,
-// this just refetches periodically and whenever the tab regains focus,
-// which is enough to keep a background stat like this reasonably current
-// without every consumer needing to know when to invalidate it.
+// of a placeholder.
 export function useCredits(): CreditsInfo {
   const [state, setState] = useState<CreditsInfo>({ used: 0, total: 0, pct: 0, loading: true });
+  const creditsVersion = useSidebarStore((s) => s.creditsVersion);
 
   const load = useCallback(async () => {
     const supabase = createClient();
@@ -50,8 +51,13 @@ export function useCredits(): CreditsInfo {
     setState({ used, total, pct: total > 0 ? Math.min(100, Math.round((used / total) * 100)) : 0, loading: false });
   }, []);
 
+  // Fires on mount and again immediately whenever bumpCredits() is called
+  // (a message just finished) — this is the real, responsive path.
   useEffect(() => {
     load();
+  }, [load, creditsVersion]);
+
+  useEffect(() => {
     const interval = setInterval(load, REFRESH_INTERVAL_MS);
     const onFocus = () => load();
     window.addEventListener("focus", onFocus);

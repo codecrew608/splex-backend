@@ -14,6 +14,15 @@ interface SidebarState {
   conversations: Conversation[];
   setConversations: (conversations: Conversation[]) => void;
   upsertConversation: (conversation: Conversation) => void;
+  // Bumped by useChatStream whenever a message finishes (a real credit
+  // charge just landed server-side) — useCredits watches this and
+  // refetches immediately, instead of the sidebar's credits bar only
+  // catching up on its next timer tick or tab focus. ChatThread and
+  // Sidebar are siblings with no direct prop path between them, so this
+  // goes through the store both already depend on rather than adding a
+  // new one just for this.
+  creditsVersion: number;
+  bumpCredits: () => void;
 }
 
 export const useSidebarStore = create<SidebarState>((set) => ({
@@ -33,4 +42,6 @@ export const useSidebarStore = create<SidebarState>((set) => ({
           : [conversation, ...state.conversations],
       };
     }),
+  creditsVersion: 0,
+  bumpCredits: () => set((state) => ({ creditsVersion: state.creditsVersion + 1 })),
 }));
