@@ -3,10 +3,13 @@
 import { useState } from "react";
 import Link from "next/link";
 import { createClient } from "@/lib/supabase/client";
+import { withTimeout } from "@/lib/withTimeout";
 import { Button } from "@/components/ui/Button";
 import { Input } from "@/components/ui/Input";
 import { LogoMark } from "@/components/ui/Logo";
 import { AuthShell } from "@/components/auth/AuthShell";
+
+const SIGNUP_TIMEOUT_MS = 15_000;
 
 export default function SignupPage() {
   const [email, setEmail] = useState("");
@@ -19,20 +22,36 @@ export default function SignupPage() {
     e.preventDefault();
     setLoading(true);
     setError(null);
+    // eslint-disable-next-line no-console
+    console.log("[signup] submit: creating Supabase client");
 
-    // createClient()/signUp() can throw rather than resolve with {error} —
-    // a blocked/failed fetch (CORS, DNS, offline) surfaces as a thrown
-    // TypeError, not a clean Supabase error result. Without this
-    // try/catch, that throw skips setLoading(false) entirely and the
-    // button is stuck on "Creating account..." forever with no visible
-    // error — exactly the symptom this was written to fix.
+    // Two distinct failure modes this guards against, neither of which a
+    // bare try/catch alone fully covers:
+    // 1. createClient()/signUp() throwing instead of resolving with
+    //    {error} — a blocked/failed fetch (CORS, DNS, offline) surfaces as
+    //    a thrown TypeError, not a clean Supabase error result. Caught
+    //    below.
+    // 2. The awaited call never settling at all (a hung connection, not a
+    //    rejection) — try/catch/finally does nothing until a promise
+    //    settles, so a truly stuck fetch would leave loading stuck
+    //    forever regardless of the try/catch. withTimeout forces a
+    //    rejection after SIGNUP_TIMEOUT_MS either way.
+    // Without either fix, the button is stuck on "Creating account..."
+    // forever with no visible error — exactly the reported symptom.
     try {
       const supabase = createClient();
-      const { error } = await supabase.auth.signUp({
-        email,
-        password,
-        options: { emailRedirectTo: `${window.location.origin}/auth/callback` },
-      });
+      // eslint-disable-next-line no-console
+      console.log("[signup] client created, calling auth.signUp()");
+      const { error } = await withTimeout(
+        supabase.auth.signUp({
+          email,
+          password,
+          options: { emailRedirectTo: `${window.location.origin}/auth/callback` },
+        }),
+        SIGNUP_TIMEOUT_MS,
+      );
+      // eslint-disable-next-line no-console
+      console.log("[signup] auth.signUp() resolved", { hasError: !!error });
 
       if (error) {
         setError(error.message);
@@ -40,6 +59,8 @@ export default function SignupPage() {
       }
       setSubmitted(true);
     } catch (err) {
+      // eslint-disable-next-line no-console
+      console.error("[signup] auth.signUp() threw or timed out:", err);
       setError(err instanceof Error ? err.message : "Couldn't reach SPLEX. Check your connection and try again.");
     } finally {
       setLoading(false);

@@ -4,10 +4,13 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { createClient } from "@/lib/supabase/client";
+import { withTimeout } from "@/lib/withTimeout";
 import { Button } from "@/components/ui/Button";
 import { Input } from "@/components/ui/Input";
 import { LogoMark } from "@/components/ui/Logo";
 import { AuthShell } from "@/components/auth/AuthShell";
+
+const LOGIN_TIMEOUT_MS = 15_000;
 
 export default function LoginPage() {
   const router = useRouter();
@@ -21,14 +24,23 @@ export default function LoginPage() {
     setLoading(true);
     setError(null);
 
-    // createClient()/signInWithPassword() can throw rather than resolve
-    // with {error} — a blocked/failed fetch (CORS, DNS, offline) surfaces
-    // as a thrown TypeError, not a clean Supabase error result. Without
-    // this try/catch, that throw skips setLoading(false) entirely and the
-    // button is stuck on "Signing in..." forever with no visible error.
+    // eslint-disable-next-line no-console
+    console.log("[login] submit: creating Supabase client");
+
+    // Two distinct failure modes, neither fully covered by try/catch
+    // alone: createClient()/signInWithPassword() throwing instead of
+    // resolving with {error} (a blocked/failed fetch — CORS, DNS, offline
+    // — surfaces as a thrown TypeError), and the awaited call never
+    // settling at all (a hung connection, which try/catch/finally can't
+    // help with since it only runs once a promise settles). Without both,
+    // the button is stuck on "Signing in..." forever with no visible error.
     try {
       const supabase = createClient();
-      const { error } = await supabase.auth.signInWithPassword({ email, password });
+      // eslint-disable-next-line no-console
+      console.log("[login] client created, calling auth.signInWithPassword()");
+      const { error } = await withTimeout(supabase.auth.signInWithPassword({ email, password }), LOGIN_TIMEOUT_MS);
+      // eslint-disable-next-line no-console
+      console.log("[login] signInWithPassword() resolved", { hasError: !!error });
 
       if (error) {
         setError(error.message);
@@ -37,6 +49,8 @@ export default function LoginPage() {
       router.push("/chat");
       router.refresh();
     } catch (err) {
+      // eslint-disable-next-line no-console
+      console.error("[login] signInWithPassword() threw or timed out:", err);
       setError(err instanceof Error ? err.message : "Couldn't reach SPLEX. Check your connection and try again.");
     } finally {
       setLoading(false);
