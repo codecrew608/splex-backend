@@ -7,8 +7,7 @@ import { createClient } from "@/lib/supabase/client";
 import { useUserPlanTier } from "@/hooks/useUserPlanTier";
 import { FILE_SIZE_LIMITS, formatBytes } from "@/lib/fileLimits";
 import { AttachmentChip } from "./AttachmentChip";
-
-const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL as string;
+import { BACKEND_URL } from "@/lib/backendUrl";
 const MAX_ATTACHMENTS = 5;
 const ACCEPT =
   "image/*,.pdf,.docx,.txt,.md,.csv,.js,.ts,.tsx,.jsx,.py,.json,.yaml,.yml,.sql,.html,.css,.sh,.go,.rs,.java,.c,.cpp,.rb,.php";

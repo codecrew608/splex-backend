@@ -21,16 +21,26 @@ export default function LoginPage() {
     setLoading(true);
     setError(null);
 
-    const supabase = createClient();
-    const { error } = await supabase.auth.signInWithPassword({ email, password });
+    // createClient()/signInWithPassword() can throw rather than resolve
+    // with {error} — a blocked/failed fetch (CORS, DNS, offline) surfaces
+    // as a thrown TypeError, not a clean Supabase error result. Without
+    // this try/catch, that throw skips setLoading(false) entirely and the
+    // button is stuck on "Signing in..." forever with no visible error.
+    try {
+      const supabase = createClient();
+      const { error } = await supabase.auth.signInWithPassword({ email, password });
 
-    setLoading(false);
-    if (error) {
-      setError(error.message);
-      return;
+      if (error) {
+        setError(error.message);
+        return;
+      }
+      router.push("/chat");
+      router.refresh();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Couldn't reach SPLEX. Check your connection and try again.");
+    } finally {
+      setLoading(false);
     }
-    router.push("/chat");
-    router.refresh();
   }
 
   async function handleGoogleSignIn() {

@@ -11,6 +11,7 @@ import type {
   WorkflowStepStatusEventData,
   WorkflowClarificationEventData,
 } from "@splex/shared-types";
+import { BACKEND_URL } from "./backendUrl";
 
 export interface ChatStreamHandlers {
   onConversationCreated: (data: ConversationCreatedEventData) => void;
@@ -23,8 +24,6 @@ export interface ChatStreamHandlers {
   onWorkflowStepStatus: (data: WorkflowStepStatusEventData) => void;
   onWorkflowClarification: (data: WorkflowClarificationEventData) => void;
 }
-
-const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL as string;
 
 export async function streamChat(
   body: ChatRequestBody,

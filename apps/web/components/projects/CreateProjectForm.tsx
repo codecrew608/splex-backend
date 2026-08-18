@@ -6,8 +6,7 @@ import { Plus } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
 import { Button } from "@/components/ui/Button";
 import { Input } from "@/components/ui/Input";
-
-const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL as string;
+import { BACKEND_URL } from "@/lib/backendUrl";
 
 export function CreateProjectForm() {
   const router = useRouter();

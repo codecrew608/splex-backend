@@ -5,8 +5,7 @@ import { useRouter } from "next/navigation";
 import { X, Lock } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
 import { Button } from "@/components/ui/Button";
-
-const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL as string;
+import { BACKEND_URL } from "@/lib/backendUrl";
 
 interface FakeCheckoutModalProps {
   onClose: () => void;

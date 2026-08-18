@@ -6,8 +6,7 @@ import { createClient } from "@/lib/supabase/client";
 import { Button } from "@/components/ui/Button";
 import { Input } from "@/components/ui/Input";
 import { SignOutButton } from "./SignOutButton";
-
-const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL as string;
+import { BACKEND_URL } from "@/lib/backendUrl";
 const CONFIRM_TEXT = "DELETE";
 
 export function DangerZoneSection() {

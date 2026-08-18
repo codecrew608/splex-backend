@@ -10,6 +10,7 @@ import { MessageBubble } from "./MessageBubble";
 import { CortexStatusPanel } from "./CortexStatusPanel";
 import { WorkflowPanel } from "./WorkflowPanel";
 import { Composer } from "./Composer";
+import { BACKEND_URL } from "@/lib/backendUrl";
 
 interface ChatThreadProps {
   conversationId?: string;
@@ -21,8 +22,6 @@ interface ChatThreadProps {
   initialWorkflow?: WorkflowView | null;
   initialTitle?: string;
 }
-
-const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL as string;
 
 export function ChatThread({
   conversationId: initialConversationId,

@@ -5,7 +5,24 @@ import type { FastifyInstance } from "fastify";
 
 const envSchema = z.object({
   PORT: z.coerce.number().int().positive().default(4000),
-  FRONTEND_ORIGIN: z.string().url(),
+  // Comma-separated list of allowed origins (usually just one). A single
+  // exact-string mismatch here — wrong domain, stray trailing slash, http
+  // vs https — silently fails CORS on every backend request with no
+  // helpful error client-side, just a blocked-by-CORS message in devtools.
+  // Accepting a list (trimmed, trailing slash stripped) rather than one
+  // strict URL makes it possible to list more than one candidate while
+  // confirming which deployment URL is actually live, instead of the app
+  // being fully broken on a guess.
+  FRONTEND_ORIGIN: z
+    .string()
+    .min(1, "FRONTEND_ORIGIN is required")
+    .transform((val) =>
+      val
+        .split(",")
+        .map((origin) => origin.trim().replace(/\/$/, ""))
+        .filter(Boolean),
+    )
+    .pipe(z.array(z.string().url()).min(1, "FRONTEND_ORIGIN must contain at least one valid URL")),
   SUPABASE_URL: z.string().url(),
   SUPABASE_SERVICE_ROLE_KEY: z.string().min(1, "SUPABASE_SERVICE_ROLE_KEY is required"),
   OPENROUTER_API_KEY: z.string().min(1, "OPENROUTER_API_KEY is required"),

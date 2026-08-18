@@ -20,19 +20,30 @@ export default function SignupPage() {
     setLoading(true);
     setError(null);
 
-    const supabase = createClient();
-    const { error } = await supabase.auth.signUp({
-      email,
-      password,
-      options: { emailRedirectTo: `${window.location.origin}/auth/callback` },
-    });
+    // createClient()/signUp() can throw rather than resolve with {error} —
+    // a blocked/failed fetch (CORS, DNS, offline) surfaces as a thrown
+    // TypeError, not a clean Supabase error result. Without this
+    // try/catch, that throw skips setLoading(false) entirely and the
+    // button is stuck on "Creating account..." forever with no visible
+    // error — exactly the symptom this was written to fix.
+    try {
+      const supabase = createClient();
+      const { error } = await supabase.auth.signUp({
+        email,
+        password,
+        options: { emailRedirectTo: `${window.location.origin}/auth/callback` },
+      });
 
-    setLoading(false);
-    if (error) {
-      setError(error.message);
-      return;
+      if (error) {
+        setError(error.message);
+        return;
+      }
+      setSubmitted(true);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Couldn't reach SPLEX. Check your connection and try again.");
+    } finally {
+      setLoading(false);
     }
-    setSubmitted(true);
   }
 
   async function handleGoogleSignIn() {

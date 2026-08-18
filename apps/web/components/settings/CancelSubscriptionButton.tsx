@@ -3,8 +3,7 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
-
-const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL as string;
+import { BACKEND_URL } from "@/lib/backendUrl";
 
 export function CancelSubscriptionButton() {
   const router = useRouter();
