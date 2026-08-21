@@ -38,6 +38,7 @@ cat > "$OUT/package.json" <<'EOF'
   },
   "dependencies": {
     "@fastify/cors": "^11.3.0",
+    "@fastify/rate-limit": "^11.2.0",
     "@supabase/supabase-js": "^2.112.3",
     "dotenv": "^16.4.7",
     "fastify": "^5.12.0",
@@ -45,11 +46,14 @@ cat > "$OUT/package.json" <<'EOF'
     "fastify-sse-v2": "^4.2.2",
     "mammoth": "^1.12.1",
     "pdf-parse": "^2.4.5",
+    "pptxgenjs": "^4.0.1",
     "zod": "^3.23.8"
   },
   "devDependencies": {
+    "@cloudflare/containers": "^0.3.7",
     "@types/node": "^22.10.1",
-    "typescript": "^5.7.2"
+    "typescript": "^5.7.2",
+    "wrangler": "^4.125.0"
   }
 }
 EOF
@@ -117,6 +121,84 @@ CORTEX_CLASSIFIER_MODEL_ID=
 CREDITS_PER_USD=25000
 INTELLIGENCE_SERVICE_URL=
 LOG_LEVEL=info
+EOF
+
+# Cloudflare Containers plumbing — kept entirely outside src/ (a separate
+# Workers-runtime entrypoint, not compiled by tsc/tsconfig.json above,
+# which targets Node for the actual Fastify dist/server.js image). This
+# Worker is a thin router only: it never touches Fastify, SSE, or
+# OpenRouter logic — those stay exactly as they are inside the container
+# image built from this same folder's Dockerfile.
+mkdir -p "$OUT/cloudflare"
+
+cat > "$OUT/cloudflare/wrangler.jsonc" <<'EOF'
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "splex-backend",
+  "main": "container-entry.ts",
+  "compatibility_date": "2026-08-21",
+  "compatibility_flags": ["nodejs_compat"],
+  // Builds the image from the Dockerfile one level up (this project's
+  // deploy/backend root) — the exact same Dockerfile already build-tested
+  // locally, never a second/parallel Dockerfile to keep in sync.
+  "containers": [
+    {
+      "class_name": "SplexBackendContainer",
+      "image": "../Dockerfile",
+      "max_instances": 5,
+      // Non-secret only — SUPABASE_SERVICE_ROLE_KEY and OPENROUTER_API_KEY
+      // are set via `wrangler secret put` (see DEPLOYMENT.md), never here.
+      "env": {
+        "PORT": "4000",
+        "OPENROUTER_BASE_URL": "https://openrouter.ai/api/v1",
+        "OPENROUTER_APP_NAME": "SPLEX",
+        "CREDITS_PER_USD": "25000",
+        "LOG_LEVEL": "info"
+      }
+    }
+  ],
+  "durable_objects": {
+    "bindings": [
+      { "name": "SPLEX_BACKEND", "class_name": "SplexBackendContainer" }
+    ]
+  },
+  "migrations": [
+    { "tag": "v1", "new_sqlite_classes": ["SplexBackendContainer"] }
+  ],
+  "observability": {
+    "enabled": true
+  }
+}
+EOF
+
+cat > "$OUT/cloudflare/container-entry.ts" <<'EOF'
+import { Container, getContainer } from "@cloudflare/containers";
+
+// Fronts the Dockerized Fastify server (this folder's Dockerfile, built
+// unchanged) behind a Durable Object. Deliberately does nothing else —
+// no auth, no routing logic, no request rewriting — Fastify's own CORS,
+// auth, and rate-limit plugins run exactly as they do today, inside the
+// container. container.fetch() proxies the request/response verbatim,
+// including chunked/streamed bodies, which is what SSE (fastify-sse-v2)
+// needs to keep working unmodified.
+export class SplexBackendContainer extends Container {
+  defaultPort = 4000;
+  // SSE connections (chat streaming, Deep Research) are long-lived —
+  // don't let Cloudflare recycle the instance mid-stream on ordinary
+  // idle-timeout defaults.
+  sleepAfter = "10m";
+}
+
+interface Env {
+  SPLEX_BACKEND: DurableObjectNamespace<SplexBackendContainer>;
+}
+
+export default {
+  async fetch(request: Request, env: Env): Promise<Response> {
+    const container = getContainer(env.SPLEX_BACKEND);
+    return container.fetch(request);
+  },
+};
 EOF
 
 # Regenerate the lockfile every time so it never silently falls out of

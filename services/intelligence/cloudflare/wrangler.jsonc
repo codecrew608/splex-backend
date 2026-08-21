@@ -1,0 +1,38 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "splex-intelligence",
+  "main": "container-entry.ts",
+  "compatibility_date": "2026-08-21",
+  "compatibility_flags": ["nodejs_compat"],
+  // Private-only, deliberately: no public route, no custom domain, and
+  // workers_dev is off. This service has no auth on /embed or /ocr/* (see
+  // DEPLOYMENT.md) — the ONLY thing allowed to reach it is the backend
+  // Worker, via the private container network address set in the
+  // backend's INTELLIGENCE_SERVICE_URL. Do not add a `routes` block or
+  // flip workers_dev to true here without adding request auth first.
+  "workers_dev": false,
+  "containers": [
+    {
+      "class_name": "SplexIntelligenceContainer",
+      // Builds from this service's own existing, already build-tested
+      // Dockerfile one level up — never a second Dockerfile to maintain.
+      "image": "../Dockerfile",
+      "max_instances": 3,
+      "env": {
+        "HOST": "0.0.0.0",
+        "PORT": "8100"
+      }
+    }
+  ],
+  "durable_objects": {
+    "bindings": [
+      { "name": "SPLEX_INTELLIGENCE", "class_name": "SplexIntelligenceContainer" }
+    ]
+  },
+  "migrations": [
+    { "tag": "v1", "new_sqlite_classes": ["SplexIntelligenceContainer"] }
+  ],
+  "observability": {
+    "enabled": true
+  }
+}

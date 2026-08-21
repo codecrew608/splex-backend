@@ -1,0 +1,22 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  // Deployed via @opennextjs/cloudflare — this is a Worker with static
+  // assets, which is what Cloudflare's own tooling produces for Next.js
+  // today (the Pages dashboard project you create just points its build
+  // command at this same output, so "Cloudflare Pages" and this config
+  // are the same artifact, not two separate things to keep in sync).
+  "name": "splex-frontend",
+  "main": ".open-next/worker.js",
+  "compatibility_date": "2026-08-21",
+  // Supabase's SSR client and other deps touch Node builtins (crypto,
+  // buffer, etc.) — required for apps/web/middleware.ts's
+  // createServerClient() call to work unchanged on Workers.
+  "compatibility_flags": ["nodejs_compat"],
+  "assets": {
+    "directory": ".open-next/assets",
+    "binding": "ASSETS"
+  },
+  "observability": {
+    "enabled": true
+  }
+}

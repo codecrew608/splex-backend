@@ -1,18 +1,24 @@
 # SPLEX Production Deployment Guide
 
-Three independently-deployable units. You're handling the frontend on Vercel
-yourself — this document covers what the other two need, plus the wiring
-between all three. **Nothing in this repo has been deployed anywhere as
-part of preparing this document** — Dockerfiles were build-tested locally
-only (`docker build`, never `run`/`push`).
+Three independently-deployable units — this document covers what each
+needs, plus the wiring between all three. **Nothing in this repo has been
+deployed anywhere as part of preparing this document.** Dockerfiles were
+build-tested locally only (`docker build`, never `run`/`push`), and the
+Cloudflare configuration below (added in the Cloudflare-prep phase) has
+been build/typecheck-verified locally only — no `wrangler deploy` or
+`wrangler publish` has been run against a real Cloudflare account.
 
 ## The three units
 
-| Unit | What it is | Where it can run |
-|---|---|---|
-| `apps/web` | Next.js 15 frontend | Vercel (you're handling this) |
-| `apps/backend` | Fastify API + SSE streaming + Cortex orchestration | Any host that runs a long-lived Node process (Railway, Render, Fly.io, a VPS, ECS/Fargate, etc.) |
-| `services/intelligence` | Python/FastAPI sidecar — Tesseract OCR + BGE embeddings | Any host that supports Docker (needed for the `tesseract-ocr` apt package — no Python-only buildpack will work) |
+| Unit | What it is | Prepared Cloudflare target | Also runs on |
+|---|---|---|---|
+| `apps/web` (bundled as `deploy/frontend`) | Next.js 15 frontend | Cloudflare Pages/Workers, via `@opennextjs/cloudflare` | Vercel |
+| `apps/backend` (bundled as `deploy/backend`) | Fastify API + SSE streaming + Cortex orchestration | Cloudflare Containers (Worker + Durable Object fronting the existing Dockerfile) | Any host that runs a long-lived Node process (Railway, Render, Fly.io, a VPS, ECS/Fargate) |
+| `services/intelligence` | Python/FastAPI sidecar — Tesseract OCR + BGE embeddings | Cloudflare Containers, **private only** (no public route) | Any Docker-capable host (needed for the `tesseract-ocr` apt package — no Python-only buildpack will work) |
+
+**Railway/current deployment stays live and untouched** — this section
+documents a prepared, not-yet-activated Cloudflare setup, added alongside
+the existing options above, not a replacement of them yet.
 
 The database (Supabase Postgres + Auth + Storage) is already fully
 provisioned and migrated — see "Database" below, nothing to do there at
@@ -83,6 +89,115 @@ You're handling this deploy, but for completeness, here's everything
 | `NEXT_PUBLIC_SUPABASE_URL` | `https://yxhallicacslnwwmxnhd.supabase.co` |
 | `NEXT_PUBLIC_SUPABASE_ANON_KEY` | Copy from local `.env.local` |
 | `NEXT_PUBLIC_BACKEND_URL` | The backend's **public** deployed URL (not the intelligence service — the frontend never talks to that directly) |
+
+---
+
+## Cloudflare deployment (prepared, not yet activated)
+
+Config only — nothing below has been deployed. Three Cloudflare projects,
+one per unit, using the exact same source each unit already builds from
+(`deploy/frontend`, `deploy/backend`, `services/intelligence`). Regenerate
+`deploy/` first if `apps/` changed: `./scripts/bundle-backend.sh && ./scripts/bundle-frontend.sh`
+— both scripts now also emit the Cloudflare config described here, so a
+re-bundle never drops it.
+
+### Frontend — Cloudflare Pages (via Workers + static assets)
+
+- Files: `apps/web/wrangler.jsonc`, `apps/web/open-next.config.ts` (source
+  of truth; carried into `deploy/frontend` automatically by
+  `bundle-frontend.sh`'s existing copy step — no separate Cloudflare files
+  needed there).
+- Adapter: `@opennextjs/cloudflare` (current Cloudflare-recommended path for
+  Next.js 15 App Router — supersedes the older `@cloudflare/next-on-pages`,
+  which handles this repo's `middleware.ts` pattern less reliably).
+- **Dashboard steps:**
+  1. Cloudflare dashboard → Workers & Pages → Create → connect the GitHub
+     repo (`codecrew608/splex-backend`).
+  2. Root directory: `deploy/frontend`.
+  3. Build command: `npm install && npm run cf:build` (runs
+     `opennextjs-cloudflare build`, producing `.open-next/`).
+  4. Deploy command / output: `npx wrangler deploy` picks up
+     `wrangler.jsonc` in that same root directory automatically.
+  5. Set environment variables and secrets (below) in the project's
+     Settings → Variables, for the Production environment.
+  6. Attach the custom domain once DNS is ready (Settings → Domains &
+     Routes).
+- **What was verified not to break:** App Router structure, `middleware.ts`
+  (Supabase session-refresh — needs the `nodejs_compat` compatibility flag,
+  already set in `wrangler.jsonc`), and the one API route
+  (`app/(auth)/auth/callback/route.ts`) — none of these were modified; the
+  adapter wraps the existing Next.js build output, it doesn't require
+  rewriting App Router code.
+
+### Backend — Cloudflare Containers
+
+- Files: `deploy/backend/cloudflare/wrangler.jsonc`,
+  `deploy/backend/cloudflare/container-entry.ts` (generated by
+  `bundle-backend.sh`, same as the rest of `deploy/backend`'s meta files).
+- Architecture: a Worker + Durable Object (`SplexBackendContainer`) fronts
+  the **existing, unmodified** `deploy/backend/Dockerfile` image. The
+  Worker's only job is `container.fetch(request)` — a verbatim proxy,
+  including streamed/chunked bodies, so SSE (`fastify-sse-v2`, used for
+  chat and Deep Research streaming) keeps working unchanged. Fastify's own
+  CORS, auth, and rate-limit plugins are untouched and still run inside the
+  container exactly as before.
+- **Dashboard steps:**
+  1. Workers & Pages → Create → connect the same GitHub repo.
+  2. Root directory: `deploy/backend/cloudflare`.
+  3. This deploys `wrangler.jsonc`'s `[[containers]]` block, which builds
+     the image from `../Dockerfile` (i.e. `deploy/backend/Dockerfile`,
+     unchanged) — no separate container registry push needed, Cloudflare
+     builds it from the Dockerfile directly.
+  4. Set the two secrets (below) via `wrangler secret put` or the
+     dashboard's Settings → Variables → "Encrypt" toggle — never as plain
+     `env` values in `wrangler.jsonc` (that file only carries non-secret
+     values, matching the existing `.env.example` convention).
+  5. Attach the API subdomain (e.g. `api.<domain>`) under Domains & Routes.
+
+### Intelligence service — Cloudflare Containers, private only
+
+- Files: `services/intelligence/cloudflare/wrangler.jsonc`,
+  `services/intelligence/cloudflare/container-entry.ts` (new — this service
+  isn't part of the `deploy/` bundle system, so these live directly beside
+  its existing `Dockerfile`/`main.py`, hand-maintained like the rest of
+  that service).
+- **This must stay unreachable from the public internet** — same
+  requirement as every other platform option in this doc, since `/embed`
+  and `/ocr/*` still have no request auth. Enforced here via
+  `workers_dev: false` and no `routes`/custom domain in
+  `wrangler.jsonc` — do not add either without also adding a shared-secret
+  header check to `main.py` first.
+  - The backend container reaches it the same way it does today: via
+    `INTELLIGENCE_SERVICE_URL` pointed at Cloudflare's private
+    container-to-container network address, **not** a `workers.dev` URL.
+- **Dashboard steps:**
+  1. Workers & Pages → Create → connect the repo.
+  2. Root directory: `services/intelligence/cloudflare`.
+  3. Confirm no domain/route is attached after deploy (the dashboard shows
+     this under the project's Domains & Routes tab — it should be empty).
+
+### Environment variables and secrets — Cloudflare specifically
+
+| Where | Var | Secret? | Notes |
+|---|---|---|---|
+| Frontend Worker | `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY`, `NEXT_PUBLIC_BACKEND_URL` | no | Same three as the Vercel table above — set as Cloudflare Pages "Environment variables," not secrets (they're safe-to-expose by design, verified this session) |
+| Backend Container | `FRONTEND_ORIGIN`, `SUPABASE_URL`, `OPENROUTER_SITE_URL`, `CORTEX_CLASSIFIER_MODEL_ID`, `INTELLIGENCE_SERVICE_URL` | no | Set in `[[containers]].env` in `wrangler.jsonc` or dashboard Variables (`PORT`, `OPENROUTER_BASE_URL`, `OPENROUTER_APP_NAME`, `CREDITS_PER_USD`, `LOG_LEVEL` are already pre-filled there with their known non-secret values) |
+| Backend Container | `SUPABASE_SERVICE_ROLE_KEY`, `OPENROUTER_API_KEY` | **yes** | `wrangler secret put SUPABASE_SERVICE_ROLE_KEY` / `wrangler secret put OPENROUTER_API_KEY` from inside `deploy/backend/cloudflare` — never committed, never in `wrangler.jsonc` |
+| Intelligence Container | `HOST`, `PORT` | no | Already pre-filled in `wrangler.jsonc`'s `[[containers]].env` |
+
+### Deployment order (once you activate this — still not done)
+
+1. Intelligence service first (backend depends on its URL at boot/first call).
+2. Backend second, once `INTELLIGENCE_SERVICE_URL` can point at the
+   intelligence Container's real private address.
+3. Frontend last, once `NEXT_PUBLIC_BACKEND_URL` can point at the backend's
+   real public URL, and the backend's `FRONTEND_ORIGIN` has been set to the
+   frontend's real URL (circular — expect one redeploy of whichever went
+   first, to fill in the other's now-known URL; same wiring caveat as the
+   existing Vercel/Railway checklist below).
+4. Re-run this doc's existing local verification (build/typecheck) plus a
+   live smoke test through the real Cloudflare URLs before pointing DNS at
+   any of them for real traffic.
 
 ---
 

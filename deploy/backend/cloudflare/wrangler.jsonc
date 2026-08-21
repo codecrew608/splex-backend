@@ -1,0 +1,37 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "splex-backend",
+  "main": "container-entry.ts",
+  "compatibility_date": "2026-08-21",
+  "compatibility_flags": ["nodejs_compat"],
+  // Builds the image from the Dockerfile one level up (this project's
+  // deploy/backend root) — the exact same Dockerfile already build-tested
+  // locally, never a second/parallel Dockerfile to keep in sync.
+  "containers": [
+    {
+      "class_name": "SplexBackendContainer",
+      "image": "../Dockerfile",
+      "max_instances": 5,
+      // Non-secret only — SUPABASE_SERVICE_ROLE_KEY and OPENROUTER_API_KEY
+      // are set via `wrangler secret put` (see DEPLOYMENT.md), never here.
+      "env": {
+        "PORT": "4000",
+        "OPENROUTER_BASE_URL": "https://openrouter.ai/api/v1",
+        "OPENROUTER_APP_NAME": "SPLEX",
+        "CREDITS_PER_USD": "25000",
+        "LOG_LEVEL": "info"
+      }
+    }
+  ],
+  "durable_objects": {
+    "bindings": [
+      { "name": "SPLEX_BACKEND", "class_name": "SplexBackendContainer" }
+    ]
+  },
+  "migrations": [
+    { "tag": "v1", "new_sqlite_classes": ["SplexBackendContainer"] }
+  ],
+  "observability": {
+    "enabled": true
+  }
+}
