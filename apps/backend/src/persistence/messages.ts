@@ -37,6 +37,38 @@ export async function deleteMessage(fastify: FastifyInstance, messageId: string)
   await fastify.supabaseAdmin.from("messages").delete().eq("id", messageId);
 }
 
+export interface UpdateMessageResultParams {
+  content: string;
+  creditsCharged?: number;
+  routedModel?: string; // INTERNAL ONLY — real openrouter_model_id.
+}
+
+// Patches a previously-inserted message's final content in place — used
+// only by async media (video; PPT later): the placeholder message
+// ("Generating your video...") inserted at job-submission time gets
+// rewritten here once the job actually finishes, so a page reload shows
+// the real result like any other message instead of the stale
+// placeholder. Every synchronous capability (chat, image, audio) never
+// needs this — their message content is final the moment it's inserted.
+export async function updateMessageResult(
+  fastify: FastifyInstance,
+  messageId: string,
+  params: UpdateMessageResultParams,
+): Promise<void> {
+  const { error } = await fastify.supabaseAdmin
+    .from("messages")
+    .update({
+      content: params.content,
+      credits_charged: params.creditsCharged ?? null,
+      routed_model: params.routedModel ?? null,
+    })
+    .eq("id", messageId);
+
+  if (error) {
+    fastify.log.error({ error, messageId }, "failed to update message with async media result");
+  }
+}
+
 export interface HistoryMessage {
   role: MessageRole;
   content: string;

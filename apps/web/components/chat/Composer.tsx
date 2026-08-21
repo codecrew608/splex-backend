@@ -1,12 +1,13 @@
 "use client";
 
 import { useEffect, useRef, useState, type KeyboardEvent } from "react";
-import { ArrowUp, Paperclip, Mic, Square } from "lucide-react";
+import { ArrowUp, Mic, Square } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { createClient } from "@/lib/supabase/client";
 import { useUserPlanTier } from "@/hooks/useUserPlanTier";
 import { FILE_SIZE_LIMITS, formatBytes } from "@/lib/fileLimits";
 import { AttachmentChip } from "./AttachmentChip";
+import { ComposerMenu } from "./ComposerMenu";
 import { BACKEND_URL } from "@/lib/backendUrl";
 const MAX_ATTACHMENTS = 5;
 const ACCEPT =
@@ -204,6 +205,17 @@ export function Composer({ onSend, onStop, isStreaming, disabled }: ComposerProp
     }
   }
 
+  function handlePrefill(text: string) {
+    setValue(text);
+    requestAnimationFrame(() => {
+      const el = textareaRef.current;
+      if (!el) return;
+      el.focus();
+      el.setSelectionRange(text.length, text.length);
+      autosize();
+    });
+  }
+
   return (
     <div className="mx-auto w-full max-w-[720px] px-6 pb-[22px] pt-3.5">
       {attachments.length > 0 && (
@@ -247,15 +259,11 @@ export function Composer({ onSend, onStop, isStreaming, disabled }: ComposerProp
           disabled={disabled}
         />
         <div className="flex items-center gap-1">
-          <button
-            type="button"
-            onClick={() => fileInputRef.current?.click()}
+          <ComposerMenu
+            onUploadFile={() => fileInputRef.current?.click()}
+            onPrefill={handlePrefill}
             disabled={disabled || attachments.length >= MAX_ATTACHMENTS}
-            title="Attach a file"
-            className="flex h-[31px] w-[31px] shrink-0 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-hover hover:text-foreground disabled:opacity-40"
-          >
-            <Paperclip size={17} strokeWidth={1.4} />
-          </button>
+          />
           {voiceSupported && (
             <button
               type="button"

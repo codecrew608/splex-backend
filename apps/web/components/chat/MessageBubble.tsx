@@ -5,6 +5,7 @@ import { Check, Copy, Pencil, RotateCcw } from "lucide-react";
 import type { LocalChatMessage } from "@/hooks/useChatStream";
 import { MarkdownRenderer } from "./MarkdownRenderer";
 import { MessageCortexDisclosure } from "./MessageCortexDisclosure";
+import { CitationsList } from "./CitationsList";
 
 interface MessageBubbleProps {
   message: LocalChatMessage;
@@ -110,7 +111,7 @@ export function MessageBubble({ message, showRegenerate, onRegenerate, onEditSub
         <span className="font-mono text-[10px] text-muted-foreground">{formatTime(message.createdAt)}</span>
       </div>
 
-      <MessageCortexDisclosure decision={message.cortexDecision} workflowSteps={message.workflowSteps} />
+      <MessageCortexDisclosure workflowSteps={message.workflowSteps} />
 
       <div className="min-w-0 w-full">
         {message.content ? (
@@ -124,6 +125,11 @@ export function MessageBubble({ message, showRegenerate, onRegenerate, onEditSub
         ) : null}
         {message.streaming && message.content && (
           <span className="mt-[-8px] inline-block h-[15px] w-[7px] animate-blink bg-accent align-text-bottom" />
+        )}
+        {!message.streaming && message.citations && message.citations.length > 0 && (
+          <div className="mt-3">
+            <CitationsList citations={message.citations} />
+          </div>
         )}
       </div>
 

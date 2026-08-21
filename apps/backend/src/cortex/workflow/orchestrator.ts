@@ -5,7 +5,7 @@ import { selectModelCandidates } from "../modelSelect.js";
 import { categoryToLabel } from "../labels.js";
 import { completeOnce, streamCompletion, isRetryableOpenRouterError } from "../../openrouter/client.js";
 import type { ModelRegistryRow } from "../../types/index.js";
-import { resolveCreditGateEstimate } from "../../credits/costBand.js";
+import { resolveCreditGateEstimate, resolveWorkflowStepEstimate } from "../../credits/costBand.js";
 import { checkCredits } from "../../credits/checkCredits.js";
 import { computeRealCost } from "../../credits/realCost.js";
 import { consumeCredits } from "../../credits/consumeCredits.js";
@@ -485,7 +485,7 @@ export async function startWorkflow(params: {
   // executeStep, which re-checks the live balance immediately before each
   // step actually runs (self-correcting for two-tabs-drain-the-pool, and
   // for a plan-period rollover during a multi-day clarification pause).
-  const perStepEstimate = await resolveCreditGateEstimate(fastify, STEP_COMPLEXITY, user.planTier);
+  const perStepEstimate = await resolveWorkflowStepEstimate(fastify, STEP_COMPLEXITY, limits.maxCostCredits);
   const estimatedTotal = perStepEstimate * plan.steps.length;
 
   // 1. Plan-tier workflow-cost ceiling — a structural cap independent of
@@ -500,8 +500,12 @@ export async function startWorkflow(params: {
     return { handled: true };
   }
 
-  // 2. Live balance check.
-  const affordable = await checkCredits(fastify, user.id, estimatedTotal);
+  // 2. Live balance check. monthlyOnly: estimatedTotal is a worst-case
+  // sum-of-steps number sized against the monthly pool, not a realistic
+  // single charge — each step's own checkCredits call below (executeStep)
+  // already does the real, both-pools-checked gating as it actually runs.
+  // See checkCredits' own doc comment for the live-caught bug this avoids.
+  const affordable = await checkCredits(fastify, user.id, estimatedTotal, { monthlyOnly: true });
   if (!affordable) {
     sse.error({ message: "You don't have enough SPLEX credits to complete this multi-step request." });
     sse.done({ conversationId, userMessageId, blocked: true });
@@ -610,7 +614,7 @@ export async function resumeWorkflow(params: {
     // — this re-plan branch produces a brand new step list that has never
     // been checked against either the workflow-cost ceiling or the live
     // balance.
-    const perStepEstimate = await resolveCreditGateEstimate(fastify, STEP_COMPLEXITY, user.planTier);
+    const perStepEstimate = await resolveWorkflowStepEstimate(fastify, STEP_COMPLEXITY, limits.maxCostCredits);
     const estimatedTotal = perStepEstimate * plan.steps.length;
 
     if (estimatedTotal > limits.maxCostCredits) {
@@ -623,7 +627,8 @@ export async function resumeWorkflow(params: {
       return { handled: true };
     }
 
-    const affordable = await checkCredits(fastify, user.id, estimatedTotal);
+    // monthlyOnly — same reasoning as the fresh-start path above.
+    const affordable = await checkCredits(fastify, user.id, estimatedTotal, { monthlyOnly: true });
     if (!affordable) {
       await fastify.supabaseAdmin.from("workflow_runs").update({ status: "cancelled" }).eq("id", run.id);
       sse.error({ message: "You don't have enough SPLEX credits to complete this multi-step request." });

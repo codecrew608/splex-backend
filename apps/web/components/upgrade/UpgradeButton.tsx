@@ -10,7 +10,7 @@ export function UpgradeButton() {
   return (
     <>
       <Button onClick={() => setOpen(true)} className="w-full">
-        Upgrade to Pro
+        Upgrade to Starter
       </Button>
       {open && <FakeCheckoutModal onClose={() => setOpen(false)} />}
     </>

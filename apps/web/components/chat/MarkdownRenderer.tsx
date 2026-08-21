@@ -41,7 +41,30 @@ export function MarkdownRenderer({ content }: MarkdownRendererProps) {
               </code>
             );
           },
+          img({ src, alt }) {
+            if (typeof src !== "string") return null;
+            // eslint-disable-next-line @next/next/no-img-element -- remote/signed Supabase Storage URL, not a static local asset
+            return <img src={src} alt={alt ?? ""} className="my-2 max-w-full rounded-lg border border-border" loading="lazy" />;
+          },
           a({ href, children }) {
+            // Generated audio is a normal markdown link (see
+            // apps/backend/src/routes/chat.ts's audio buildMarkdown) whose
+            // signed Storage URL happens to end in a known audio
+            // extension before its `?token=...` query string — sniffing
+            // that avoids inventing a new markdown syntax just for one
+            // media kind.
+            if (typeof href === "string" && /\.(mp3|wav|ogg|m4a)(\?|$)/i.test(href)) {
+              return (
+                // eslint-disable-next-line jsx-a11y/media-has-caption -- generated speech, no caption track exists
+                <audio controls src={href} className="my-2 w-full max-w-sm" />
+              );
+            }
+            if (typeof href === "string" && /\.(mp4|webm|mov)(\?|$)/i.test(href)) {
+              return (
+                // eslint-disable-next-line jsx-a11y/media-has-caption -- generated video, no caption track exists
+                <video controls src={href} className="my-2 w-full max-w-md rounded-lg border border-border" />
+              );
+            }
             return (
               <a href={href} target="_blank" rel="noreferrer" className="text-accent hover:underline">
                 {children}

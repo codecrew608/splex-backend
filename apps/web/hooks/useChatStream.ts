@@ -1,10 +1,26 @@
 "use client";
 
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { createClient } from "@/lib/supabase/client";
 import { streamChat } from "@/lib/chatStream";
-import type { ChatMessage, CortexDecisionPayload, CortexStatusStage } from "@splex/shared-types";
+import { fetchMediaStatus } from "@/lib/mediaStatus";
+import type { ChatMessage, CortexDecisionPayload, CortexStatusStage, Citation, ResearchStage } from "@splex/shared-types";
 import { useSidebarStore } from "@/state/sidebarStore";
+
+interface PendingMedia {
+  mediaId: string;
+  messageId: string;
+}
+
+// Matched against apps/backend/src/routes/media.ts's polling cadence
+// comment — not aggressive enough to hammer the backend (which itself
+// calls out to OpenRouter on every non-terminal poll), frequent enough
+// that "video ready" feels responsive rather than stale.
+const MEDIA_POLL_INTERVAL_MS = 6_000;
+// ~12 minutes of polling before giving up — generous relative to the
+// spec's own 8-10s clip length, but bounded so a genuinely stuck job
+// doesn't poll forever in a background tab.
+const MEDIA_POLL_MAX_ATTEMPTS = 120;
 
 export interface LocalChatMessage extends ChatMessage {
   streaming?: boolean;
@@ -15,6 +31,9 @@ export interface LocalChatMessage extends ChatMessage {
   // Cortex pill instead of one panel that only ever reflects the last turn.
   cortexDecision?: CortexDecisionPayload | null;
   workflowSteps?: WorkflowStepView[] | null;
+  // Absent (not []) unless a search genuinely grounded this answer — see
+  // DoneEventData.citations' doc comment.
+  citations?: Citation[];
 }
 
 export interface WorkflowStepView {
@@ -59,6 +78,8 @@ export function useChatStream(
   const [cortexDecision, setCortexDecision] = useState<CortexDecisionPayload | null>(null);
   const [workflow, setWorkflow] = useState<WorkflowView | null>(initialWorkflow);
   const [isStreaming, setIsStreaming] = useState(false);
+  const [pendingMedia, setPendingMedia] = useState<PendingMedia[]>([]);
+  const [researchStage, setResearchStage] = useState<ResearchStage | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   // Plain ref, not state — read synchronously right after streamChat()
   // resolves, in the same tick that flips isStreaming off. Avoids a stale
@@ -90,6 +111,7 @@ export function useChatStream(
 
       setCortexDecision(null);
       updateWorkflow(null);
+      setResearchStage(null);
       setIsStreaming(true);
       setStatus("understanding");
       setStatusLabel("Understanding task...");
@@ -157,14 +179,14 @@ export function useChatStream(
               prev.map((m) => (m.id === assistantLocalId ? { ...m, content: m.content || message, streaming: false } : m)),
             );
           },
-          onDone: ({ messageId, userMessageId, awaitingClarification }) => {
+          onDone: ({ messageId, userMessageId, awaitingClarification, pendingMediaId, citations }) => {
             setMessages((prev) =>
               prev.map((m) => {
                 if (m.id === assistantLocalId) {
                   // Snapshot the live workflow's steps onto this message so
                   // its own disclosure keeps showing them after the next
                   // message starts and clears the top-level `workflow` state.
-                  return { ...m, id: messageId ?? m.id, streaming: false, workflowSteps: workflowRef.current?.steps ?? null };
+                  return { ...m, id: messageId ?? m.id, streaming: false, workflowSteps: workflowRef.current?.steps ?? null, citations };
                 }
                 // Swap the user message's client-generated placeholder id
                 // for its real DB id — without this, "Edit" on that message
@@ -178,6 +200,12 @@ export function useChatStream(
             // workflow_clarification event happened to arrive earlier in
             // this stream, which a page reload would lose.
             if (awaitingClarification) doneAwaitingClarification.current = true;
+            // Video (the one async capability today) didn't finish within
+            // this request — messageId here is that async job's
+            // placeholder message; start polling it for the real result.
+            if (pendingMediaId) {
+              setPendingMedia((prev) => [...prev, { mediaId: pendingMediaId, messageId: messageId ?? assistantLocalId }]);
+            }
           },
           onWorkflowPlan: ({ steps }) => {
             updateWorkflow({
@@ -211,6 +239,9 @@ export function useChatStream(
           onWorkflowClarification: ({ question }) => {
             updateWorkflow((prev) => (prev ? { ...prev, clarificationQuestion: question } : { steps: [], clarificationQuestion: question }));
           },
+          onResearchStage: ({ stage }) => {
+            setResearchStage(stage);
+          },
         },
         controller.signal,
       );
@@ -218,6 +249,7 @@ export function useChatStream(
       setIsStreaming(false);
       setStatus(doneAwaitingClarification.current ? "awaiting_clarification" : "idle");
       setStatusLabel("");
+      setResearchStage(null);
       doneAwaitingClarification.current = false;
       // A real credit charge just landed (or a workflow charged per step
       // along the way) — tell the sidebar's credits bar to refetch now
@@ -231,6 +263,61 @@ export function useChatStream(
   const regenerate = useCallback((messageId: string) => run("", messageId), [run]);
   const stop = useCallback(() => abortRef.current?.abort(), []);
 
+  // "Check on read" polling for async media (video) — no websocket/SSE
+  // channel stays open for this (the original /chat request already ended
+  // once the job was submitted), so the client has to come back and ask.
+  // Runs once per distinct `pendingMedia` array identity; on a genuine
+  // concurrent-video restart mid-poll this restarts every in-flight poll
+  // rather than resuming precisely, which is an acceptable simplification
+  // given the backend hard-caps concurrent video jobs at 1 per user (see
+  // MAX_CONCURRENT_VIDEO_GENERATIONS in routes/chat.ts) — in practice this
+  // array almost never holds more than one entry at a time.
+  useEffect(() => {
+    if (pendingMedia.length === 0) return;
+    let cancelled = false;
+
+    async function pollOne(entry: PendingMedia) {
+      const supabase = createClient();
+      for (let attempt = 0; attempt < MEDIA_POLL_MAX_ATTEMPTS && !cancelled; attempt++) {
+        await new Promise((resolve) => setTimeout(resolve, MEDIA_POLL_INTERVAL_MS));
+        if (cancelled) return;
+
+        const {
+          data: { session },
+        } = await supabase.auth.getSession();
+        if (!session) return;
+
+        const result = await fetchMediaStatus(entry.mediaId, session.access_token);
+        if (cancelled || !result) continue; // transient failure — try again next tick
+
+        if (result.status === "completed" && result.url) {
+          setMessages((prev) =>
+            prev.map((m) => (m.id === entry.messageId ? { ...m, content: `[Generated video](${result.url})` } : m)),
+          );
+          setPendingMedia((prev) => prev.filter((p) => p.mediaId !== entry.mediaId));
+          bumpCredits(); // real cost was just charged server-side on completion
+          return;
+        }
+        if (result.status === "failed") {
+          setMessages((prev) =>
+            prev.map((m) =>
+              m.id === entry.messageId ? { ...m, content: result.errorMessage ?? "Video generation failed. Please try again." } : m,
+            ),
+          );
+          setPendingMedia((prev) => prev.filter((p) => p.mediaId !== entry.mediaId));
+          return;
+        }
+        // still queued/processing — loop continues
+      }
+    }
+
+    pendingMedia.forEach((entry) => void pollOne(entry));
+
+    return () => {
+      cancelled = true;
+    };
+  }, [pendingMedia, bumpCredits]);
+
   return {
     conversationId,
     messages,
@@ -238,6 +325,7 @@ export function useChatStream(
     statusLabel,
     cortexDecision,
     workflow,
+    researchStage,
     isStreaming,
     sendMessage,
     regenerate,

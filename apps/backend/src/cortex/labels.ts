@@ -6,6 +6,12 @@ const CATEGORY_LABELS: Record<string, string> = {
   math: "Mathematics",
   writing: "Writing & Content",
   vision: "Visual Understanding",
+  image: "Image Generation",
+  audio: "Audio Generation",
+  video: "Video Generation",
+  ppt: "Presentation Design",
+  web_search: "Web Search",
+  deep_research: "Deep Research",
   documents: "Document Analysis",
   general: "General Assistance",
 };

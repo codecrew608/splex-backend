@@ -15,7 +15,7 @@ interface SidebarState {
   setConversations: (conversations: Conversation[]) => void;
   upsertConversation: (conversation: Conversation) => void;
   // Bumped by useChatStream whenever a message finishes (a real credit
-  // charge just landed server-side) — useCredits watches this and
+  // charge just landed server-side) — useEntitlements watches this and
   // refetches immediately, instead of the sidebar's credits bar only
   // catching up on its next timer tick or tab focus. ChatThread and
   // Sidebar are siblings with no direct prop path between them, so this

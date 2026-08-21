@@ -7,8 +7,13 @@ import type { FastifyPluginAsync } from "fastify";
 // table shape a real gateway integration populated (fake IDs prefixed
 // "fake_") so nothing else in the app — settings page, plan_tier gating,
 // credit limits — needs to know the difference.
+const BILLING_RATE_LIMIT = { max: 5, windowMs: 60_000 };
+
 const billingRoutes: FastifyPluginAsync = async (fastify) => {
-  fastify.post("/billing/fake-checkout", { preHandler: fastify.authenticate }, async (request, reply) => {
+  fastify.post(
+    "/billing/fake-checkout",
+    { preHandler: [fastify.authenticate, fastify.rateLimitByUser("billing_checkout", BILLING_RATE_LIMIT.max, BILLING_RATE_LIMIT.windowMs)] },
+    async (request, reply) => {
     const now = new Date();
     const periodEnd = new Date(now);
     periodEnd.setMonth(periodEnd.getMonth() + 1);
@@ -44,7 +49,10 @@ const billingRoutes: FastifyPluginAsync = async (fastify) => {
     return reply.send({ status: "active", planTier: "pro" });
   });
 
-  fastify.post("/billing/fake-cancel", { preHandler: fastify.authenticate }, async (request, reply) => {
+  fastify.post(
+    "/billing/fake-cancel",
+    { preHandler: [fastify.authenticate, fastify.rateLimitByUser("billing_cancel", BILLING_RATE_LIMIT.max, BILLING_RATE_LIMIT.windowMs)] },
+    async (request, reply) => {
     const { error: subError } = await fastify.supabaseAdmin
       .from("subscriptions")
       .update({ status: "cancelled" })

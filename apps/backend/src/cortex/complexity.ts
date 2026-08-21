@@ -11,10 +11,27 @@ const COMPLEX_HINTS = [
   /\bend[- ]to[- ]end\b/i,
 ];
 
+// Lives here (not workflow/trigger.ts, which imports it) because
+// estimateComplexity now depends on it directly — see the isOutcomeShaped
+// comment below for why. Deliberately conservative and NOT an LLM call —
+// same regex-hint-scoring pattern as the rest of this file.
+export const OUTCOME_HINTS = [
+  /\bbuild (me|us|a|an)\b/i,
+  /\bcreate a complete\b/i,
+  /\bdevelop (a|an|the)\b/i,
+  /\bset up a full\b/i,
+  /\bgenerate a complete\b/i,
+  /\bdesign and build\b/i,
+  /\bmake me a\b/i,
+  /\bfrom scratch\b/i,
+  /\bfull(y)? (working|functional)\b/i,
+];
+
 export function estimateComplexity(message: string): ComplexityLevel {
   const trimmed = message.trim();
   const wordCount = trimmed.split(/\s+/).filter(Boolean).length;
   const codeBlockCount = (trimmed.match(/```/g) ?? []).length / 2;
+  const isOutcomeShaped = OUTCOME_HINTS.some((re) => re.test(trimmed));
 
   let score = 0;
 
@@ -25,7 +42,22 @@ export function estimateComplexity(message: string): ComplexityLevel {
   if (codeBlockCount >= 2) score += 1;
 
   if (COMPLEX_HINTS.some((re) => re.test(trimmed))) score += 2;
-  if (SIMPLE_HINTS.some((re) => re.test(trimmed))) score -= 2;
+
+  if (isOutcomeShaped) {
+    // Live testing caught "Build me a simple one-page landing site for a
+    // coffee shop, with a headline and a short description" scoring as
+    // "simple" — SIMPLE_HINTS matched "short" (describing the requested
+    // description text's length, not the task's effort) and that alone
+    // outweighed everything else, so this never even reached
+    // workflow/trigger.ts's shouldUseWorkflow check despite matching its
+    // own OUTCOME_HINTS outright. A "build me X" / "create a complete X"
+    // request is inherently decomposition-worthy regardless of incidental
+    // wording elsewhere in the message; SIMPLE_HINTS exists to catch
+    // genuinely low-effort asks ("just fix this typo"), which this isn't.
+    score += 3;
+  } else if (SIMPLE_HINTS.some((re) => re.test(trimmed))) {
+    score -= 2;
+  }
 
   if (wordCount <= 8 && codeBlockCount === 0) score -= 1;
 

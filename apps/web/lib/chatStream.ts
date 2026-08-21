@@ -10,6 +10,7 @@ import type {
   WorkflowPlanEventData,
   WorkflowStepStatusEventData,
   WorkflowClarificationEventData,
+  ResearchStageEventData,
 } from "@splex/shared-types";
 import { BACKEND_URL } from "./backendUrl";
 
@@ -23,6 +24,7 @@ export interface ChatStreamHandlers {
   onWorkflowPlan: (data: WorkflowPlanEventData) => void;
   onWorkflowStepStatus: (data: WorkflowStepStatusEventData) => void;
   onWorkflowClarification: (data: WorkflowClarificationEventData) => void;
+  onResearchStage: (data: ResearchStageEventData) => void;
 }
 
 export async function streamChat(
@@ -49,7 +51,16 @@ export async function streamChat(
   }
 
   if (!response.ok || !response.body) {
-    handlers.onError({ message: "Something went wrong. Please try again." });
+    // 429 (rate limit — see apps/backend/src/plugins/userRateLimit.ts) is
+    // common enough to be worth its own message rather than the generic
+    // fallback; both carry a `{ message }` body the backend already wrote,
+    // but that body was never read on this path before, so the fallback
+    // is what most users would have seen for it.
+    const message =
+      response.status === 429
+        ? "You're sending messages too fast — please wait a moment and try again."
+        : "Something went wrong. Please try again.";
+    handlers.onError({ message });
     return;
   }
 
@@ -93,6 +104,9 @@ export async function streamChat(
           break;
         case "workflow_clarification":
           handlers.onWorkflowClarification(data as WorkflowClarificationEventData);
+          break;
+        case "research_stage":
+          handlers.onResearchStage(data as ResearchStageEventData);
           break;
         default:
           break;

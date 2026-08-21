@@ -9,6 +9,7 @@ import { createClient } from "@/lib/supabase/client";
 import { MessageBubble } from "./MessageBubble";
 import { CortexStatusPanel } from "./CortexStatusPanel";
 import { WorkflowPanel } from "./WorkflowPanel";
+import { ResearchPanel } from "./ResearchPanel";
 import { Composer } from "./Composer";
 import { BACKEND_URL } from "@/lib/backendUrl";
 
@@ -45,6 +46,7 @@ export function ChatThread({
     statusLabel,
     cortexDecision,
     workflow,
+    researchStage,
     isStreaming,
     sendMessage,
     regenerate,
@@ -169,7 +171,9 @@ export function ChatThread({
             />
           ))}
 
-          {workflow ? (
+          {researchStage ? (
+            <ResearchPanel currentStage={researchStage} />
+          ) : workflow ? (
             <WorkflowPanel workflow={workflow} />
           ) : (
             <CortexStatusPanel

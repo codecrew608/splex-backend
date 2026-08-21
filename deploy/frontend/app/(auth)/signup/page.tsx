@@ -7,6 +7,7 @@ import { withTimeout } from "@/lib/withTimeout";
 import { Button } from "@/components/ui/Button";
 import { Input } from "@/components/ui/Input";
 import { LogoMark } from "@/components/ui/Logo";
+import { GoogleIcon } from "@/components/ui/GoogleIcon";
 import { AuthShell } from "@/components/auth/AuthShell";
 
 const SIGNUP_TIMEOUT_MS = 15_000;
@@ -128,6 +129,7 @@ export default function SignupPage() {
       </div>
 
       <Button variant="secondary" className="w-full" onClick={handleGoogleSignIn} type="button">
+        <GoogleIcon size={18} />
         Continue with Google
       </Button>
 
@@ -136,6 +138,17 @@ export default function SignupPage() {
         <Link href="/login" className="font-medium text-accent hover:underline">
           Sign in
         </Link>
+      </p>
+      <p className="mt-4 text-center text-xs text-muted-foreground">
+        By creating an account, you agree to SPLEX&apos;s{" "}
+        <Link href="/legal/terms" className="underline underline-offset-2 hover:text-foreground">
+          Terms
+        </Link>{" "}
+        and{" "}
+        <Link href="/legal/privacy" className="underline underline-offset-2 hover:text-foreground">
+          Privacy Policy
+        </Link>
+        .
       </p>
     </AuthShell>
   );

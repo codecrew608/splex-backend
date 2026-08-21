@@ -9,11 +9,18 @@ interface OcrResponse {
   pages: number;
 }
 
+// fetch() has no default timeout — without one, a stuck/overloaded
+// intelligence sidecar would hang every chat turn that reaches this call
+// indefinitely rather than failing fast into retrieveFileContext's
+// existing "non-fatal, skip file context" catch.
+const EMBED_TIMEOUT_MS = 8_000;
+
 export async function embedTexts(fastify: FastifyInstance, texts: string[], isQuery = false): Promise<number[][]> {
   const res = await fetch(`${fastify.config.INTELLIGENCE_SERVICE_URL}/embed`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ texts, is_query: isQuery }),
+    signal: AbortSignal.timeout(EMBED_TIMEOUT_MS),
   });
   if (!res.ok) {
     throw new Error(`Intelligence service /embed failed (${res.status}): ${await res.text()}`);

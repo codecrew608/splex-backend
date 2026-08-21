@@ -31,7 +31,13 @@ Respond with ONLY a JSON object, no prose, no markdown fences, matching this sha
 {"intentId": string, "category": string, "capabilities": string[], "reason": string}
 
 Valid intentId values: ${INTENTS.map((i) => i.id).join(", ")}
-Valid category values: coding, reasoning, math, writing, vision, documents, general
+Valid category values: coding, reasoning, math, writing, vision, documents, general, image, audio, video, ppt, web_search, deep_research
+"image" means the user wants a NEW image generated/drawn/created — not describing or asking about an existing image (that's "vision").
+"audio" means the user wants text converted to spoken audio/speech (text-to-speech, narration, voiceover).
+"video" means the user wants a NEW short video/clip/animation generated.
+"ppt" means the user wants a presentation / slide deck / PowerPoint file produced.
+"web_search" means the request genuinely needs current/external/verifiable web information (news, prices, live status, recent events) that your own training data may not cover — NOT ordinary questions your existing knowledge already answers well (general concepts, how things work, writing help, math). When in doubt, prefer NOT choosing web_search.
+"deep_research" means the user explicitly wants a thorough, multi-source research report, not a quick answer — a much higher bar than web_search.
 "reason" must be a short (<20 words) human-readable explanation of why you picked this intent.
 If uncertain, use intentId "general_qa", category "general".`;
 

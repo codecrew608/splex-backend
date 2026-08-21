@@ -10,7 +10,7 @@ export function CancelSubscriptionButton() {
   const [loading, setLoading] = useState(false);
 
   async function handleCancel() {
-    if (!window.confirm("Cancel your Pro plan? You'll move back to the Free plan immediately.")) return;
+    if (!window.confirm("Cancel your Starter plan? You'll move back to the Free plan immediately.")) return;
     setLoading(true);
 
     const supabase = createClient();

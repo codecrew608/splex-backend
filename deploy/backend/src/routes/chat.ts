@@ -27,6 +27,16 @@ import { fetchOwnedFiles, buildImageDataUri, buildAttachmentTextBlock } from "..
 import { retrieveFileContext } from "../intelligence/retrieve.js";
 import { shouldUseWorkflow } from "../cortex/workflow/trigger.js";
 import { getActiveWorkflow, cancelActiveWorkflow, startWorkflow, resumeWorkflow } from "../cortex/workflow/orchestrator.js";
+import { recordModelOutcome, classifyFailure } from "../cortex/modelHealth.js";
+import { generateImage } from "../images/generate.js";
+import { generateSpeech } from "../audio/generate.js";
+import { submitVideoJob } from "../video/generate.js";
+import { generatePpt } from "../ppt/generate.js";
+import { handleWebSearch, runDeepResearch } from "../research/handler.js";
+import { handleSyncMediaGeneration, handleAsyncMediaGeneration } from "./mediaGeneration.js";
+import type { MediaQuota } from "../credits/mediaQuota.js";
+
+const MAX_CONCURRENT_VIDEO_GENERATIONS = 1;
 
 const chatBodySchema = z
   .object({
@@ -48,9 +58,22 @@ const truncateBodySchema = z.object({
   conversationId: z.string().uuid(),
 });
 
+// Burst protection, independent of the daily message/entitlement caps
+// (entitlements/index.ts) and video's own concurrency check — this bounds
+// *rate*, those bound *sustained volume*. Every media capability (image/
+// audio/video/ppt) also executes through this same route (Cortex decides
+// the category server-side, after the request already arrived — there's
+// no separate route per capability to limit individually), so this one
+// limit is what protects all of them from scripted hammering.
+const CHAT_RATE_LIMIT = { max: 20, windowMs: 60_000 };
+const TRUNCATE_RATE_LIMIT = { max: 30, windowMs: 60_000 };
+
 const chatRoutes: FastifyPluginAsync = async (fastify) => {
   // POST /chat — the full Cortex → OpenRouter → streamed response lifecycle.
-  fastify.post("/chat", { preHandler: fastify.authenticate }, async (request, reply) => {
+  fastify.post(
+    "/chat",
+    { preHandler: [fastify.authenticate, fastify.rateLimitByUser("chat", CHAT_RATE_LIMIT.max, CHAT_RATE_LIMIT.windowMs)] },
+    async (request, reply) => {
     const parsed = chatBodySchema.safeParse(request.body);
     if (!parsed.success) {
       return reply.code(400).send({ message: "Invalid request." });
@@ -199,10 +222,155 @@ const chatRoutes: FastifyPluginAsync = async (fastify) => {
       }
       sse.cortexStatus({ stage: "detecting_requirements", label: "Detecting requirements..." });
 
+      // Image/audio generation: distinct, non-streamed, quota-gated
+      // capabilities (their own daily cap on top of the normal credit pool
+      // — see migration 0012) that never enter the workflow orchestrator
+      // or the token-streaming path below. hasImageAttachment (vision,
+      // i.e. *understanding* an attached image) already forced category to
+      // "vision" above, so there's no overlap with *generating* a new one.
+      if (decision.category === "image") {
+        sse.cortexStatus({ stage: "selecting_capability", label: "Generating image..." });
+        await handleSyncMediaGeneration({
+          fastify,
+          sse,
+          user,
+          conversationId,
+          userMessageId,
+          decision,
+          kind: "image",
+          prompt: classifierInputMessage,
+          generate: (f, uid, m, p) => generateImage(f, uid, m.openrouter_model_id, p),
+          buildMarkdown: (result, prompt) => `![${prompt.slice(0, 200).replace(/[[\]]/g, "")}](${result.url})`,
+          quotaExceededMessage: (quota: MediaQuota) =>
+            quota.limit === 0
+              ? "Image generation isn't available on your plan."
+              : `You've reached today's image generation limit (${quota.limit}/day${user.planTier === "free" ? " on Free — upgrade to Starter for 5/day" : ""}).`,
+          unavailableMessage: "Image generation is temporarily unavailable, please try again shortly.",
+          failedMessage: "Image generation failed, please try again.",
+        });
+        return;
+      }
+
+      if (decision.category === "audio") {
+        sse.cortexStatus({ stage: "selecting_capability", label: "Generating audio..." });
+        await handleSyncMediaGeneration({
+          fastify,
+          sse,
+          user,
+          conversationId,
+          userMessageId,
+          decision,
+          kind: "audio",
+          prompt: classifierInputMessage,
+          generate: (f, uid, m, p) => generateSpeech(f, uid, m.openrouter_model_id, p),
+          buildMarkdown: (result) => `[🔊 Generated audio](${result.url})`,
+          quotaExceededMessage: (quota: MediaQuota) =>
+            quota.limit === 0
+              ? "Text-to-speech is a Starter feature — upgrade to unlock 5 generations/day."
+              : `You've reached today's audio generation limit (${quota.limit}/day).`,
+          unavailableMessage: "Audio generation is temporarily unavailable, please try again shortly.",
+          failedMessage: "Audio generation failed, please try again.",
+        });
+        return;
+      }
+
+      // Presentations: synchronous like image/audio (the model call plans
+      // the deck; the .pptx itself is assembled locally), but token-priced
+      // rather than per-call — see ppt/generate.ts.
+      if (decision.category === "ppt") {
+        sse.cortexStatus({ stage: "selecting_capability", label: "Building your presentation..." });
+        await handleSyncMediaGeneration({
+          fastify,
+          sse,
+          user,
+          conversationId,
+          userMessageId,
+          decision,
+          kind: "ppt",
+          prompt: classifierInputMessage,
+          generate: generatePpt,
+          buildMarkdown: (result) => `[📊 Download presentation (${result.slideCount} slides)](${result.url})`,
+          quotaExceededMessage: (quota: MediaQuota) =>
+            quota.limit === 0
+              ? "Presentation generation is a Starter feature — upgrade to unlock 2 per day."
+              : `You've reached today's presentation limit (${quota.limit}/day).`,
+          unavailableMessage: "Presentation generation is temporarily unavailable, please try again shortly.",
+          failedMessage: "Presentation generation failed, please try again.",
+        });
+        return;
+      }
+
+      // Deep research: genuine multi-stage pipeline (planning -> searching
+      // -> reading sources -> cross-checking -> writing report), streamed
+      // as research_stage SSE events over this same connection — see
+      // research/deepResearch.ts's doc comment for why this stays
+      // synchronous rather than becoming a fourth async-job pattern.
+      // Pro-only; runDeepResearch itself sends the entitlement rejection
+      // for Free. Kept ahead of the workflow-trigger check below: unlike
+      // web_search, this requires an explicit, deliberate "deep research"
+      // style phrasing to classify at all (see intents.ts), so there's no
+      // realistic case where an outcome-shaped build/create request would
+      // get mis-swept into it.
+      if (decision.category === "deep_research") {
+        await runDeepResearch({
+          fastify,
+          sse,
+          user,
+          conversationId,
+          userMessageId,
+          query: classifierInputMessage,
+          contextBlock,
+        });
+        return;
+      }
+
+      // Video is the one async capability: this only submits the job and
+      // returns — see handleAsyncMediaGeneration's doc comment. Real
+      // completion (and billing) happens later via GET
+      // /media/:id/status, which the frontend polls using the
+      // pendingMediaId on the `done` event this emits.
+      if (decision.category === "video") {
+        sse.cortexStatus({ stage: "selecting_capability", label: "Starting video generation..." });
+        await handleAsyncMediaGeneration({
+          fastify,
+          sse,
+          user,
+          conversationId,
+          userMessageId,
+          decision,
+          kind: "video",
+          prompt: classifierInputMessage,
+          maxConcurrent: MAX_CONCURRENT_VIDEO_GENERATIONS,
+          submit: submitVideoJob,
+          placeholderContent: "🎬 Generating your video — this can take a minute or two.",
+          quotaExceededMessage: (quota: MediaQuota) =>
+            quota.limit === 0
+              ? "Video generation is a Starter feature — upgrade to unlock 2 generations/day."
+              : `You've reached today's video generation limit (${quota.limit}/day).`,
+          concurrencyExceededMessage: "You already have a video generating — wait for it to finish before starting another.",
+          unavailableMessage: "Video generation is temporarily unavailable, please try again shortly.",
+          submitFailedMessage: "Couldn't start video generation, please try again.",
+        });
+        return;
+      }
+
       // Workflow trigger: only for a fresh, non-regenerate, non-vision
       // plain message that scores as an outcome-shaped complex request
       // (see trigger.ts — deliberately conservative). Vision stays
       // single-shot for v1, keeping image-attachment handling unchanged.
+      //
+      // Deliberately checked BEFORE the web_search branch below (live
+      // testing caught the exact failure this ordering prevents): unlike
+      // every other category branch above, web_search can be selected by
+      // Cortex's LLM classifier fallback on genuinely fuzzy judgment calls
+      // ("Requires current web design standards" was the real reason given
+      // for classifying "build me a landing page for a coffee shop" as
+      // web_search) — a request that is squarely what the workflow
+      // orchestrator exists for. Giving shouldUseWorkflow's own,
+      // independent, conservative regex+complexity gate a chance to catch
+      // that case first means one fuzzy classifier call can no longer
+      // silently swallow an outcome-shaped request before workflow
+      // consideration ever happens.
       if (
         !body.regenerateMessageId &&
         !hasImageAttachment &&
@@ -223,6 +391,15 @@ const chatRoutes: FastifyPluginAsync = async (fastify) => {
         if (result.handled) return;
         // else: planning decided this doesn't actually need decomposition
         // — fall through to ordinary single-shot handling below, silently.
+      }
+
+      // Web search / news: single-completion, tool-grounded answer with
+      // citations. Available to both plans (spec — unlike every other
+      // capability added this session, this one is NOT Pro-gated).
+      if (decision.category === "web_search") {
+        sse.cortexStatus({ stage: "selecting_capability", label: "Searching the web..." });
+        await handleWebSearch({ fastify, sse, user, conversationId, userMessageId, decision, query: classifierInputMessage });
+        return;
       }
 
       // Step 5: pre-flight gate estimate — a percentage of THIS user's own
@@ -246,7 +423,7 @@ const chatRoutes: FastifyPluginAsync = async (fastify) => {
       // giving up (see isRetryableOpenRouterError's doc comment for why
       // this is safe to retry rather than just failing outright).
       sse.cortexStatus({ stage: "selecting_capability", label: "Selecting AI capability..." });
-      const modelCandidates = await selectModelCandidates(fastify, decision.category, user.planTier, 2);
+      const modelCandidates = await selectModelCandidates(fastify, decision.category, user.planTier, 2, decision.complexity);
       if (modelCandidates.length === 0) {
         sse.error({ message: "This capability is temporarily unavailable, please try again shortly." });
         sse.done({ blocked: true, conversationId, userMessageId });
@@ -293,6 +470,7 @@ const chatRoutes: FastifyPluginAsync = async (fastify) => {
       let generation: Awaited<ReturnType<typeof streamCompletion>> | undefined;
       for (let i = 0; i < modelCandidates.length; i++) {
         model = modelCandidates[i];
+        const startedAt = Date.now();
         try {
           generation = await streamCompletion({
             fastify,
@@ -301,8 +479,13 @@ const chatRoutes: FastifyPluginAsync = async (fastify) => {
             signal: abortController.signal,
             onToken: (delta) => sse.token({ delta }),
           });
+          // Feeds the rolling health window the router reads (routing.ts's
+          // reliabilityFor/latencyPenaltyFor). Fire-and-forget by design —
+          // see recordModelOutcome.
+          recordModelOutcome(fastify, model.id, "success", Date.now() - startedAt);
           break;
         } catch (err) {
+          recordModelOutcome(fastify, model.id, classifyFailure(err), Date.now() - startedAt);
           const isLastCandidate = i === modelCandidates.length - 1;
           if (!isLastCandidate && isRetryableOpenRouterError(err)) {
             fastify.log.warn(
@@ -404,7 +587,7 @@ const chatRoutes: FastifyPluginAsync = async (fastify) => {
   // refinement — phase 1 just truncates.
   fastify.delete(
     "/chat/messages/:messageId/truncate",
-    { preHandler: fastify.authenticate },
+    { preHandler: [fastify.authenticate, fastify.rateLimitByUser("chat_truncate", TRUNCATE_RATE_LIMIT.max, TRUNCATE_RATE_LIMIT.windowMs)] },
     async (request, reply) => {
       const params = truncateParamsSchema.safeParse(request.params);
       const body = truncateBodySchema.safeParse(request.body);

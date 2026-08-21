@@ -61,7 +61,7 @@ export function FakeCheckoutModal({ onClose }: FakeCheckoutModalProps) {
             <span className="inline-block rounded-full bg-accent-soft px-2 py-0.5 font-mono text-[10px] font-semibold uppercase tracking-[0.08em] text-accent">
               Test mode
             </span>
-            <h2 className="mt-2 text-lg font-medium text-foreground">Upgrade to Pro</h2>
+            <h2 className="mt-2 text-lg font-medium text-foreground">Upgrade to Starter</h2>
           </div>
           <button
             type="button"
@@ -73,12 +73,12 @@ export function FakeCheckoutModal({ onClose }: FakeCheckoutModalProps) {
         </div>
 
         <p className="mt-1 text-[13px] text-muted-foreground">
-          No payment gateway is connected yet — this is a placeholder checkout. Confirming below activates Pro
+          No payment gateway is connected yet — this is a placeholder checkout. Confirming below activates Starter
           instantly, no real charge.
         </p>
 
         <div className="mt-5 flex items-center justify-between rounded-lg border border-border bg-surface px-4 py-3">
-          <span className="text-sm text-foreground">SPLEX Pro</span>
+          <span className="text-sm text-foreground">SPLEX Starter</span>
           <span className="text-sm font-medium text-foreground">₹299/mo</span>
         </div>
 

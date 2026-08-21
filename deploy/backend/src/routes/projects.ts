@@ -1,5 +1,6 @@
 import type { FastifyPluginAsync } from "fastify";
 import { z } from "zod";
+import { getQuotaState } from "../entitlements/index.js";
 
 const createProjectSchema = z.object({
   title: z.string().trim().min(1).max(200),
@@ -23,29 +24,27 @@ const createProjectSchema = z.object({
 // implementation detail, not the user-facing "project" the pricing page
 // means, and capping it would lock free users out of ordinary chat after
 // 3 conversations ever.
+const CREATE_RATE_LIMIT = { max: 10, windowMs: 60_000 };
+
 const projectsRoutes: FastifyPluginAsync = async (fastify) => {
-  fastify.post("/projects", { preHandler: fastify.authenticate }, async (request, reply) => {
+  fastify.post(
+    "/projects",
+    { preHandler: [fastify.authenticate, fastify.rateLimitByUser("projects_create", CREATE_RATE_LIMIT.max, CREATE_RATE_LIMIT.windowMs)] },
+    async (request, reply) => {
     const parsed = createProjectSchema.safeParse(request.body);
     if (!parsed.success) {
       return reply.code(400).send({ message: "A project title is required." });
     }
 
-    const [{ count }, { data: userRow }] = await Promise.all([
-      fastify.supabaseAdmin.from("projects").select("id", { count: "exact", head: true }).eq("user_id", request.user.id),
-      fastify.supabaseAdmin.from("users").select("plan_tier").eq("id", request.user.id).single(),
-    ]);
-
-    const planTier = userRow?.plan_tier ?? "free";
-    const { data: limitRow } = await fastify.supabaseAdmin
-      .from("plan_limits")
-      .select("limit_amount")
-      .eq("plan_tier", planTier)
-      .eq("counter_type", "projects")
-      .maybeSingle();
-
-    const limit = limitRow?.limit_amount ?? null;
-    if (limit !== null && (count ?? 0) >= limit) {
-      return reply.code(403).send({ message: `Your plan allows up to ${limit} projects. Upgrade to create more.` });
+    // Routed through the central entitlement service rather than a local
+    // plan_limits query — same rules, one implementation. request.user
+    // already carries the authenticated plan tier (see plugins/auth.ts),
+    // so the separate users lookup this used to do is redundant.
+    const quota = await getQuotaState(fastify, request.user.id, request.user.planTier, "projects");
+    if (!quota.allowed) {
+      return reply
+        .code(403)
+        .send({ message: `Your plan allows up to ${quota.limit} projects. Upgrade to create more.` });
     }
 
     const { data, error } = await fastify.supabaseAdmin

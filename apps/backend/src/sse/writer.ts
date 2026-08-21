@@ -9,6 +9,7 @@ import type {
   WorkflowPlanEventData,
   WorkflowStepStatusEventData,
   WorkflowClarificationEventData,
+  ResearchStageEventData,
 } from "@splex/shared-types";
 
 // Thin, typed wrapper over fastify-sse-v2's reply.sse(). Keeping every event
@@ -52,6 +53,10 @@ export class SplexSSEWriter {
 
   workflowClarification(data: WorkflowClarificationEventData) {
     this.reply.sse({ event: "workflow_clarification", data: JSON.stringify(data) });
+  }
+
+  researchStage(data: ResearchStageEventData) {
+    this.reply.sse({ event: "research_stage", data: JSON.stringify(data) });
   }
 
   end() {

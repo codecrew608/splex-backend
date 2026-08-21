@@ -1,13 +1,14 @@
 "use client";
 
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { ChevronLeft, Settings, Brain, Moon, Sun, LogOut, Sparkles } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
 import { useSidebarStore } from "@/state/sidebarStore";
 import { useThemeStore } from "@/state/themeStore";
 import { useUserPlanTier } from "@/hooks/useUserPlanTier";
-import { useCredits } from "@/hooks/useCredits";
+import { useEntitlements } from "@/hooks/useEntitlements";
+import { planDisplayName } from "@/lib/planDisplay";
 import { cn } from "@/lib/cn";
 import { Logo } from "@/components/ui/Logo";
 import { ConversationList } from "./ConversationList";
@@ -28,11 +29,28 @@ export function Sidebar({ email }: SidebarProps) {
   const isMobile = useSidebarStore((s) => s.isMobile);
   const setIsMobile = useSidebarStore((s) => s.setIsMobile);
   const planTier = useUserPlanTier();
-  const credits = useCredits();
+  const { snapshot: entitlements, loading: creditsLoading, error: creditsError } = useEntitlements();
   const theme = useThemeStore((s) => s.theme);
   const toggleTheme = useThemeStore((s) => s.toggleTheme);
-  const isDark = theme === "dark";
-  const remainingPct = credits.total > 0 ? 100 - credits.pct : 100;
+  // Pre-existing hydration mismatch, live-caught while working in this file
+  // for an unrelated reason: themeStore's initial value is "light" during
+  // SSR (no `document` server-side) but reads the real DOM/localStorage
+  // theme on the client — so for any user actually preferring dark theme,
+  // the server-rendered Sun/Moon icon and label here would disagree with
+  // the client's first render. components/ui/ThemeToggle.tsx already
+  // solves this exact problem with a `mounted` gate; this hand-rolled
+  // toggle just never had the same guard applied.
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => setMounted(true), []);
+  const isDark = mounted && theme === "dark";
+  const credits = entitlements?.credits;
+  // available=false (a missing/unresolvable plan_limits row) must never
+  // render as a confident number, let alone "100%" — see migration 0012 for
+  // the bug this guards against. "—" is the only honest fallback.
+  const creditsDisplay =
+    creditsLoading || creditsError || !credits || !credits.available || credits.limit === null
+      ? "—"
+      : `${credits.used.toLocaleString()} / ${credits.limit.toLocaleString()} SPLEX Credits`;
 
   useEffect(() => {
     const mq = window.matchMedia(MOBILE_QUERY);
@@ -167,7 +185,7 @@ export function Sidebar({ email }: SidebarProps) {
               </span>
               <span className="flex min-w-0 flex-1 flex-col leading-[1.3]">
                 <span className="truncate text-[13px] font-medium text-foreground">{email}</span>
-                <span className="text-[11.5px] text-muted-foreground">{planTier === "pro" ? "Pro plan" : "Free plan"}</span>
+                <span className="text-[11.5px] text-muted-foreground">{planDisplayName(planTier)} plan</span>
               </span>
               {planTier === "free" && (
                 <button
@@ -182,13 +200,18 @@ export function Sidebar({ email }: SidebarProps) {
             </div>
             <div className="flex flex-col gap-1.5">
               <div className="flex items-baseline justify-between font-mono text-[9.5px] uppercase tracking-[0.1em] text-muted-foreground">
-                <span>SPLEX Credits Remaining</span>
-                <span className="text-foreground">{credits.loading ? "…" : `${remainingPct}%`}</span>
+                <span>{planDisplayName(planTier)}</span>
               </div>
+              <span className="text-[13px] text-foreground">{creditsLoading ? "…" : creditsDisplay}</span>
               <span className="block h-1 overflow-hidden rounded-[3px] bg-hover">
                 <span
                   className="block h-full rounded-[3px] bg-accent transition-[width]"
-                  style={{ width: `${credits.loading ? 0 : remainingPct}%` }}
+                  style={{
+                    width:
+                      creditsLoading || !credits || !credits.available || !credits.limit
+                        ? "0%"
+                        : `${Math.max(0, 100 - Math.round((credits.used / credits.limit) * 100))}%`,
+                  }}
                 />
               </span>
             </div>

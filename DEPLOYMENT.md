@@ -40,7 +40,7 @@ fixed in the process — see "Dockerfile notes" below.
 | `OPENROUTER_SITE_URL` | no | Set to your real prod frontend URL — OpenRouter uses this for their own attribution, currently set to `localhost` locally |
 | `OPENROUTER_APP_NAME` | no | `SPLEX` |
 | `CORTEX_CLASSIFIER_MODEL_ID` | no | Copy from local `.env` |
-| `CREDITS_PER_USD` | no | `25000` (business-tunable, not a secret) |
+| `CREDITS_PER_USD` | no | `20000` (business-tunable, not a secret — 1 SPLEX Credit = $0.00005 normalized cost per the V1 pricing spec) |
 | `INTELLIGENCE_SERVICE_URL` | no | The intelligence service's **deployed** URL, not `127.0.0.1` — ideally a private/internal network address, not a public one (see "Intelligence service" below) |
 | `LOG_LEVEL` | no | `info` |
 
@@ -109,19 +109,24 @@ is fine only as long as nothing behind it is real money.
 
 ## Database
 
-Already fully migrated — all 11 migrations in `db/migrations/` (through
-today's `0011_pricing_rebuild.sql`) are applied to the Supabase project
-this app already talks to (`yxhallicacslnwwmxnhd`), including the new
+Already fully migrated — all migrations in `db/migrations/` through
+`0017_web_search_free_tier_fallback.sql` (17 total; image/audio/video/ppt
+generation, cost-aware model routing + health tracking, Agent Workflows,
+and web search/deep research were all added after the pricing rebuild
+below, each in its own numbered migration) are applied to the Supabase
+project this app already talks to (`yxhallicacslnwwmxnhd`), including the
 Free/Pro limits and the file-upload/storage enforcement trigger. The
-`uploads` Storage bucket already exists (private, confirmed today). If this
+`uploads` Storage bucket already exists (private, confirmed live). If this
 is meant to stay the one production database, there is nothing left to do
 here.
 
 If instead you want a **separate** production Supabase project (isolated
-from whatever this one has accumulated during development), all 11
-migrations need to be replayed there in order — several of them insert
-seed data, not just schema (`model_registry` rows, `plan_limits`,
-`credit_cost_bands`), so a schema-only copy isn't sufficient.
+from whatever this one has accumulated during development), every
+migration needs to be replayed there in order — most of them insert seed
+data, not just schema (`model_registry` rows, `plan_limits`,
+`credit_cost_bands`, and more), so a schema-only copy isn't sufficient.
+Re-verify the count against `ls db/migrations/` before relying on this
+document's number — it will go stale again the next time one is added.
 
 **Outstanding from earlier in this project:** the database password was
 shared in plaintext in chat at one point during development. Worth rotating

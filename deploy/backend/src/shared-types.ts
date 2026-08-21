@@ -95,6 +95,37 @@ export interface DoneEventData {
   // (not "did a workflow_clarification event happen to arrive earlier in
   // this stream," which a page reload would lose).
   awaitingClarification?: boolean;
+  // Set only when this turn kicked off an async media job (video; PPT
+  // later) that wasn't ready by the time the request returned — the
+  // client-safe id of its generated_media row, for polling
+  // GET /media/:id/status. Absent for every synchronous completion
+  // (normal chat, image, audio all finish within the same request).
+  pendingMediaId?: string;
+  // Sources this turn's answer actually grounded on — set only when a
+  // search genuinely happened (see WebSearchResult.searched in the
+  // backend's research/types.ts). Absent (not empty array) for a normal
+  // chat/image/audio/video/ppt turn, and absent even for a web_search-
+  // routed turn if the model chose not to invoke the tool — the frontend
+  // must never render a "Sources" section, or imply a search occurred,
+  // when this is absent.
+  citations?: Citation[];
+}
+
+// url/title/snippet only — never the raw OpenRouter annotation object
+// (offsets into model output, not meaningful once re-rendered).
+export interface Citation {
+  url: string;
+  title: string;
+  snippet: string;
+}
+
+// Deep research's five real, independently-timed stages (see
+// apps/backend/src/research/deepResearch.ts) — high-level progress only,
+// never the underlying prompts, model ids, or raw tool calls.
+export type ResearchStage = "planning" | "searching" | "reading_sources" | "cross_checking" | "writing_report";
+
+export interface ResearchStageEventData {
+  stage: ResearchStage;
 }
 
 // Cortex's multi-step planner->executor orchestration (see
@@ -124,7 +155,8 @@ export type SplexSSEEvent =
   | { event: "done"; data: DoneEventData }
   | { event: "workflow_plan"; data: WorkflowPlanEventData }
   | { event: "workflow_step_status"; data: WorkflowStepStatusEventData }
-  | { event: "workflow_clarification"; data: WorkflowClarificationEventData };
+  | { event: "workflow_clarification"; data: WorkflowClarificationEventData }
+  | { event: "research_stage"; data: ResearchStageEventData };
 
 export interface ChatMessage {
   id: string;
@@ -142,4 +174,45 @@ export interface Conversation {
   projectId: string;
   title: string;
   createdAt: string;
+}
+
+// Backend-authoritative entitlement/usage state (GET /entitlements).
+// Capability labels and counts only — never model ids, providers, or costs.
+export type Capability =
+  | "chat"
+  | "workflow"
+  | "image"
+  | "video"
+  | "audio"
+  | "ppt"
+  | "files"
+  | "rag"
+  | "projects"
+  | "web_search"
+  | "deep_research";
+
+export interface QuotaState {
+  capability: Capability;
+  label: string;
+  used: number;
+  limit: number | null; // null = unlimited
+  allowed: boolean;
+}
+
+export interface CreditBalance {
+  used: number;
+  limit: number | null;
+  // False when the limit couldn't be resolved at all — the UI must show
+  // "—" rather than inventing a percentage.
+  available: boolean;
+}
+
+export interface EntitlementSnapshot {
+  planTier: PlanTier;
+  // Two independent ceilings (migration 0018) — monthly is the original
+  // pool, daily is a separate day-scoped cap on top of it. Both must pass
+  // for a request to proceed; either can be the one that's exhausted.
+  credits: CreditBalance;
+  dailyCredits: CreditBalance;
+  quotas: QuotaState[];
 }

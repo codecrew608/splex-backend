@@ -28,6 +28,27 @@ export async function retrieveFileContext(
   excludeFileIds: string[] = [],
 ): Promise<string | null> {
   try {
+    // Cheap existence check before paying for an embedding call. Every
+    // chat turn used to call out to the intelligence sidecar (network +
+    // real BGE inference) unconditionally, even for the large majority of
+    // users who have never uploaded a file — that round trip sat on the
+    // critical path before the model's response could even start
+    // streaming, and was the single biggest fixed cost in Cortex's routing
+    // latency. A user with zero files can have zero matching chunks by
+    // construction, so skip straight to "no context" without ever calling
+    // the embedding service.
+    const { data: anyFile, error: fileCheckError } = await fastify.supabaseAdmin
+      .from("files")
+      .select("id")
+      .eq("user_id", userId)
+      .limit(1)
+      .maybeSingle();
+    if (fileCheckError) {
+      fastify.log.warn({ err: fileCheckError }, "file existence check failed — skipping file context this turn");
+      return null;
+    }
+    if (!anyFile) return null;
+
     const [queryEmbedding] = await embedTexts(fastify, [queryText], true);
     if (!queryEmbedding) return null;
 

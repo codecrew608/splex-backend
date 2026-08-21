@@ -11,7 +11,7 @@ export interface RealCostResult {
 // SPLEX Credits are deliberately NOT a fixed 1:1 mapping to real model tokens —
 // this is the conversion rate between actual $ cost and the credit currency
 // shown to users. Tunable without touching the credit *meaning* users see.
-const DEFAULT_CREDITS_PER_USD = 25_000;
+const DEFAULT_CREDITS_PER_USD = 20_000;
 
 // Free-tier requests route to $0 :free models, but the pool still needs to
 // mean something — so free-tier usage is priced against the category's PAID

@@ -41,8 +41,15 @@ async function tryIndexChunks(fastify: FastifyInstance, fileId: string, text: st
   }
 }
 
+// OCR/embedding is real compute cost on the intelligence sidecar (spec:
+// media/file processing needs stricter protection than a plain read).
+const PROCESS_RATE_LIMIT = { max: 10, windowMs: 60_000 };
+
 const filesRoutes: FastifyPluginAsync = async (fastify) => {
-  fastify.post("/files/:fileId/process", { preHandler: fastify.authenticate }, async (request, reply) => {
+  fastify.post(
+    "/files/:fileId/process",
+    { preHandler: [fastify.authenticate, fastify.rateLimitByUser("files_process", PROCESS_RATE_LIMIT.max, PROCESS_RATE_LIMIT.windowMs)] },
+    async (request, reply) => {
     const params = paramsSchema.safeParse(request.params);
     if (!params.success) {
       return reply.code(400).send({ message: "Invalid file id." });
