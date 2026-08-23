@@ -25,6 +25,13 @@ export interface StreamCompletionOptions {
   messages: ChatMessageParam[];
   signal?: AbortSignal;
   onToken: (delta: string) => void;
+  // Required, not optional — omitting this is exactly what caused the
+  // OpenRouter 402 bug (see cortex/tokenBudget.ts): with no max_tokens at
+  // all, OpenRouter falls back to the served model's own maximum (65536
+  // for some models), and its pre-flight affordability check rejects that
+  // ceiling even when real usage would be a few hundred tokens. Every
+  // caller must resolve one via resolveMaxTokens() first.
+  maxTokens: number;
 }
 
 export interface StreamCompletionResult {
@@ -46,7 +53,7 @@ export function openRouterHeaders(fastify: FastifyInstance): Record<string, stri
 // it arrives. Never streamed directly to the client 1:1 without going
 // through the caller's SSE writer — callers own the client-facing framing.
 export async function streamCompletion(opts: StreamCompletionOptions): Promise<StreamCompletionResult> {
-  const { fastify, model, messages, signal, onToken } = opts;
+  const { fastify, model, messages, signal, onToken, maxTokens } = opts;
 
   const response = await fetch(`${fastify.config.OPENROUTER_BASE_URL}/chat/completions`, {
     method: "POST",
@@ -56,6 +63,7 @@ export async function streamCompletion(opts: StreamCompletionOptions): Promise<S
       messages,
       stream: true,
       stream_options: { include_usage: true },
+      max_tokens: maxTokens,
     }),
     signal,
   });
@@ -274,6 +282,18 @@ export async function completeOnce(opts: {
 export function isRetryableOpenRouterError(err: unknown): boolean {
   if (!(err instanceof Error)) return false;
   return /OpenRouter (request|classifier request) failed \((429|5\d\d)\)/.test(err.message);
+}
+
+// 402 specifically means "the account's available balance can't cover
+// this request's budget" — not a bug in the request shape, and not
+// retryable with a fallback model (every model has the same account
+// behind it). Distinguished from other errors so the caller can show a
+// clear, honest "temporarily unavailable" message instead of the generic
+// "Something went wrong" — never exposes the account/balance detail
+// itself to the client, only that this specific class of failure happened.
+export function isBalanceExceededError(err: unknown): boolean {
+  if (!(err instanceof Error)) return false;
+  return /OpenRouter (request|classifier request) failed \(402\)/.test(err.message);
 }
 
 // Binary media endpoints (currently /audio/speech) return raw bytes with no

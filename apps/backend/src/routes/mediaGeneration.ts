@@ -1,8 +1,8 @@
 import type { FastifyInstance } from "fastify";
 import type { AuthedUser } from "../types/index.js";
 import type { CortexDecision } from "../cortex/index.js";
-import { selectModelCandidates } from "../cortex/index.js";
-import { SplexSSEWriter } from "../sse/writer.js";
+import { selectModelCandidates, resolveCortexVersion } from "../cortex/index.js";
+import type { SSEWriter } from "../sse/writer.js";
 import {
   checkMediaQuota,
   checkConcurrentMediaLimit,
@@ -12,11 +12,12 @@ import {
 } from "../credits/mediaQuota.js";
 import { computeMediaCreditsCharged } from "../credits/mediaCost.js";
 import { resolveCreditGateEstimate } from "../credits/costBand.js";
-import { checkCredits } from "../credits/checkCredits.js";
+import { checkCredits, resolveCreditRejectionMessage } from "../credits/checkCredits.js";
 import { consumeCredits } from "../credits/consumeCredits.js";
 import { insertMessage } from "../persistence/messages.js";
 import { insertCortexDecision } from "../persistence/cortexDecisions.js";
 import { recordModelOutcome, classifyFailure } from "../cortex/modelHealth.js";
+import { isBalanceExceededError } from "../openrouter/client.js";
 import type { ModelRegistryRow } from "../types/index.js";
 
 export interface SyncMediaGenerationResult {
@@ -30,7 +31,7 @@ export interface SyncMediaGenerationResult {
 // without casting — every kind still satisfies the base contract.
 export interface SyncMediaGenerationParams<R extends SyncMediaGenerationResult = SyncMediaGenerationResult> {
   fastify: FastifyInstance;
-  sse: SplexSSEWriter;
+  sse: SSEWriter;
   user: AuthedUser;
   conversationId: string;
   userMessageId?: string;
@@ -70,13 +71,14 @@ export async function handleSyncMediaGeneration<R extends SyncMediaGenerationRes
   const gateEstimate = await resolveCreditGateEstimate(fastify, decision.complexity, user.planTier);
   const creditsAllowed = await checkCredits(fastify, user.id, gateEstimate);
   if (!creditsAllowed) {
-    sse.error({ message: "You're out of SPLEX credits." });
+    sse.error({ message: await resolveCreditRejectionMessage(fastify, user.id, gateEstimate) });
     sse.done({ blocked: true, conversationId, userMessageId });
     sse.end();
     return;
   }
 
-  const candidates = await selectModelCandidates(fastify, kind, user.planTier, 2, decision.complexity);
+  const cortexVersion = resolveCortexVersion(user.planTier);
+  const candidates = await selectModelCandidates(fastify, kind, user.planTier, cortexVersion, decision.complexity);
   if (candidates.length === 0) {
     sse.error({ message: params.unavailableMessage });
     sse.done({ blocked: true, conversationId, userMessageId });
@@ -94,6 +96,12 @@ export async function handleSyncMediaGeneration<R extends SyncMediaGenerationRes
 
   let model: ModelRegistryRow = candidates[0];
   let result: R | undefined;
+  // Same reasoning as chat.ts's own fallback loop: every candidate shares
+  // one OpenRouter account, so if the last failure was that account's
+  // balance being unable to cover the request, no other candidate would
+  // have fared differently — surface that honestly instead of the generic
+  // caller-supplied failedMessage.
+  let lastError: unknown;
   for (let i = 0; i < candidates.length; i++) {
     model = candidates[i];
     const startedAt = Date.now();
@@ -102,6 +110,7 @@ export async function handleSyncMediaGeneration<R extends SyncMediaGenerationRes
       recordModelOutcome(fastify, model.id, "success", Date.now() - startedAt, result.costUsd);
       break;
     } catch (err) {
+      lastError = err;
       recordModelOutcome(fastify, model.id, classifyFailure(err), Date.now() - startedAt);
       fastify.log.warn({ err, model: model.openrouter_model_id, kind }, "media generation failed, trying next candidate");
     }
@@ -116,7 +125,11 @@ export async function handleSyncMediaGeneration<R extends SyncMediaGenerationRes
       prompt,
       errorMessage: "generation failed on every candidate",
     });
-    sse.error({ message: params.failedMessage });
+    sse.error({
+      message: isBalanceExceededError(lastError)
+        ? "This AI service is temporarily unavailable. Please try again shortly."
+        : params.failedMessage,
+    });
     sse.done({ blocked: true, conversationId, userMessageId });
     sse.end();
     return;
@@ -177,7 +190,7 @@ export interface AsyncMediaJob {
 
 export interface AsyncMediaGenerationParams {
   fastify: FastifyInstance;
-  sse: SplexSSEWriter;
+  sse: SSEWriter;
   user: AuthedUser;
   conversationId: string;
   userMessageId?: string;
@@ -222,13 +235,14 @@ export async function handleAsyncMediaGeneration(params: AsyncMediaGenerationPar
   const gateEstimate = await resolveCreditGateEstimate(fastify, decision.complexity, user.planTier);
   const creditsAllowed = await checkCredits(fastify, user.id, gateEstimate);
   if (!creditsAllowed) {
-    sse.error({ message: "You're out of SPLEX credits." });
+    sse.error({ message: await resolveCreditRejectionMessage(fastify, user.id, gateEstimate) });
     sse.done({ blocked: true, conversationId, userMessageId });
     sse.end();
     return;
   }
 
-  const candidates = await selectModelCandidates(fastify, kind, user.planTier, 2, decision.complexity);
+  const cortexVersion = resolveCortexVersion(user.planTier);
+  const candidates = await selectModelCandidates(fastify, kind, user.planTier, cortexVersion, decision.complexity);
   if (candidates.length === 0) {
     sse.error({ message: params.unavailableMessage });
     sse.done({ blocked: true, conversationId, userMessageId });
@@ -246,6 +260,7 @@ export async function handleAsyncMediaGeneration(params: AsyncMediaGenerationPar
 
   let model: ModelRegistryRow = candidates[0];
   let job: AsyncMediaJob | undefined;
+  let lastError: unknown;
   for (let i = 0; i < candidates.length; i++) {
     model = candidates[i];
     const startedAt = Date.now();
@@ -257,6 +272,7 @@ export async function handleAsyncMediaGeneration(params: AsyncMediaGenerationPar
       recordModelOutcome(fastify, model.id, "success", Date.now() - startedAt);
       break;
     } catch (err) {
+      lastError = err;
       recordModelOutcome(fastify, model.id, classifyFailure(err), Date.now() - startedAt);
       fastify.log.warn({ err, model: model.openrouter_model_id, kind }, "async media submit failed, trying next candidate");
     }
@@ -278,7 +294,11 @@ export async function handleAsyncMediaGeneration(params: AsyncMediaGenerationPar
       prompt,
       errorMessage: "submission failed on every candidate",
     });
-    sse.error({ message: params.submitFailedMessage });
+    sse.error({
+      message: isBalanceExceededError(lastError)
+        ? "This AI service is temporarily unavailable. Please try again shortly."
+        : params.submitFailedMessage,
+    });
     sse.done({ blocked: true, conversationId, userMessageId });
     sse.end();
     return;

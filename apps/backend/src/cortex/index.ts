@@ -31,3 +31,6 @@ export { selectModel, selectModelCandidates } from "./modelSelect.js";
 export { categoryToLabel } from "./labels.js";
 export { SPLEX_SYSTEM_PROMPT, buildSystemPrompt } from "./systemPrompt.js";
 export { buildProjectContext } from "./userContext.js";
+export { resolveCortexVersion } from "./version.js";
+export type { CortexVersion } from "./version.js";
+export { friendlyModelName, explainModelSelection } from "./modelDisplay.js";

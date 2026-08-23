@@ -1,15 +1,15 @@
 import type { FastifyInstance } from "fastify";
 import type { AuthedUser } from "../types/index.js";
 import type { ModelRegistryRow } from "../types/index.js";
-import { SplexSSEWriter } from "../sse/writer.js";
-import { selectModelCandidates } from "../cortex/index.js";
-import { completeOnce, fetchGenerationCost } from "../openrouter/client.js";
+import type { SSEWriter } from "../sse/writer.js";
+import { selectModelCandidates, resolveCortexVersion } from "../cortex/index.js";
+import { completeOnce, fetchGenerationCost, isBalanceExceededError } from "../openrouter/client.js";
 import { computeMediaCreditsCharged } from "../credits/mediaCost.js";
 import { consumeCredits } from "../credits/consumeCredits.js";
 import { insertMessage } from "../persistence/messages.js";
 import { insertCortexDecision } from "../persistence/cortexDecisions.js";
 import { checkMediaQuota, recordMediaGeneration } from "../credits/mediaQuota.js";
-import { checkCredits } from "../credits/checkCredits.js";
+import { checkCredits, resolveCreditRejectionMessage } from "../credits/checkCredits.js";
 import { wrapUntrustedContent, isSafeExternalUrl, BLOCKED_FETCH_DOMAINS } from "./security.js";
 import type { Citation } from "./types.js";
 
@@ -35,7 +35,7 @@ interface StageEvidence {
 
 export interface RunDeepResearchParams {
   fastify: FastifyInstance;
-  sse: SplexSSEWriter;
+  sse: SSEWriter;
   user: AuthedUser;
   conversationId: string;
   userMessageId?: string;
@@ -56,7 +56,9 @@ async function getResearchLimits(fastify: FastifyInstance, planTier: "free" | "s
     .eq("plan_tier", planTier)
     .in("counter_type", ["research_max_searches", "research_max_pages", "research_cost"]);
 
-  const byType = Object.fromEntries((data ?? []).map((r) => [r.counter_type as string, r.limit_amount as number | null]));
+  const byType = Object.fromEntries(
+    (data ?? []).map((r: { counter_type: string; limit_amount: number | null }) => [r.counter_type, r.limit_amount]),
+  );
   // Conservative fallback if the lookup fails — matches getWorkflowLimits'
   // own "stay conservative, never accidentally grant more" precedent.
   return {
@@ -87,6 +89,27 @@ async function runStage(
 
   const costUsd = generationId ? await fetchGenerationCost(fastify, generationId) : 0;
   const costCredits = computeMediaCreditsCharged(fastify, costUsd);
+
+  // Internal cost telemetry — never exposed to any client, exists purely
+  // to answer "how much does SPLEX actually spend serving each tier" from
+  // server logs. Deliberately includes model variant and whether a
+  // provider-billed tool (web_search/web_fetch) was used, since a
+  // :free-variant model does NOT mean $0 real cost the moment a tool call
+  // is attached to it (OpenRouter bills web_search/web_fetch per-call,
+  // independent of the underlying model's own price) — this is the exact
+  // distinction a plain "which model" log would silently hide.
+  fastify.log.info(
+    {
+      event: "provider_tool_cost",
+      planTier: user.planTier,
+      stage: intent,
+      modelVariant: model.variant,
+      toolsUsed: (opts.tools ?? []).map((t) => t.type),
+      costUsd,
+      costCredits,
+    },
+    "deep research stage cost",
+  );
 
   await consumeCredits(fastify, {
     userId: user.id,
@@ -128,7 +151,8 @@ function parseJsonObject<T>(fastify: FastifyInstance, stage: string, raw: string
 }
 
 async function pickStageModel(fastify: FastifyInstance, category: string, planTier: AuthedUser["planTier"]): Promise<ModelRegistryRow | null> {
-  const [model] = await selectModelCandidates(fastify, category, planTier, 1, RESEARCH_COMPLEXITY);
+  const cortexVersion = resolveCortexVersion(planTier);
+  const [model] = await selectModelCandidates(fastify, category, planTier, cortexVersion, RESEARCH_COMPLEXITY, 1);
   return model ?? null;
 }
 
@@ -167,7 +191,7 @@ export async function runDeepResearch(params: RunDeepResearchParams): Promise<vo
   // see checkCredits' own doc comment for the live-caught bug this avoids.
   const canAfford = await checkCredits(fastify, user.id, limits.costCeilingCredits, { monthlyOnly: true });
   if (!canAfford) {
-    sse.error({ message: "You're out of SPLEX credits." });
+    sse.error({ message: await resolveCreditRejectionMessage(fastify, user.id, limits.costCeilingCredits, { monthlyOnly: true }) });
     sse.done({ blocked: true, conversationId, userMessageId });
     sse.end();
     return;
@@ -508,7 +532,11 @@ export async function runDeepResearch(params: RunDeepResearchParams): Promise<vo
       prompt: query,
       errorMessage: "research pipeline failed",
     });
-    sse.error({ message: "Deep research failed, please try again." });
+    sse.error({
+      message: isBalanceExceededError(err)
+        ? "This AI service is temporarily unavailable. Please try again shortly."
+        : "Deep research failed, please try again.",
+    });
     sse.done({ blocked: true, conversationId, userMessageId });
     sse.end();
   }
