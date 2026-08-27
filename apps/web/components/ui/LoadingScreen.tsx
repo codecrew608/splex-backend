@@ -5,7 +5,7 @@ import { LogoMark } from "./Logo";
 // a full-screen loading state is needed.
 export function LoadingScreen() {
   return (
-    <div className="flex h-screen w-full flex-col items-center justify-center gap-4 bg-background">
+    <div className="flex h-dvh w-full flex-col items-center justify-center gap-4 bg-background">
       <span className="animate-pulse-soft">
         <LogoMark size={34} />
       </span>

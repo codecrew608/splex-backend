@@ -12,7 +12,7 @@ export default async function MemoryPage() {
   const { data: memoryRow } = await supabase.from("user_memory").select("summary_text").eq("user_id", user.id).single();
 
   return (
-    <div className="mx-auto h-screen max-w-2xl overflow-y-auto px-6 py-10">
+    <div className="mx-auto h-dvh max-w-2xl overflow-y-auto px-4 pb-10 pt-14 sm:px-6 sm:pt-10">
       <h1 className="text-xl font-semibold text-foreground">Memory</h1>
       <p className="mt-1 text-sm text-muted-foreground">
         What SPLEX remembers about you across conversations — preferences, ongoing projects, how you like things
