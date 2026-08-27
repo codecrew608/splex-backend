@@ -26,5 +26,5 @@ const extractPdfText: PdfTextExtractor = async (buffer) => {
 // HTTP adapter only — behaviour lives in handlers/files.ts, shared with
 // routes/files.ts apart from the injected extractor above.
 export async function handleProcessFile(fileIdParam: string, ctx: WorkerCtx, user: AuthedUser): Promise<Response> {
-  return respondWithResult(await processFile(asFastifyInstance(ctx), user.id, fileIdParam, extractPdfText));
+  return respondWithResult(await processFile(asFastifyInstance(ctx), user.id, user.planTier, fileIdParam, extractPdfText));
 }

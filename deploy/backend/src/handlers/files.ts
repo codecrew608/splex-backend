@@ -18,6 +18,33 @@ const TEXT_EXTRACT_CAP = 20_000;
 const SCANNED_PDF_TEXT_THRESHOLD = 30;
 
 const DOCX_MIME = "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+
+// Server-side per-tier size ceiling, mirroring apps/web/lib/fileLimits.ts.
+//
+// That cap was enforced ONLY in the browser. Combined with files_owner_all
+// (an RLS policy granting the owner full CRUD), a user could insert a files
+// row claiming any size_bytes they liked and upload something far larger —
+// bypassing both this ceiling and the storage quota trigger, which sums the
+// same self-reported column. The real defence has to measure the bytes we
+// actually downloaded, which is what this does.
+//
+// It also bounds memory: this handler buffers the whole file, and on
+// Workers an oversized download exhausts the isolate's limit and kills the
+// request rather than failing cleanly.
+const FILE_SIZE_LIMITS: Record<string, number> = {
+  free: 5 * 1024 * 1024,
+  starter: 20 * 1024 * 1024,
+  pro: 50 * 1024 * 1024,
+};
+
+function sizeLimitFor(planTier: string): number {
+  return FILE_SIZE_LIMITS[planTier] ?? FILE_SIZE_LIMITS.free;
+}
+
+function formatBytes(bytes: number): string {
+  if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)}KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)}MB`;
+}
 const CODE_EXTENSIONS = [
   ".js", ".ts", ".tsx", ".jsx", ".py", ".json", ".yaml", ".yml", ".sql",
   ".html", ".css", ".sh", ".go", ".rs", ".java", ".c", ".cpp", ".rb", ".php",
@@ -64,6 +91,7 @@ async function tryIndexChunks(fastify: FastifyInstance, fileId: string, text: st
 export async function processFile(
   fastify: FastifyInstance,
   userId: string,
+  planTier: string,
   rawFileId: string,
   extractPdfText: PdfTextExtractor,
 ): Promise<HandlerResult<{ processingStatus: string }>> {
@@ -96,6 +124,22 @@ export async function processFile(
   }
 
   const buffer = Buffer.from(await downloaded.arrayBuffer());
+
+  // Measured from what was really downloaded, never from the client-supplied
+  // files.size_bytes column — that column is writable by the owner and is
+  // exactly what a bypass would falsify.
+  const sizeLimit = sizeLimitFor(planTier);
+  if (buffer.byteLength > sizeLimit) {
+    fastify.log.warn(
+      { fileId: file.id, actualBytes: buffer.byteLength, claimedBytes: file.size_bytes, sizeLimit, planTier },
+      "file exceeds the plan size limit on the server side — rejecting",
+    );
+    await fastify.supabaseAdmin
+      .from("files")
+      .update({ processing_status: "failed", error_message: `File exceeds your plan's ${formatBytes(sizeLimit)} limit.` })
+      .eq("id", file.id);
+    return fail(`File exceeds your plan's ${formatBytes(sizeLimit)} limit.`, 413);
+  }
 
   if (file.mime_type?.startsWith("image/")) {
     // Vision handling happens at chat-time (base64 data URI straight into

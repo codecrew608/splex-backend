@@ -49,6 +49,33 @@ export function openRouterHeaders(fastify: FastifyInstance): Record<string, stri
   };
 }
 
+// Upstream call deadlines.
+//
+// Before this, streamCompletion carried only the CALLER's abort signal
+// (client disconnect) and completeOnce carried none at all — so a hung
+// OpenRouter connection had no upper bound. That matters most for
+// completeOnce, which runs the Cortex classifier on the critical path of
+// every message keywords cannot settle: a stalled classifier meant the
+// user's chat simply never answered, with nothing to time it out.
+//
+// Streaming gets the longer budget because a long generation legitimately
+// holds the connection open; the non-streaming path is a short structured
+// call (classification, memory extraction, a research stage) and should
+// never take this long.
+const STREAM_TIMEOUT_MS = 180_000;
+const COMPLETE_TIMEOUT_MS = 60_000;
+
+// Combines the caller's signal (client went away) with a deadline. Prefers
+// AbortSignal.any where available — supported on Workers and Node >=20,
+// which is every runtime this ships to — and degrades to the timeout alone
+// rather than throwing if some future runtime lacks it.
+function withDeadline(signal: AbortSignal | undefined, ms: number): AbortSignal {
+  const timeout = AbortSignal.timeout(ms);
+  if (!signal) return timeout;
+  const anyFn = (AbortSignal as unknown as { any?: (s: AbortSignal[]) => AbortSignal }).any;
+  return typeof anyFn === "function" ? anyFn([signal, timeout]) : timeout;
+}
+
 // Streams a completion from OpenRouter, invoking onToken for each delta as
 // it arrives. Never streamed directly to the client 1:1 without going
 // through the caller's SSE writer — callers own the client-facing framing.
@@ -65,7 +92,7 @@ export async function streamCompletion(opts: StreamCompletionOptions): Promise<S
       stream_options: { include_usage: true },
       max_tokens: maxTokens,
     }),
-    signal,
+    signal: withDeadline(signal, STREAM_TIMEOUT_MS),
   });
 
   if (!response.ok || !response.body) {
@@ -210,6 +237,7 @@ export async function completeOnce(opts: {
     method: "POST",
     headers: openRouterHeaders(fastify),
     body: bodyFor(true),
+    signal: withDeadline(undefined, COMPLETE_TIMEOUT_MS),
   });
 
   // Reasoning policy is provider-specific, not something this backend
@@ -226,6 +254,7 @@ export async function completeOnce(opts: {
         method: "POST",
         headers: openRouterHeaders(fastify),
         body: bodyFor(false),
+        signal: withDeadline(undefined, COMPLETE_TIMEOUT_MS),
       });
     } else {
       throw new Error(`OpenRouter classifier request failed (${response.status}): ${text.slice(0, 500)}`);

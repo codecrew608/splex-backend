@@ -36,7 +36,7 @@ const filesRoutes: FastifyPluginAsync = async (fastify) => {
     },
     async (request, reply) => {
       const { fileId } = request.params as { fileId: string };
-      return sendResult(reply, await processFile(fastify, request.user.id, fileId, extractPdfText));
+      return sendResult(reply, await processFile(fastify, request.user.id, request.user.planTier, fileId, extractPdfText));
     },
   );
 };
