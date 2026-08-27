@@ -13,7 +13,11 @@ export default async function ProjectDetailPage({ params }: PageProps) {
 
   // RLS (projects_owner_all) is the actual authorization gate — this simply
   // returns nothing if the project isn't this user's.
-  const { data: project } = await supabase.from("projects").select("id, title").eq("id", projectId).single();
+  const { data: project } = await supabase
+    .from("projects")
+    .select("id, title, description")
+    .eq("id", projectId)
+    .single();
   if (!project) notFound();
 
   const { data: conversations } = await supabase
@@ -23,7 +27,7 @@ export default async function ProjectDetailPage({ params }: PageProps) {
     .order("created_at", { ascending: false });
 
   return (
-    <div className="mx-auto h-screen max-w-3xl overflow-y-auto px-6 py-10">
+    <div className="mx-auto h-dvh max-w-3xl overflow-y-auto px-4 pb-10 pt-14 sm:px-6 sm:pt-10">
       <p className="text-xs text-muted-foreground">
         <Link href="/projects" className="hover:text-foreground">
           Projects
@@ -41,6 +45,7 @@ export default async function ProjectDetailPage({ params }: PageProps) {
           New chat in this project
         </Link>
       </div>
+      {project.description && <p className="mt-2 text-sm text-muted-foreground">{project.description}</p>}
 
       <ul className="mt-6 divide-y divide-border overflow-hidden rounded-[22px] border border-border bg-surface">
         {(conversations ?? []).map((conversation) => (

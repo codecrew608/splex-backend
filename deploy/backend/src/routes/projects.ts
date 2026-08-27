@@ -4,6 +4,9 @@ import { getQuotaState } from "../entitlements/index.js";
 
 const createProjectSchema = z.object({
   title: z.string().trim().min(1).max(200),
+  // Optional: the create form asks for it, but a project is perfectly
+  // usable without one, so an empty description must never block creation.
+  description: z.string().trim().max(2000).optional(),
 });
 
 // Rename/delete deliberately have NO backend route — RLS (`projects_owner_all`)
@@ -47,10 +50,20 @@ const projectsRoutes: FastifyPluginAsync = async (fastify) => {
         .send({ message: `Your plan allows up to ${quota.limit} projects. Upgrade to create more.` });
     }
 
+    // is_implicit:false is what makes this a REAL project — the one the
+    // Projects list shows and the quota above counts. The auto-created
+    // container behind a standalone chat sets it true instead (see
+    // persistence/conversations.ts and migration 0023).
     const { data, error } = await fastify.supabaseAdmin
       .from("projects")
-      .insert({ user_id: request.user.id, title: parsed.data.title, type: "chat" })
-      .select("id, title, created_at")
+      .insert({
+        user_id: request.user.id,
+        title: parsed.data.title,
+        description: parsed.data.description || null,
+        type: "chat",
+        is_implicit: false,
+      })
+      .select("id, title, description, created_at")
       .single();
 
     if (error || !data) {
@@ -58,7 +71,9 @@ const projectsRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(500).send({ message: "Failed to create project." });
     }
 
-    return reply.code(201).send({ id: data.id, title: data.title, createdAt: data.created_at });
+    return reply
+      .code(201)
+      .send({ id: data.id, title: data.title, description: data.description, createdAt: data.created_at });
   });
 };
 

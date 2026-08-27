@@ -9,6 +9,13 @@
 
 export type PlanTier = "free" | "starter" | "pro";
 
+// Server-resolved engine version — Free plans get v1 (baseline routing),
+// Starter/Pro get v1.5 (full cost/quality/health-aware routing). Resolved
+// ONLY server-side from the authenticated user's planTier (see
+// apps/backend/src/cortex/version.ts's resolveCortexVersion) — a client
+// never sends this, it only ever receives it back for display.
+export type CortexVersion = "v1" | "v1.5";
+
 export type ComplexityLevel = "simple" | "medium" | "complex";
 
 export type MessageRole = "user" | "assistant";
@@ -109,6 +116,12 @@ export interface DoneEventData {
   // must never render a "Sources" section, or imply a search occurred,
   // when this is absent.
   citations?: Citation[];
+  // The Cortex Routing disclosure panel's entire data source for this
+  // turn — see CortexRoutingInfo's own doc comment. Absent on every
+  // non-success completion (blocked/partial/error) — matches "no charge,
+  // no disclosure": there's nothing genuine to disclose about a turn that
+  // never actually generated anything.
+  routing?: CortexRoutingInfo;
 }
 
 // url/title/snippet only — never the raw OpenRouter annotation object
@@ -117,6 +130,29 @@ export interface Citation {
   url: string;
   title: string;
   snippet: string;
+}
+
+// Client-safe summary of how THIS turn was actually routed — the Cortex
+// Routing transparency panel's entire data source. Computed AFTER
+// generation completes (from the model that actually served the request,
+// post-fallback, not the first-choice candidate) so it's always accurate
+// even when a fallback candidate ended up serving the turn.
+//
+// modelDisplayName is a curated friendly name resolved server-side (see
+// apps/backend/src/cortex/modelDisplay.ts) — this field, like every other
+// field in this file, must never carry a real openrouter_model_id,
+// provider name, or raw routing score. `reason` is a short, deterministic,
+// non-LLM-generated explanation (see modelDisplay.ts's
+// explainModelSelection) — distinct from CortexDecisionPayload.reason,
+// which explains the intent/category CLASSIFICATION, not the model pick.
+export interface CortexRoutingInfo {
+  cortexVersion: CortexVersion;
+  categoryLabel: string;
+  complexity: ComplexityLevel;
+  modelDisplayName: string;
+  reason: string;
+  creditsCharged: number;
+  responseTimeMs: number;
 }
 
 // Deep research's five real, independently-timed stages (see
@@ -134,12 +170,23 @@ export interface ResearchStageEventData {
 // CortexDecisionPayload.
 export interface WorkflowPlanEventData {
   steps: Array<{ title: string; categoryLabel: string }>;
+  // Same engine version for every step in a run — resolved once from the
+  // triggering user's planTier when the run starts (see
+  // cortex/workflow/orchestrator.ts's RunCtx). Lets the Workflow panel
+  // show "Cortex Engine v1.5 / Workflow · N steps" per the reference
+  // design, without the frontend ever guessing at plan tier itself.
+  cortexVersion: CortexVersion;
 }
 
 export interface WorkflowStepStatusEventData {
   stepIndex: number;
   status: "running" | "completed" | "failed";
   title: string;
+  // Only set alongside status "completed" — the model that actually
+  // served this step (post-fallback), as a curated friendly name (see
+  // modelDisplay.ts's friendlyModelName). Never set for "running" (not
+  // yet resolved to a final winner) or "failed" (nothing to disclose).
+  modelDisplayName?: string;
 }
 
 export interface WorkflowClarificationEventData {

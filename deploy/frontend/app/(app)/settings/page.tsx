@@ -5,6 +5,7 @@ import { SecuritySection } from "@/components/settings/SecuritySection";
 import { DangerZoneSection } from "@/components/settings/DangerZoneSection";
 import { CancelSubscriptionButton } from "@/components/settings/CancelSubscriptionButton";
 import { UsagePanel } from "@/components/sidebar/UsagePanel";
+import { MemoryEditor } from "@/components/memory/MemoryEditor";
 import { planDisplayName } from "@/lib/planDisplay";
 import type { PlanTier } from "@/shared-types";
 
@@ -32,7 +33,7 @@ export default async function SettingsPage() {
   const { data: profile } = await supabase.from("users").select("plan_tier").eq("id", user.id).single();
   const planTier = (profile?.plan_tier ?? "free") as PlanTier;
 
-  const [{ data: usageRow }, { data: limitRow }, { data: dailyUsageRow }, { data: dailyLimitRow }] = await Promise.all([
+  const [{ data: usageRow }, { data: limitRow }, { data: dailyUsageRow }, { data: dailyLimitRow }, { data: memoryRow }] = await Promise.all([
     supabase
       .from("usage_counters")
       .select("used")
@@ -49,6 +50,7 @@ export default async function SettingsPage() {
       .eq("period_start", todayDateIST())
       .maybeSingle(),
     supabase.from("plan_limits").select("limit_amount").eq("plan_tier", planTier).eq("counter_type", "daily_credits").maybeSingle(),
+    supabase.from("user_memory").select("summary_text").eq("user_id", user.id).maybeSingle(),
   ]);
 
   const creditsUsed = usageRow?.used ?? 0;
@@ -57,7 +59,7 @@ export default async function SettingsPage() {
   const dailyTotal = dailyLimitRow?.limit_amount ?? null;
 
   return (
-    <div className="mx-auto h-screen max-w-2xl overflow-y-auto px-6 py-10">
+    <div className="mx-auto h-dvh max-w-2xl overflow-y-auto px-4 pb-10 pt-14 sm:px-6 sm:pt-10">
       <h1 className="text-xl font-semibold text-foreground">Settings</h1>
 
       <div className="mt-6 space-y-1 rounded-[22px] border border-border bg-surface p-5">
@@ -102,6 +104,15 @@ export default async function SettingsPage() {
       <div className="mt-4 rounded-[22px] border border-border bg-surface p-5">
         <p className="mb-3 text-xs uppercase tracking-wide text-muted-foreground">Today&apos;s usage</p>
         <UsagePanel bordered={false} showLabel={false} />
+      </div>
+
+      <div className="mt-4 rounded-[22px] border border-border bg-surface p-5">
+        <p className="text-xs uppercase tracking-wide text-muted-foreground">Memory</p>
+        <p className="mb-3 mt-1 text-sm text-muted-foreground">
+          What SPLEX remembers about you across every conversation — preferences, ongoing projects, how you like
+          things done. It updates itself as you chat; you can edit or clear it any time.
+        </p>
+        <MemoryEditor userId={user.id} initialSummary={memoryRow?.summary_text ?? ""} />
       </div>
 
       <SecuritySection />

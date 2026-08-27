@@ -15,19 +15,23 @@ import {
   categoryToLabel,
   buildSystemPrompt,
   buildProjectContext,
+  resolveCortexVersion,
+  friendlyModelName,
+  explainModelSelection,
 } from "../cortex/index.js";
 import { shouldExtractMemory, extractAndUpdateMemory } from "../memory/extractMemory.js";
-import { checkCredits } from "../credits/checkCredits.js";
+import { checkAndReserveCredits, settleDailyReservation, resolveCreditRejectionMessage } from "../credits/checkCredits.js";
 import { consumeCredits } from "../credits/consumeCredits.js";
 import { resolveCreditGateEstimate } from "../credits/costBand.js";
 import { computeRealCost } from "../credits/realCost.js";
-import { streamCompletion, isRetryableOpenRouterError, type ChatContentPart } from "../openrouter/client.js";
+import { streamCompletion, isRetryableOpenRouterError, isBalanceExceededError, isModelUnavailableError, type ChatContentPart } from "../openrouter/client.js";
+import { resolveMaxTokens } from "../cortex/tokenBudget.js";
 import { SplexSSEWriter } from "../sse/writer.js";
 import { fetchOwnedFiles, buildImageDataUri, buildAttachmentTextBlock } from "../files/attachments.js";
 import { retrieveFileContext } from "../intelligence/retrieve.js";
 import { shouldUseWorkflow } from "../cortex/workflow/trigger.js";
 import { getActiveWorkflow, cancelActiveWorkflow, startWorkflow, resumeWorkflow } from "../cortex/workflow/orchestrator.js";
-import { recordModelOutcome, classifyFailure } from "../cortex/modelHealth.js";
+import { recordModelOutcome, recordModelFailure } from "../cortex/modelHealth.js";
 import { generateImage } from "../images/generate.js";
 import { generateSpeech } from "../audio/generate.js";
 import { submitVideoJob } from "../video/generate.js";
@@ -86,6 +90,10 @@ const chatRoutes: FastifyPluginAsync = async (fastify) => {
 
     const user = request.user;
     const sse = new SplexSSEWriter(reply);
+    // Server-side ONLY — resolveCortexVersion never reads anything from
+    // the request. Free -> v1, Starter/Pro -> v1.5. See cortex/version.ts.
+    const cortexVersion = resolveCortexVersion(user.planTier);
+    const requestStartedAt = Date.now();
 
     const abortController = new AbortController();
     request.raw.on("close", () => {
@@ -408,22 +416,37 @@ const chatRoutes: FastifyPluginAsync = async (fastify) => {
       // actual token usage (see step 10) and can differ from this estimate.
       const gateEstimate = await resolveCreditGateEstimate(fastify, decision.complexity, user.planTier);
 
-      // Step 6: hard gate before any generation happens.
-      const allowed = await checkCredits(fastify, user.id, gateEstimate);
-      if (!allowed) {
-        sse.error({ message: "You're out of SPLEX credits." });
+      // Step 6: hard gate before any generation happens. Atomically
+      // reserves gateEstimate against the DAILY pool (reserve_daily_credits,
+      // migration 0022) as part of this same call — not just a read-only
+      // check — closing both the estimate-vs-real-cost gap and the
+      // concurrent-request race that previously let daily usage drift past
+      // the 150 cap (see checkAndReserveCredits' doc comment). Every exit
+      // path from here through the end of this turn MUST settle this
+      // reservation exactly once — see the try/finally below.
+      const gate = await checkAndReserveCredits(fastify, user.id, gateEstimate);
+      if (!gate.allowed) {
+        sse.error({ message: await resolveCreditRejectionMessage(fastify, user.id, gateEstimate) });
         sse.done({ blocked: true, conversationId, userMessageId });
         sse.end();
         return;
       }
 
-      // Step 7: THE free/paid isolation mechanism. Up to 2 ranked
-      // candidates — if the first hits a rate-limited/transient upstream
-      // failure, step 9's stream loop retries with the second before
-      // giving up (see isRetryableOpenRouterError's doc comment for why
-      // this is safe to retry rather than just failing outright).
+      // Set to the real charged amount only once generation genuinely
+      // succeeds (right after computeRealCost below); stays 0 on every
+      // other exit (model unavailable, abort, empty response, thrown
+      // error), which fully releases the reservation via the finally.
+      let dailyActualCost = 0;
+      try {
+
+      // Step 7: THE free/paid isolation mechanism. Ranked candidates (2 on
+      // v1, 3 on v1.5 — see modelSelect.ts) — if the first hits a
+      // rate-limited/transient upstream failure, step 9's stream loop
+      // retries with the next before giving up (see
+      // isRetryableOpenRouterError's doc comment for why this is safe to
+      // retry rather than just failing outright).
       sse.cortexStatus({ stage: "selecting_capability", label: "Selecting AI capability..." });
-      const modelCandidates = await selectModelCandidates(fastify, decision.category, user.planTier, 2, decision.complexity);
+      const modelCandidates = await selectModelCandidates(fastify, decision.category, user.planTier, cortexVersion, decision.complexity);
       if (modelCandidates.length === 0) {
         sse.error({ message: "This capability is temporarily unavailable, please try again shortly." });
         sse.done({ blocked: true, conversationId, userMessageId });
@@ -478,6 +501,7 @@ const chatRoutes: FastifyPluginAsync = async (fastify) => {
             messages: completionMessages,
             signal: abortController.signal,
             onToken: (delta) => sse.token({ delta }),
+            maxTokens: resolveMaxTokens(decision.category, decision.complexity, model),
           });
           // Feeds the rolling health window the router reads (routing.ts's
           // reliabilityFor/latencyPenaltyFor). Fire-and-forget by design —
@@ -485,7 +509,7 @@ const chatRoutes: FastifyPluginAsync = async (fastify) => {
           recordModelOutcome(fastify, model.id, "success", Date.now() - startedAt);
           break;
         } catch (err) {
-          recordModelOutcome(fastify, model.id, classifyFailure(err), Date.now() - startedAt);
+          recordModelFailure(fastify, model.id, err, Date.now() - startedAt);
           const isLastCandidate = i === modelCandidates.length - 1;
           if (!isLastCandidate && isRetryableOpenRouterError(err)) {
             fastify.log.warn(
@@ -528,6 +552,7 @@ const chatRoutes: FastifyPluginAsync = async (fastify) => {
       // usage x the category's real/shadow model cost — NOT the pre-flight
       // gate estimate above, and NOT a fixed token=credit mapping.
       const realCost = await computeRealCost(fastify, decision.category, model, usage);
+      dailyActualCost = realCost.creditsCharged;
 
       const assistantMessageId = await insertMessage(fastify, {
         conversationId,
@@ -560,7 +585,24 @@ const chatRoutes: FastifyPluginAsync = async (fastify) => {
         realOutputTokens: realCost.outputTokens,
       });
 
-      sse.done({ messageId: assistantMessageId, conversationId, creditsCharged: realCost.creditsCharged, userMessageId });
+      sse.done({
+        messageId: assistantMessageId,
+        conversationId,
+        creditsCharged: realCost.creditsCharged,
+        userMessageId,
+        // Computed from `model` — the candidate that actually served this
+        // turn post-fallback, never modelCandidates[0] — so this is never
+        // wrong on a turn where the primary candidate failed over.
+        routing: {
+          cortexVersion,
+          categoryLabel: decision.categoryLabel,
+          complexity: decision.complexity,
+          modelDisplayName: friendlyModelName(model.openrouter_model_id),
+          reason: explainModelSelection(decision.category, decision.complexity, cortexVersion),
+          creditsCharged: realCost.creditsCharged,
+          responseTimeMs: Date.now() - requestStartedAt,
+        },
+      });
       sse.end();
 
       // Fire-and-forget, after the response is already sent — must never
@@ -568,13 +610,55 @@ const chatRoutes: FastifyPluginAsync = async (fastify) => {
       // swallowed inside extractAndUpdateMemory) never surfaces as a chat
       // error. turnNumber approximated from history length; exact count
       // doesn't matter, it's just pacing the periodic fallback trigger.
-      if (shouldExtractMemory(classifierInputMessage, history.length)) {
+      if (shouldExtractMemory(classifierInputMessage, history.length, (memoryRow?.summary_text ?? "").length)) {
         void extractAndUpdateMemory(fastify, user.id, classifierInputMessage, fullText);
       }
+      } finally {
+        // Fires on every exit from the try above — normal completion,
+        // an early return (model unavailable / aborted / empty response),
+        // or a thrown error re-thrown to the outer catch below.
+        // dailyActualCost is still 0 on every path that didn't reach the
+        // success assignment, which correctly releases the full
+        // reservation rather than leaking it against the user's daily pool.
+        await settleDailyReservation(fastify, user.id, gate.dailyReserved, dailyActualCost);
+      }
     } catch (err) {
-      fastify.log.error({ err }, "/chat request failed");
+      // Explicit field-by-field serialization, not the raw Error in `err` —
+      // an Error's message/stack/name are non-enumerable own properties, so
+      // any logging path that JSON-serializes this object (Cloudflare's
+      // console capture on the Worker side does exactly this — see
+      // worker/context.ts's makeLogger) silently collapses it to `{}`,
+      // exactly what was observed in production ("/chat request failed
+      // {err: {}}"). Pino (Fastify's own logger) already serializes Error
+      // objects correctly, so this is more of a consistency/defense-in-depth
+      // fix here than a live bug — but it's the same code path as the
+      // Worker's, and matching them means this can never silently regress if
+      // the logger implementation ever changes. Never logs the request body,
+      // headers, or any secret — just what the JS runtime itself put on the
+      // Error object.
+      fastify.log.error(
+        {
+          errorName: err instanceof Error ? err.name : typeof err,
+          errorMessage: err instanceof Error ? err.message : String(err),
+          errorStack: err instanceof Error ? err.stack?.slice(0, 1000) : undefined,
+        },
+        "/chat request failed",
+      );
       if (!reply.raw.writableEnded) {
-        sse.error({ message: "Something went wrong. Please try again." });
+        // Distinguished from the generic catch-all: a 402 means the
+        // account's available balance can't cover this request, which is
+        // an honest, specific thing to tell the user — never exposes the
+        // account/key/balance itself, and no retry-with-a-different-model
+        // helps here since every model shares the same account.
+        sse.error({
+          message:
+            isBalanceExceededError(err) || isModelUnavailableError(err)
+              ? // Same reasoning as the Worker port: an exhausted fallback
+                // chain whose last candidate was retired upstream is a known
+                // availability cause, not an unknown failure.
+                "This AI service is temporarily unavailable. Please try again shortly."
+              : "Something went wrong. Please try again.",
+        });
         sse.done({ blocked: true, userMessageId });
         sse.end();
       }

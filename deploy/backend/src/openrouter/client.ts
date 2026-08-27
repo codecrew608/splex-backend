@@ -25,6 +25,13 @@ export interface StreamCompletionOptions {
   messages: ChatMessageParam[];
   signal?: AbortSignal;
   onToken: (delta: string) => void;
+  // Required, not optional — omitting this is exactly what caused the
+  // OpenRouter 402 bug (see cortex/tokenBudget.ts): with no max_tokens at
+  // all, OpenRouter falls back to the served model's own maximum (65536
+  // for some models), and its pre-flight affordability check rejects that
+  // ceiling even when real usage would be a few hundred tokens. Every
+  // caller must resolve one via resolveMaxTokens() first.
+  maxTokens: number;
 }
 
 export interface StreamCompletionResult {
@@ -46,7 +53,7 @@ export function openRouterHeaders(fastify: FastifyInstance): Record<string, stri
 // it arrives. Never streamed directly to the client 1:1 without going
 // through the caller's SSE writer — callers own the client-facing framing.
 export async function streamCompletion(opts: StreamCompletionOptions): Promise<StreamCompletionResult> {
-  const { fastify, model, messages, signal, onToken } = opts;
+  const { fastify, model, messages, signal, onToken, maxTokens } = opts;
 
   const response = await fetch(`${fastify.config.OPENROUTER_BASE_URL}/chat/completions`, {
     method: "POST",
@@ -56,6 +63,7 @@ export async function streamCompletion(opts: StreamCompletionOptions): Promise<S
       messages,
       stream: true,
       stream_options: { include_usage: true },
+      max_tokens: maxTokens,
     }),
     signal,
   });
@@ -273,7 +281,53 @@ export async function completeOnce(opts: {
 // dominant real-world case); 5xx covers a transient upstream outage.
 export function isRetryableOpenRouterError(err: unknown): boolean {
   if (!(err instanceof Error)) return false;
-  return /OpenRouter (request|classifier request) failed \((429|5\d\d)\)/.test(err.message);
+  return (
+    /OpenRouter (request|classifier request) failed \((429|5\d\d)\)/.test(err.message) ||
+    // A model that no longer exists is permanently dead for THAT model but
+    // says nothing about the next candidate, so the fallback chain must
+    // keep going. Without this a single stale registry row aborted the
+    // whole request — see isModelUnavailableError below for the live
+    // incident this comes from.
+    isModelUnavailableError(err)
+  );
+}
+
+// "This specific model can't serve the request at all" — as opposed to
+// "the upstream is busy" (429/5xx, retryable) or "the account is out of
+// money" (402, retryable with nothing). OpenRouter answers 404 with
+// "No endpoints found for <model>" when a model id has been withdrawn or
+// has no live provider endpoints left.
+//
+// This existed as an unhandled gap, found in production: the registry
+// still listed nvidia/nemotron-nano-9b-v2:free after OpenRouter dropped
+// it, every call 404'd, and because 404 matched neither the retryable nor
+// the balance branch, the candidate loop rethrew immediately instead of
+// trying the next Free model — surfacing as a generic "Something went
+// wrong" even while a perfectly good Free candidate sat unused.
+//
+// Deliberately NOT folded into a plain 4xx match: 400/401/403/422 mean the
+// REQUEST is wrong (bad key, malformed body, unsupported parameter), and
+// those would fail identically against every other candidate, so burning
+// the whole fallback chain on them just multiplies latency for the same
+// end result.
+export function isModelUnavailableError(err: unknown): boolean {
+  if (!(err instanceof Error)) return false;
+  return (
+    /OpenRouter (request|classifier request) failed \(404\)/.test(err.message) ||
+    /No endpoints found/i.test(err.message)
+  );
+}
+
+// 402 specifically means "the account's available balance can't cover
+// this request's budget" — not a bug in the request shape, and not
+// retryable with a fallback model (every model has the same account
+// behind it). Distinguished from other errors so the caller can show a
+// clear, honest "temporarily unavailable" message instead of the generic
+// "Something went wrong" — never exposes the account/balance detail
+// itself to the client, only that this specific class of failure happened.
+export function isBalanceExceededError(err: unknown): boolean {
+  if (!(err instanceof Error)) return false;
+  return /OpenRouter (request|classifier request) failed \(402\)/.test(err.message);
 }
 
 // Binary media endpoints (currently /audio/speech) return raw bytes with no

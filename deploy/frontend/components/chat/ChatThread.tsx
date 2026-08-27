@@ -5,9 +5,11 @@ import { useRouter } from "next/navigation";
 import { Link2, MoreHorizontal, Trash2, Check } from "lucide-react";
 import type { ChatMessage } from "@/shared-types";
 import { useChatStream, type WorkflowView } from "@/hooks/useChatStream";
+import { useSidebarStore } from "@/state/sidebarStore";
+import { cn } from "@/lib/cn";
 import { createClient } from "@/lib/supabase/client";
 import { MessageBubble } from "./MessageBubble";
-import { CortexStatusPanel } from "./CortexStatusPanel";
+import { CortexRoutingFlow } from "./CortexRoutingFlow";
 import { WorkflowPanel } from "./WorkflowPanel";
 import { ResearchPanel } from "./ResearchPanel";
 import { Composer } from "./Composer";
@@ -56,6 +58,14 @@ export function ChatThread({
   const bottomRef = useRef<HTMLDivElement>(null);
   const [copiedLink, setCopiedLink] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
+  // SidebarReopenButton is position:fixed at left-3/top-3 and only exists
+  // while the sidebar is closed — which put it directly on top of this
+  // header's title (reported live: the chat name renders underneath the
+  // hamburger). Reserving the space here, rather than making the button
+  // in-flow, keeps the header's bottom border spanning the full width and
+  // costs nothing while the sidebar is open. Matters most on mobile, where
+  // the sidebar defaults to closed on every load.
+  const sidebarOpen = useSidebarStore((s) => s.open);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
@@ -104,27 +114,47 @@ export function ChatThread({
   const titleMeta = lastMessage ? `Updated ${formatTime(lastMessage.createdAt)}` : "New";
 
   return (
-    <div className="flex h-screen flex-col">
-      <header className="flex h-[58px] shrink-0 items-center gap-3 border-b border-border px-5">
+    <div className="flex h-dvh flex-col">
+      <header
+        className={cn(
+          "flex h-[58px] shrink-0 items-center gap-2 border-b border-border px-3 sm:gap-3 sm:px-5",
+          !sidebarOpen && "pl-[52px]",
+        )}
+      >
         <div className="flex min-w-0 flex-1 items-center gap-[11px]">
           <span className="truncate text-[13.5px] font-medium text-foreground">{title}</span>
-          <span className="shrink-0 font-mono text-[10px] text-muted-foreground">{titleMeta}</span>
+          {/* "Updated 14:32" is the first thing worth dropping on a narrow
+              screen — it competes with the title for the same row and the
+              title is what identifies the chat. */}
+          <span className="hidden shrink-0 font-mono text-[10px] text-muted-foreground sm:inline">{titleMeta}</span>
         </div>
         {conversationId && (
           <>
             <button
               type="button"
               onClick={handleShare}
-              className="flex items-center gap-1.5 rounded-lg border border-border-strong px-[11px] py-[6px] text-[12.5px] font-medium text-foreground transition-colors hover:border-accent hover:text-accent"
+              title={copiedLink ? "Link copied" : "Copy link to this chat"}
+              // The visible label is hidden below sm, so without this the
+              // control is announced as just "button" on a phone.
+              aria-label={copiedLink ? "Link copied" : "Copy link to this chat"}
+              className="flex h-11 shrink-0 items-center gap-1.5 rounded-lg border border-border-strong px-3 text-[12.5px] font-medium text-foreground transition-colors hover:border-accent hover:text-accent sm:h-auto sm:px-[11px] sm:py-[6px]"
             >
               {copiedLink ? <Check size={13} strokeWidth={1.6} /> : <Link2 size={13} strokeWidth={1.6} />}
-              {copiedLink ? "Copied" : "Share"}
+              {/* Icon-only below sm — the label is the widest thing in this
+                  header and the icon already carries the meaning. */}
+              <span className="hidden sm:inline">{copiedLink ? "Copied" : "Share"}</span>
             </button>
             <div className="relative">
               <button
                 type="button"
                 onClick={() => setMenuOpen((o) => !o)}
-                className="flex h-[30px] w-[30px] items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-hover hover:text-foreground"
+                // Icon-only at every breakpoint — it had no accessible name
+                // whatsoever before, announcing as an unlabelled "button".
+                aria-label="Conversation options"
+                aria-expanded={menuOpen}
+                aria-haspopup="menu"
+                title="Conversation options"
+                className="flex h-11 w-11 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-hover hover:text-foreground sm:h-[30px] sm:w-[30px]"
               >
                 <MoreHorizontal size={16} strokeWidth={1.6} />
               </button>
@@ -148,46 +178,62 @@ export function ChatThread({
         )}
       </header>
 
-      <div className="flex-1 overflow-y-auto px-6 pb-2 pt-[30px]">
-        <div className="mx-auto flex w-full max-w-[720px] flex-col gap-[30px]">
-          {messages.length === 0 && (
-            <div className="flex animate-fade-in flex-col items-center gap-3 pt-[16vh] text-center">
-              <h1 className="text-[31px] font-medium tracking-[-0.025em] text-foreground">Where should we start?</h1>
-              <p className="max-w-[400px] text-[14.5px] text-muted-foreground">
-                Describe the outcome you want. Cortex handles the rest.
-              </p>
-            </div>
-          )}
-
-          {messages.map((message) => (
-            <MessageBubble
-              key={message.id}
-              message={message}
-              showRegenerate={message.id === lastAssistantMessage?.id}
-              onRegenerate={message.id === lastAssistantMessage?.id ? () => regenerate(message.id) : undefined}
-              onEditSubmit={
-                message.role === "user" ? (newContent) => handleEditSubmit(message.id, newContent) : undefined
-              }
-            />
-          ))}
-
-          {researchStage ? (
-            <ResearchPanel currentStage={researchStage} />
-          ) : workflow ? (
-            <WorkflowPanel workflow={workflow} />
-          ) : (
-            <CortexStatusPanel
-              status={status === "awaiting_clarification" ? "idle" : status}
-              statusLabel={statusLabel}
-              decision={cortexDecision}
-              isStreaming={isStreaming}
-            />
-          )}
-          <div ref={bottomRef} />
+      {messages.length === 0 ? (
+        // Empty new chat: composer sits centered in the viewport, ChatGPT-style,
+        // rather than docked at the bottom — there's nothing above it to scroll to
+        // yet. It drops back into the normal bottom-docked position (the branch
+        // below) as soon as the first message lands, since `messages` flips this
+        // ternary on the very next render.
+        <div className="flex flex-1 flex-col items-center justify-center px-3 pb-[6vh] sm:px-6 sm:pb-[8vh]">
+          <div className="mb-6 flex animate-fade-in flex-col items-center gap-3 text-center sm:mb-8">
+            <h1 className="text-[25px] font-medium tracking-[-0.025em] text-foreground sm:text-[31px]">
+              Where should we start?
+            </h1>
+            <p className="max-w-[400px] text-[13.5px] text-muted-foreground sm:text-[14.5px]">
+              Describe the outcome you want. Cortex handles the rest.
+            </p>
+          </div>
+          <Composer onSend={sendMessage} isStreaming={isStreaming} onStop={stop} />
         </div>
-      </div>
+      ) : (
+        <>
+          <div className="flex-1 overflow-y-auto px-3 pb-2 pt-5 sm:px-6 sm:pt-[30px]">
+            <div className="mx-auto flex w-full max-w-[720px] flex-col gap-[30px]">
+              {messages.map((message) => (
+                <MessageBubble
+                  key={message.id}
+                  message={message}
+                  showRegenerate={message.id === lastAssistantMessage?.id}
+                  onRegenerate={message.id === lastAssistantMessage?.id ? () => regenerate(message.id) : undefined}
+                  onEditSubmit={
+                    message.role === "user" ? (newContent) => handleEditSubmit(message.id, newContent) : undefined
+                  }
+                />
+              ))}
 
-      <Composer onSend={sendMessage} isStreaming={isStreaming} onStop={stop} />
+              {researchStage ? (
+                <ResearchPanel currentStage={researchStage} />
+              ) : workflow ? (
+                <WorkflowPanel workflow={workflow} />
+              ) : (
+                <CortexRoutingFlow
+                  status={status === "awaiting_clarification" ? "idle" : status}
+                  statusLabel={statusLabel}
+                  isStreaming={isStreaming}
+                  // categoryLabel is what Cortex resolved the request to
+                  // (e.g. "Coding"); it lands with the decision event, which
+                  // is the first moment there's anything true to show about
+                  // where this is being routed.
+                  modelDisplayName={cortexDecision?.categoryLabel ?? null}
+                />
+              )}
+              <div ref={bottomRef} />
+            </div>
+          </div>
+
+          <Composer onSend={sendMessage} isStreaming={isStreaming} onStop={stop} />
+        </>
+      )}
     </div>
   );
 }

@@ -1,7 +1,8 @@
 import type { FastifyInstance } from "fastify";
 import type { PlanTier, ComplexityLevel } from "../shared-types.js";
 import type { ModelRegistryRow, ModelHealthRow } from "../types/index.js";
-import { scoreModels, diversifyByProvider } from "./routing.js";
+import { scoreModels, pickCandidates } from "./routing.js";
+import type { CortexVersion } from "./version.js";
 
 // Candidate pool size fetched before scoring. Larger than the number
 // actually returned so the router has real choice — scoring the same 2
@@ -61,29 +62,33 @@ async function fetchHealth(fastify: FastifyInstance, modelIds: string[]): Promis
 // request see a variant='free' row or vice versa. Never cache across
 // requests, never short-circuit this with a hardcoded model id.
 //
-// Ranking is now cost-aware (see routing.ts): candidates are scored on
-// quality x capability-fit x reliability x cost x latency using weights
-// chosen by task shape, with live health data overriding configured
-// reliability once enough observations exist. `priority` still orders the
-// initial DB fetch (so a curated ordering seeds the pool) but no longer
-// decides the winner on its own.
+// cortexVersion drives the ACTUAL scoring behavior (see routing.ts's
+// scoreModels/pickCandidates — v1 and v1.5 use genuinely different weight
+// profiles, health-blending, and fallback-diversification, not just a
+// different pool size) and, unless the caller passes an explicit `limit`,
+// how many ranked candidates come back: v1's "Basic fallback" returns 2,
+// v1.5's "More fallback candidates" returns 3. An explicit `limit` (e.g.
+// deep research's "just the single top pick") always overrides that
+// default regardless of version — it's a distinct concern from fallback
+// depth. `priority` still orders the initial DB fetch (so a curated
+// ordering seeds the pool) but no longer decides the winner on its own.
 //
 // Returns a ranked list (not just one row) so a caller can retry with the
 // next candidate if the first hits a transient upstream failure — most
 // relevant on the free tier, where OpenRouter's shared :free pool for a
 // given model can get rate-limited independently of SPLEX's own traffic
-// (observed live, repeatedly). The fallback candidate is preferentially
-// from a DIFFERENT provider, since failures cluster by upstream provider.
-// Same-variant fallback to "general" only if the category itself has no
-// rows — never crosses free/paid.
+// (observed live, repeatedly). Same-variant fallback to "general" only if
+// the category itself has no rows — never crosses free/paid.
 export async function selectModelCandidates(
   fastify: FastifyInstance,
   category: string,
   planTier: PlanTier,
-  limit = 2,
+  cortexVersion: CortexVersion,
   complexity: ComplexityLevel = "medium",
+  limit?: number,
 ): Promise<ModelRegistryRow[]> {
   const variant: "free" | "paid" = planTier === "free" ? "free" : "paid";
+  const effectiveLimit = limit ?? (cortexVersion === "v1" ? 2 : 3);
 
   let pool = await queryModelRegistry(fastify, category, variant, planTier);
   let effectiveCategory = category;
@@ -94,29 +99,59 @@ export async function selectModelCandidates(
   if (pool.length === 0) return [];
 
   const health = await fetchHealth(fastify, pool.map((m) => m.id));
-  const scored = scoreModels(pool, health, effectiveCategory, complexity);
-  const picked = diversifyByProvider(scored, limit);
+  const scored = scoreModels(pool, health, effectiveCategory, complexity, cortexVersion);
+  const picked = pickCandidates(scored, cortexVersion, effectiveLimit);
+
+  // Final, independent safety guard — deliberately redundant with
+  // queryModelRegistry's own `.eq("variant", variant)` filter above, not a
+  // replacement for it. A Free request must NEVER reach a paid-variant
+  // model, and that must hold even if a future bug elsewhere in this file
+  // (a missing filter, a category-fallback edge case, a bad join) ever let
+  // one slip into `picked` — real provider cost is on the line, so this
+  // checks the actual, final, about-to-be-returned list one more time
+  // rather than trusting that the earlier filter always worked. Logged as
+  // an error (not silently dropped) because it should never actually
+  // trigger — if it does, that's a real bug elsewhere worth knowing about
+  // immediately, not a routine event.
+  const safePicked =
+    planTier === "free"
+      ? picked.filter((s) => {
+          if (s.model.variant === "free") return true;
+          fastify.log.error(
+            { category: effectiveCategory, planTier, modelId: s.model.id, variant: s.model.variant },
+            "cost-safety guard: dropped a non-free-variant candidate from a Free-tier selection — this should be structurally impossible, investigate queryModelRegistry",
+          );
+          return false;
+        })
+      : picked;
 
   fastify.log.debug(
     {
       category: effectiveCategory,
       planTier,
+      cortexVersion,
       complexity,
       // Model ids in server-side debug logs only — never leaves the backend.
-      ranked: picked.map((s) => ({ model: s.model.openrouter_model_id, score: Math.round(s.score), ...s.breakdown })),
+      ranked: safePicked.map((s) => ({
+        model: s.model.openrouter_model_id,
+        variant: s.model.variant,
+        score: Math.round(s.score),
+        ...s.breakdown,
+      })),
     },
     "cortex routing decision",
   );
 
-  return picked.map((s) => s.model);
+  return safePicked.map((s) => s.model);
 }
 
 export async function selectModel(
   fastify: FastifyInstance,
   category: string,
   planTier: PlanTier,
+  cortexVersion: CortexVersion,
   complexity: ComplexityLevel = "medium",
 ): Promise<ModelRegistryRow | null> {
-  const [first] = await selectModelCandidates(fastify, category, planTier, 1, complexity);
+  const [first] = await selectModelCandidates(fastify, category, planTier, cortexVersion, complexity, 1);
   return first ?? null;
 }

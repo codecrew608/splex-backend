@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { ChevronLeft, Settings, Brain, Moon, Sun, LogOut, Sparkles } from "lucide-react";
+import { ChevronLeft, Settings, Moon, Sun, LogOut, Sparkles } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
 import { useSidebarStore } from "@/state/sidebarStore";
 import { useThemeStore } from "@/state/themeStore";
@@ -87,7 +87,11 @@ export function Sidebar({ email }: SidebarProps) {
       )}
       <aside
         className={cn(
-          "flex h-screen w-[264px] shrink-0 flex-col border-r border-border bg-surface",
+          // max-w-[86vw] so the overlay never covers the whole screen on a
+          // narrow phone — a sliver of the dimmed chat stays visible, which
+          // is what makes it read as a dismissible panel rather than a
+          // navigation the user got stuck in.
+          "flex h-dvh w-[264px] max-w-[86vw] shrink-0 flex-col border-r border-border bg-surface",
           isMobile ? "fixed inset-y-0 left-0 z-40 shadow-[0_20px_60px_-20px_rgba(0,0,0,0.45)]" : "relative",
         )}
       >
@@ -97,6 +101,7 @@ export function Sidebar({ email }: SidebarProps) {
             type="button"
             onClick={toggleOpen}
             title="Collapse sidebar"
+            aria-label="Collapse sidebar"
             className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-hover hover:text-foreground"
           >
             <ChevronLeft size={16} strokeWidth={1.5} />
@@ -143,14 +148,6 @@ export function Sidebar({ email }: SidebarProps) {
         </div>
 
         <div className="flex flex-col gap-[2px] border-t border-border px-3.5 pb-3.5 pt-2.5">
-          <button
-            type="button"
-            onClick={() => router.push("/memory")}
-            className="flex w-full items-center gap-[10px] rounded-[7px] px-3 py-2 text-left text-[13.5px] text-foreground transition-colors hover:bg-hover"
-          >
-            <Brain size={15} strokeWidth={1.4} className="shrink-0 text-muted-foreground" />
-            Memory
-          </button>
           <button
             type="button"
             onClick={() => router.push("/settings")}

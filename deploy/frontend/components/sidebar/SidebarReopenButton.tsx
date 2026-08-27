@@ -18,6 +18,7 @@ export function SidebarReopenButton() {
       type="button"
       onClick={toggleOpen}
       title="Open sidebar"
+      aria-label="Open sidebar"
       className="fixed left-3 top-3 z-20 flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-hover hover:text-foreground"
     >
       <Menu size={17} strokeWidth={1.5} />

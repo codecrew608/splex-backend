@@ -1,0 +1,41 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "splex-backend-worker",
+  "main": "src/worker/index.ts",
+  "compatibility_date": "2026-08-21",
+  // Required for Buffer (mammoth/pdf-parse/pptxgenjs/media Buffer
+  // handling) and node:crypto-shaped globals — everything else in
+  // src/worker/ uses only Web-standard APIs (fetch, Request, Response,
+  // ReadableStream, crypto.randomUUID()).
+  "compatibility_flags": ["nodejs_compat"],
+  // No [[containers]], no durable_objects, no paid-plan-only bindings —
+  // deliberately: this config must deploy on Workers Free as-is.
+  "observability": {
+    "enabled": true
+  },
+  // Non-secret production config for worker/env.ts's schema. Every field
+  // here is required-with-no-default or has a default that's wrong for
+  // production (see that file) — omitting any of them is exactly what
+  // produced the live "500 Server misconfigured" (buildWorkerCtx() throws
+  // WorkerConfigError, worker/index.ts's fetch() handler catches it and
+  // returns 500 before any route ever runs). SUPABASE_SERVICE_ROLE_KEY and
+  // OPENROUTER_API_KEY are NOT here — those stay `wrangler secret put`
+  // only, never a plaintext var, never committed. PORT is intentionally
+  // absent — meaningless on Workers (no TCP listen), and worker/env.ts's
+  // schema never requires it. INTELLIGENCE_SERVICE_URL is intentionally
+  // absent too: it's optional in worker/env.ts specifically because
+  // Workers can't reach a local/loopback address in production, and every
+  // call site already treats "unset" as "skip OCR/embedding, degrade
+  // gracefully" — setting it to localhost here would be actively wrong,
+  // not just incomplete.
+  "vars": {
+    "FRONTEND_ORIGIN": "https://splex-ai.vercel.app",
+    "SUPABASE_URL": "https://yxhallicacslnwwmxnhd.supabase.co",
+    "OPENROUTER_BASE_URL": "https://openrouter.ai/api/v1",
+    "OPENROUTER_SITE_URL": "https://splex-ai.vercel.app",
+    "OPENROUTER_APP_NAME": "SPLEX",
+    "CORTEX_CLASSIFIER_MODEL_ID": "qwen/qwen-2.5-72b-instruct",
+    "CREDITS_PER_USD": "20000",
+    "LOG_LEVEL": "info"
+  }
+}

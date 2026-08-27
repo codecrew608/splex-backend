@@ -34,7 +34,10 @@ cat > "$OUT/package.json" <<'EOF'
   "private": true,
   "scripts": {
     "build": "tsc -p tsconfig.json",
-    "start": "node dist/server.js"
+    "start": "node dist/server.js",
+    "typecheck:worker": "tsc --noEmit -p tsconfig.worker.json",
+    "cf:dev": "wrangler dev",
+    "cf:deploy": "wrangler deploy"
   },
   "dependencies": {
     "@fastify/cors": "^11.3.0",
@@ -47,10 +50,12 @@ cat > "$OUT/package.json" <<'EOF'
     "mammoth": "^1.12.1",
     "pdf-parse": "^2.4.5",
     "pptxgenjs": "^4.0.1",
+    "unpdf": "^1.8.1",
     "zod": "^3.23.8"
   },
   "devDependencies": {
     "@cloudflare/containers": "^0.3.7",
+    "@cloudflare/workers-types": "^5.20260821.1",
     "@types/node": "^22.10.1",
     "typescript": "^5.7.2",
     "wrangler": "^4.125.0"
@@ -75,7 +80,28 @@ cat > "$OUT/tsconfig.json" <<'EOF'
     "rootDir": "src",
     "types": ["node"]
   },
-  "include": ["src"]
+  "include": ["src"],
+  "exclude": ["src/worker"]
+}
+EOF
+
+cat > "$OUT/tsconfig.worker.json" <<'EOF'
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2022"],
+    "module": "ES2022",
+    "moduleResolution": "Bundler",
+    "esModuleInterop": true,
+    "forceConsistentCasingInFileNames": true,
+    "strict": true,
+    "skipLibCheck": true,
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "noEmit": true,
+    "types": ["@cloudflare/workers-types"]
+  },
+  "include": ["src/worker"]
 }
 EOF
 
@@ -123,12 +149,73 @@ INTELLIGENCE_SERVICE_URL=
 LOG_LEVEL=info
 EOF
 
-# Cloudflare Containers plumbing — kept entirely outside src/ (a separate
-# Workers-runtime entrypoint, not compiled by tsc/tsconfig.json above,
-# which targets Node for the actual Fastify dist/server.js image). This
-# Worker is a thin router only: it never touches Fastify, SSE, or
-# OpenRouter logic — those stay exactly as they are inside the container
-# image built from this same folder's Dockerfile.
+# Cloudflare Workers FREE deployment target (src/worker/) — a real
+# fetch(request, env, ctx) entrypoint, no Containers, no Durable Objects,
+# no paid plan required. This is the CURRENT deployment target; the
+# cloudflare/ Containers config emitted below this block is an earlier,
+# now-superseded option (kept, not deleted, per this project's "never
+# silently drop existing work" convention — see the migration report for
+# which one to actually use).
+cat > "$OUT/wrangler.jsonc" <<'EOF'
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "splex-backend-worker",
+  "main": "src/worker/index.ts",
+  "compatibility_date": "2026-08-21",
+  // Required for Buffer (mammoth/pdf-parse/pptxgenjs/media Buffer
+  // handling) and node:crypto-shaped globals — everything else in
+  // src/worker/ uses only Web-standard APIs (fetch, Request, Response,
+  // ReadableStream, crypto.randomUUID()).
+  "compatibility_flags": ["nodejs_compat"],
+  // No [[containers]], no durable_objects, no paid-plan-only bindings —
+  // deliberately: this config must deploy on Workers Free as-is.
+  "observability": {
+    "enabled": true
+  },
+  // Non-secret production config for worker/env.ts's schema. Every field
+  // here is required-with-no-default or has a default that's wrong for
+  // production (see that file) — omitting any of them is exactly what
+  // produced the live "500 Server misconfigured" (buildWorkerCtx() throws
+  // WorkerConfigError, worker/index.ts's fetch() handler catches it and
+  // returns 500 before any route ever runs). SUPABASE_SERVICE_ROLE_KEY and
+  // OPENROUTER_API_KEY are NOT here — those stay `wrangler secret put`
+  // only, never a plaintext var, never committed. PORT is intentionally
+  // absent — meaningless on Workers (no TCP listen), and worker/env.ts's
+  // schema never requires it. INTELLIGENCE_SERVICE_URL is intentionally
+  // absent too: it's optional in worker/env.ts specifically because
+  // Workers can't reach a local/loopback address in production, and every
+  // call site already treats "unset" as "skip OCR/embedding, degrade
+  // gracefully" — setting it to localhost here would be actively wrong,
+  // not just incomplete.
+  "vars": {
+    "FRONTEND_ORIGIN": "https://splex-ai.vercel.app",
+    "SUPABASE_URL": "https://yxhallicacslnwwmxnhd.supabase.co",
+    "OPENROUTER_BASE_URL": "https://openrouter.ai/api/v1",
+    "OPENROUTER_SITE_URL": "https://splex-ai.vercel.app",
+    "OPENROUTER_APP_NAME": "SPLEX",
+    "CORTEX_CLASSIFIER_MODEL_ID": "qwen/qwen-2.5-72b-instruct",
+    "CREDITS_PER_USD": "20000",
+    "LOG_LEVEL": "info"
+  }
+}
+EOF
+
+cat > "$OUT/.dev.vars.example" <<'EOF'
+FRONTEND_ORIGIN=http://localhost:3000
+SUPABASE_URL=
+SUPABASE_SERVICE_ROLE_KEY=
+OPENROUTER_API_KEY=
+OPENROUTER_BASE_URL=https://openrouter.ai/api/v1
+OPENROUTER_SITE_URL=http://localhost:3000
+OPENROUTER_APP_NAME=SPLEX
+CORTEX_CLASSIFIER_MODEL_ID=
+CREDITS_PER_USD=20000
+INTELLIGENCE_SERVICE_URL=
+LOG_LEVEL=info
+EOF
+
+# --- Superseded option below: Cloudflare Containers (kept, not deleted) ---
+# Requires Workers Paid + Containers — do not use for the Free-tier goal.
 mkdir -p "$OUT/cloudflare"
 
 cat > "$OUT/cloudflare/wrangler.jsonc" <<'EOF'
@@ -201,9 +288,33 @@ export default {
 };
 EOF
 
-# Regenerate the lockfile every time so it never silently falls out of
-# sync with (or gets wiped by) a fresh bundle — package-lock-only skips
-# actually installing node_modules, so this stays fast.
-( cd "$OUT" && npm install --package-lock-only --silent )
+# Install for real (not --package-lock-only) — this regenerates the
+# lockfile AND populates node_modules, and both are required.
+#
+# The lockfile alone was not enough. `wrangler deploy` bundles src/worker
+# with esbuild, which resolves every bare import off the DISK at bundle
+# time; there is no separate install step in that path the way there is
+# for Docker (whose Dockerfile runs its own `npm install` inside the
+# image). With a lockfile but no node_modules, Wrangler failed with
+# "Could not resolve" for pptxgenjs, @supabase/supabase-js, zod, mammoth
+# and unpdf — the packages src/worker actually reaches. Nothing upstream
+# could rescue it either: pnpm's default isolated layout means the repo
+# root's node_modules holds only .pnpm internals with no top-level package
+# directories, so Node's walk-up resolution from deploy/backend finds
+# nothing.
+#
+# This must live in the script rather than being a manual pre-deploy step,
+# because `rm -rf "$OUT"` at the top of this file deletes node_modules on
+# every regeneration — so any install done by hand is destroyed the next
+# time anyone refreshes the bundle, silently re-breaking the Worker deploy.
+#
+# Dependencies resolve from the bundle's OWN package.json, never the
+# workspace, which is what keeps this folder genuinely standalone.
+# devDependencies are installed too, deliberately: wrangler.jsonc's
+# "$schema" points at node_modules/wrangler/config-schema.json, and having
+# wrangler local pins the CLI version instead of letting `npx` fetch an
+# arbitrary one. deploy/backend/node_modules is gitignored (.gitignore's
+# "node_modules/" matches at any depth), so this never enters the repo.
+( cd "$OUT" && npm install --silent )
 
 echo "Bundle written to $OUT"

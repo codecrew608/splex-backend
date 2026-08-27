@@ -12,13 +12,36 @@ const MEMORABLE_PATTERNS = [
   /\bi (live|work) (in|at)\b/i,
   /\bi use\b/i,
   /\bfor (future|context)\b/i,
+  // Broadened — live evidence (real user_memory rows sampled from
+  // production: every one had summary_text === "") showed the original
+  // pattern list plus an every-8th-turn fallback was too narrow to ever
+  // fire for most real conversations, so memory stayed empty indefinitely.
+  /\bmy (job|role|company|team|project) is\b/i,
+  /\bi('m| am) (building|working on|trying to)\b/i,
+  /\bi need\b/i,
+  /\bfrom now on\b/i,
+  /\bin the future\b/i,
 ];
 
-const PERIODIC_TURN_INTERVAL = 8;
+// turnNumber comes from the CURRENT conversation's own history length
+// (routes/chat.ts), which resets to 0 every time the user starts a new
+// chat — so a fixed "every Nth turn" fallback effectively never fires for
+// anyone who mostly starts fresh conversations rather than running long
+// ones, independent of PERIODIC_TURN_INTERVAL's actual value. Below a
+// real per-user counter (which would need an extra query every turn just
+// to decide whether to run one), extracting more eagerly while a user's
+// summary is still near-empty is what actually closes that gap: it uses
+// data already fetched for this request (routes/chat.ts already loads
+// user_memory to build the system prompt), costs nothing extra to check,
+// and naturally backs off once a real profile exists.
+const EARLY_PROFILE_TURN_INTERVAL = 2;
+const ESTABLISHED_PROFILE_TURN_INTERVAL = 5;
+const MIN_ESTABLISHED_SUMMARY_LENGTH = 200;
 
-export function shouldExtractMemory(userMessage: string, turnNumber: number): boolean {
+export function shouldExtractMemory(userMessage: string, turnNumber: number, existingSummaryLength: number): boolean {
   if (MEMORABLE_PATTERNS.some((p) => p.test(userMessage))) return true;
-  return turnNumber > 0 && turnNumber % PERIODIC_TURN_INTERVAL === 0;
+  const interval = existingSummaryLength < MIN_ESTABLISHED_SUMMARY_LENGTH ? EARLY_PROFILE_TURN_INTERVAL : ESTABLISHED_PROFILE_TURN_INTERVAL;
+  return turnNumber > 0 && turnNumber % interval === 0;
 }
 
 const EXTRACT_SYSTEM_PROMPT = `You maintain a concise, durable memory profile for a user of an AI assistant called SPLEX. Given the user's EXISTING memory summary and a NEW conversation exchange, decide if there's a new durable fact worth remembering — identity, stated preferences, ongoing projects/work, communication style. NOT conversational trivia, NOT one-off task details, NOT anything already covered.
