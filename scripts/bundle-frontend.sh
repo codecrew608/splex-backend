@@ -48,6 +48,23 @@ EOF
 # Regenerate the lockfile every time so it never silently falls out of
 # sync with (or gets wiped by) a fresh bundle — package-lock-only skips
 # actually installing node_modules, so this stays fast.
+#
+# Deliberately NOT a full install, unlike scripts/bundle-backend.sh.
+# The distinction is which side runs the bundler:
+#
+#   backend  — `wrangler deploy` bundles src/worker with esbuild ON THIS
+#              MACHINE, resolving bare imports off disk, so node_modules
+#              must exist locally or the deploy fails outright (it did).
+#   frontend — deployed to Vercel, which clones the repo and runs its own
+#              install from package.json/package-lock.json. Local
+#              node_modules is never consulted, so installing it here would
+#              add ~30s to every bundle for no benefit.
+#
+# CAVEAT: this folder also carries wrangler.jsonc + open-next.config.ts for
+# an alternative Cloudflare deployment path (`npm run cf:build`). That path
+# DOES bundle locally and would need a real `npm install` in this folder
+# first. If the frontend ever moves from Vercel to Workers, change this line
+# to a full install rather than rediscovering it as a failed deploy.
 ( cd "$OUT" && npm install --package-lock-only --silent )
 
 echo "Bundle written to $OUT"
