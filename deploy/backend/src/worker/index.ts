@@ -2,6 +2,7 @@ import { buildWorkerCtx, type WorkerCtx } from "./context.js";
 import { WorkerConfigError, type RawWorkerEnv } from "./env.js";
 import { authenticateWorker } from "./auth.js";
 import { rateLimitByUser } from "./rateLimit.js";
+import { RATE_LIMITS } from "../handlers/rateLimits.js";
 import { corsHeaders, handlePreflight, withCors } from "./cors.js";
 import { errorResponse, jsonResponse } from "./http.js";
 import { handleHealth } from "./routes/health.js";
@@ -26,16 +27,10 @@ import type { AuthedUser } from "../types/index.js";
 // for a concern the platform already covers. The per-USER limits below are
 // the ones that actually protect credits/entitlements, and every one of
 // them is preserved.
-const RATE_LIMITS = {
-  chat: { max: 20, windowMs: 60_000 },
-  chat_truncate: { max: 30, windowMs: 60_000 },
-  account_profile: { max: 5, windowMs: 60_000 },
-  files_process: { max: 10, windowMs: 60_000 },
-  projects_create: { max: 10, windowMs: 60_000 },
-  billing_checkout: { max: 5, windowMs: 60_000 },
-  billing_cancel: { max: 5, windowMs: 60_000 },
-  media_status: { max: 30, windowMs: 60_000 },
-} as const;
+// Rate limits now come from handlers/rateLimits.ts, shared with the
+// Fastify stack — previously this table and the *_RATE_LIMIT consts in
+// routes/*.ts were two independent copies of the same security-relevant
+// numbers.
 
 async function requireAuth(request: Request, ctx: WorkerCtx): Promise<AuthedUser | Response> {
   const result = await authenticateWorker(request, ctx);
