@@ -7,12 +7,20 @@ import {
   checkMediaQuota,
   checkConcurrentMediaLimit,
   recordMediaGeneration,
+  updateGeneratedMediaStatus,
   type MediaKind,
   type MediaQuota,
 } from "../credits/mediaQuota.js";
 import { computeMediaCreditsCharged } from "../credits/mediaCost.js";
 import { resolveCreditGateEstimate } from "../credits/costBand.js";
-import { checkCredits, checkAndReserveCredits, settleDailyReservation, resolveCreditRejectionMessage } from "../credits/checkCredits.js";
+import {
+  checkAndReserveCredits,
+  settleDailyReservation,
+  resolveCreditRejectionMessage,
+  reserveMediaCredits,
+  settleMediaReservation,
+  releaseStaleMediaReservations,
+} from "../credits/checkCredits.js";
 import { consumeCredits } from "../credits/consumeCredits.js";
 import { insertMessage } from "../persistence/messages.js";
 import { insertCortexDecision } from "../persistence/cortexDecisions.js";
@@ -186,6 +194,11 @@ export async function handleSyncMediaGeneration<R extends SyncMediaGenerationRes
       complexity: decision.complexity,
       openrouterModelId: model.openrouter_model_id,
       realCostEstimate: result.costUsd,
+      // Daily is settled by settleDailyReservation() in the finally below —
+      // charging it here too double-counts (see skipDaily's doc comment in
+      // consumeCredits.ts; this shipped and produced an exact 2x daily
+      // overcharge in production).
+      skipDaily: true,
     });
 
     sse.done({ messageId: assistantMessageId, conversationId, creditsCharged, userMessageId });
@@ -244,9 +257,46 @@ export async function handleAsyncMediaGeneration(params: AsyncMediaGenerationPar
     return;
   }
 
+  // Opportunistic sweep of reservations pinned by jobs nobody ever polled
+  // to completion. Runs here because this is the one place guaranteed to be
+  // hit before a new video reservation is taken, so a user cannot be blocked
+  // by their own abandoned job. Fire-and-forget — a sweep failure must never
+  // affect this request.
+  void releaseStaleMediaReservations(fastify);
+
   const gateEstimate = await resolveCreditGateEstimate(fastify, decision.complexity, user.planTier);
-  const creditsAllowed = await checkCredits(fastify, user.id, gateEstimate);
-  if (!creditsAllowed) {
+
+  // The row is created BEFORE the credit reservation and before submission,
+  // which is a deliberate ordering change. The reservation has to be
+  // attached to something durable the moment it exists: reserving first and
+  // recording afterwards would leave an unreleasable reservation if anything
+  // failed in between. It also tightens the concurrency race — two
+  // simultaneous submits now both leave a queued row rather than both
+  // sailing past a check that counts rows neither of them had created yet.
+  const mediaId = await recordMediaGeneration(fastify, {
+    userId: user.id,
+    messageId: null,
+    kind,
+    status: "queued",
+    prompt,
+  });
+
+  if (!mediaId) {
+    sse.error({ message: params.submitFailedMessage });
+    sse.done({ blocked: true, conversationId, userMessageId });
+    sse.end();
+    return;
+  }
+
+  // Atomic reserve-and-stamp. Unlike the read-only check_credits() this
+  // replaces, two concurrent submits now serialize on Postgres's own row
+  // lock and the second is rejected if the pool cannot cover both.
+  const reserved = await reserveMediaCredits(fastify, mediaId, gateEstimate);
+  if (!reserved) {
+    await updateGeneratedMediaStatus(fastify, mediaId, {
+      status: "failed",
+      errorMessage: "insufficient credits at submission",
+    });
     sse.error({ message: await resolveCreditRejectionMessage(fastify, user.id, gateEstimate) });
     sse.done({ blocked: true, conversationId, userMessageId });
     sse.end();
@@ -256,6 +306,9 @@ export async function handleAsyncMediaGeneration(params: AsyncMediaGenerationPar
   const cortexVersion = resolveCortexVersion(user.planTier);
   const candidates = await selectModelCandidates(fastify, kind, user.planTier, cortexVersion, decision.complexity);
   if (candidates.length === 0) {
+    // Reservation is live from here on, so every exit below must release it.
+    await settleMediaReservation(fastify, mediaId, 0);
+    await updateGeneratedMediaStatus(fastify, mediaId, { status: "failed", errorMessage: "no live model for this capability" });
     sse.error({ message: params.unavailableMessage });
     sse.done({ blocked: true, conversationId, userMessageId });
     sse.end();
@@ -298,12 +351,12 @@ export async function handleAsyncMediaGeneration(params: AsyncMediaGenerationPar
     // path. Doesn't change quota math either way (status='failed' rows are
     // already excluded from quota counts) — this is purely closing an
     // observability gap.
-    await recordMediaGeneration(fastify, {
-      userId: user.id,
-      messageId: null,
-      kind,
+    // Releases the reservation and marks the row we already created, rather
+    // than inserting a SECOND failed row as the previous code did (the
+    // reservation is attached to the existing one).
+    await settleMediaReservation(fastify, mediaId, 0);
+    await updateGeneratedMediaStatus(fastify, mediaId, {
       status: "failed",
-      prompt,
       errorMessage: "submission failed on every candidate",
     });
     sse.error({
@@ -327,12 +380,11 @@ export async function handleAsyncMediaGeneration(params: AsyncMediaGenerationPar
     routedModel: model.openrouter_model_id,
   });
 
-  const mediaId = await recordMediaGeneration(fastify, {
-    userId: user.id,
-    messageId: assistantMessageId,
-    kind,
+  // The row already exists (created before the reservation above) — attach
+  // the message, polling URL and chosen model to it now that they exist.
+  await updateGeneratedMediaStatus(fastify, mediaId, {
     status: "queued",
-    prompt,
+    messageId: assistantMessageId,
     providerJobId: job.pollingUrl,
     openrouterModelId: model.openrouter_model_id,
   });

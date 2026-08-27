@@ -10,6 +10,23 @@ export interface ConsumeCreditsParams {
   realCostEstimate: number;
   realInputTokens?: number;
   realOutputTokens?: number;
+  // Skip the daily counter because a RESERVATION already covers it.
+  //
+  // Reserve/settle and consume are two complete ways to charge the daily
+  // pool, and running both double-charges it. That is not hypothetical: it
+  // shipped. From the moment migration 0022's reservation gate went live,
+  // every chat message added estimate (reserve) + actual (here) +
+  // actual-estimate (settle) = 2 x actual to the daily counter. Production
+  // data for 2026-08-27 shows daily_counter 138 against 69 actually
+  // charged in credit_usage_logs — an exact 2.00 ratio, where every day
+  // before the reservation gate reads 1.00. Free users were hitting their
+  // 150/day cap at ~75 credits of real usage.
+  //
+  // The monthly pool and the credit_usage_logs ledger are unaffected and
+  // still written here in every case — only the daily counter is skipped,
+  // because settleDailyReservation()/settleMediaReservation() already trues
+  // it up from the reserved estimate to the real amount.
+  skipDaily?: boolean;
 }
 
 const RETRY_ATTEMPTS = 3;
@@ -68,5 +85,9 @@ export async function consumeCredits(fastify: FastifyInstance, params: ConsumeCr
     logContext,
   );
 
-  await callWithRetry(fastify, "consume_daily_credits", { p_user_id: params.userId, p_credit_cost: params.creditCost }, logContext);
+  // Callers that reserved up-front settle the daily side themselves; charging
+  // it again here is a straight double-count. See skipDaily's doc comment.
+  if (!params.skipDaily) {
+    await callWithRetry(fastify, "consume_daily_credits", { p_user_id: params.userId, p_credit_cost: params.creditCost }, logContext);
+  }
 }

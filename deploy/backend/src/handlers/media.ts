@@ -3,6 +3,7 @@ import { z } from "zod";
 import { getOwnedGeneratedMedia, updateGeneratedMediaStatus } from "../credits/mediaQuota.js";
 import { computeMediaCreditsCharged } from "../credits/mediaCost.js";
 import { consumeCredits } from "../credits/consumeCredits.js";
+import { settleMediaReservation } from "../credits/checkCredits.js";
 import { updateMessageResult } from "../persistence/messages.js";
 import { pollVideoJob, downloadAndStoreVideo } from "../video/generate.js";
 import { type HandlerResult, ok, fail } from "./result.js";
@@ -60,6 +61,9 @@ export async function getMediaStatus(
   }
 
   if (media.status === "failed" || media.status === "cancelled") {
+    // Idempotent: a no-op once already settled, which matters because the
+    // client polls this endpoint repeatedly.
+    await settleMediaReservation(fastify, media.id, 0);
     return ok<MediaStatusResponse>({ status: "failed", errorMessage: FAILED_MESSAGE });
   }
 
@@ -98,12 +102,14 @@ export async function getMediaStatus(
     if (media.message_id) {
       await updateMessageResult(fastify, media.message_id, { content: FAILED_MESSAGE });
     }
+    await settleMediaReservation(fastify, media.id, 0);
     return ok<MediaStatusResponse>({ status: "failed", errorMessage: FAILED_MESSAGE });
   }
 
   if (!poll.contentUrl) {
     fastify.log.error({ mediaId: media.id }, "video job completed but contentUrl missing");
     await updateGeneratedMediaStatus(fastify, media.id, { status: "failed", errorMessage: "missing content url" });
+    await settleMediaReservation(fastify, media.id, 0);
     return ok<MediaStatusResponse>({ status: "failed", errorMessage: FAILED_MESSAGE });
   }
 
@@ -130,6 +136,13 @@ export async function getMediaStatus(
       });
     }
 
+    // Trues the DAILY reservation up/down from the submit-time estimate to
+    // the real charge. consumeCredits below still handles the monthly pool
+    // and the ledger row, exactly as before — settling only touches the
+    // daily counter the reservation was taken from, against the period it
+    // was taken in (a job spanning midnight IST settles the correct day).
+    await settleMediaReservation(fastify, media.id, creditsCharged);
+
     await consumeCredits(fastify, {
       userId,
       creditCost: creditsCharged,
@@ -137,12 +150,16 @@ export async function getMediaStatus(
       complexity: "medium",
       openrouterModelId: modelId,
       realCostEstimate: poll.costUsd ?? 0,
+      // The daily side is already settled above; charging it again here
+      // would double-count this generation against the daily cap.
+      skipDaily: true,
     });
 
     return ok<MediaStatusResponse>({ status: "completed", url: stored.url });
   } catch (err) {
     fastify.log.error({ err, mediaId: media.id }, "failed to download/store completed video");
     await updateGeneratedMediaStatus(fastify, media.id, { status: "failed", errorMessage: "download/store failed" });
+    await settleMediaReservation(fastify, media.id, 0);
     if (media.message_id) {
       await updateMessageResult(fastify, media.message_id, { content: FAILED_MESSAGE });
     }

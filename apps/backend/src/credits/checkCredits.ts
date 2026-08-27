@@ -244,3 +244,67 @@ export async function settleDailyReservation(
     fastify.log.error({ error, userId, reservedAmount, actualCost }, "settleDailyReservation: consume_daily_credits RPC failed");
   }
 }
+
+// ---------------------------------------------------------------------------
+// Async (cross-request) reservations — video.
+//
+// checkAndReserveCredits/settleDailyReservation above are per-REQUEST: their
+// contract is a try/finally inside one handler. An async video job is
+// submitted in one request and charged in a later polling request, so the
+// reservation has to outlive the request and live on the job row instead.
+// See migration 0025 for the full rationale, including why the reservation
+// records the daily period it was made against.
+// ---------------------------------------------------------------------------
+
+// Reserves against the daily pool AND stamps the generated_media row, in one
+// atomic statement. The row must already exist (created status='queued'), so
+// a reservation is never held without a record pointing at it — if the
+// process died between reserving and recording, nothing could ever release it.
+export async function reserveMediaCredits(
+  fastify: FastifyInstance,
+  mediaId: string,
+  creditCost: number,
+): Promise<boolean> {
+  const { data, error } = await fastify.supabaseAdmin.rpc("reserve_media_credits", {
+    p_media_id: mediaId,
+    p_reserve_amount: creditCost,
+  });
+  if (error) {
+    fastify.log.error({ error, mediaId }, "reserve_media_credits RPC failed");
+    return false;
+  }
+  return data === true;
+}
+
+// Settles or fully releases a job's reservation. Idempotent server-side, so
+// calling it on an already-settled job is a harmless no-op — which matters
+// because the status endpoint is polled repeatedly and two polls can race on
+// the same completing job.
+//
+// Pass actualCost 0 for any non-success outcome (failure, cancellation,
+// expiry, submit error) to release the whole reservation.
+export async function settleMediaReservation(
+  fastify: FastifyInstance,
+  mediaId: string,
+  actualCost: number,
+): Promise<void> {
+  const { error } = await fastify.supabaseAdmin.rpc("settle_media_reservation", {
+    p_media_id: mediaId,
+    p_actual_cost: actualCost,
+  });
+  if (error) {
+    fastify.log.error({ error, mediaId, actualCost }, "settle_media_reservation RPC failed");
+  }
+}
+
+// Releases reservations pinned by jobs that were never polled to completion
+// (tab closed, job stalled upstream). Best-effort and fire-and-forget at its
+// call site: a sweep failure must never affect the request that triggered it.
+export async function releaseStaleMediaReservations(fastify: FastifyInstance): Promise<number> {
+  const { data, error } = await fastify.supabaseAdmin.rpc("release_stale_media_reservations", {});
+  if (error) {
+    fastify.log.warn({ error }, "release_stale_media_reservations RPC failed (non-fatal)");
+    return 0;
+  }
+  return typeof data === "number" ? data : 0;
+}

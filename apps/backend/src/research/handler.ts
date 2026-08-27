@@ -181,6 +181,11 @@ export async function handleWebSearch(params: HandleWebSearchParams): Promise<vo
       complexity: decision.complexity,
       openrouterModelId: model.openrouter_model_id,
       realCostEstimate: result.costUsd,
+      // Daily is settled by settleDailyReservation() in the finally below —
+      // charging it here too double-counts (see skipDaily's doc comment in
+      // consumeCredits.ts; this shipped and produced an exact 2x daily
+      // overcharge in production).
+      skipDaily: true,
     });
 
     // Absent (not []) when nothing was actually grounded — see

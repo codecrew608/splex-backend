@@ -256,6 +256,11 @@ async function executeStep(
       realCostEstimate: realCost.realCostEstimateUsd,
       realInputTokens: realCost.inputTokens,
       realOutputTokens: realCost.outputTokens,
+      // Daily is settled by settleDailyReservation() in the finally below —
+      // charging it here too double-counts (see skipDaily's doc comment in
+      // consumeCredits.ts; this shipped and produced an exact 2x daily
+      // overcharge in production).
+      skipDaily: true,
     });
 
     let envelope: StepEnvelope | null = null;
@@ -383,6 +388,11 @@ async function executeStep(
     realCostEstimate: realCost.realCostEstimateUsd,
     realInputTokens: realCost.inputTokens,
     realOutputTokens: realCost.outputTokens,
+      // Daily is settled by settleDailyReservation() in the finally below —
+      // charging it here too double-counts (see skipDaily's doc comment in
+      // consumeCredits.ts; this shipped and produced an exact 2x daily
+      // overcharge in production).
+      skipDaily: true,
   });
   await markStep(fastify, workflowRunId, stepIndex, {
     status: "completed",

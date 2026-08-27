@@ -9,7 +9,9 @@
     "typecheck": "tsc --noEmit",
     "typecheck:worker": "tsc --noEmit -p tsconfig.worker.json",
     "cf:dev": "wrangler dev",
-    "cf:deploy": "wrangler deploy"
+    "cf:deploy": "wrangler deploy",
+    "test": "vitest run",
+    "test:watch": "vitest"
   },
   "dependencies": {
     "@fastify/cors": "^11.3.0",
@@ -31,6 +33,7 @@
     "@types/node": "^22.10.1",
     "tsx": "^4.19.2",
     "typescript": "^5.7.2",
+    "vitest": "^4.1.11",
     "wrangler": "^4.125.0"
   }
 }
