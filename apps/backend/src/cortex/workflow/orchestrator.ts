@@ -10,7 +10,14 @@ import { completeOnce, streamCompletion, isRetryableOpenRouterError, isBalanceEx
 import { resolveMaxTokens } from "../tokenBudget.js";
 import type { ModelRegistryRow } from "../../types/index.js";
 import { resolveCreditGateEstimate, resolveWorkflowStepEstimate } from "../../credits/costBand.js";
-import { checkCredits, diagnoseCreditRejection, resolveCreditRejectionMessage, DAILY_REQUEST_LIMIT_MESSAGE } from "../../credits/checkCredits.js";
+import {
+  checkCredits,
+  checkAndReserveCredits,
+  settleDailyReservation,
+  diagnoseCreditRejection,
+  resolveCreditRejectionMessage,
+  DAILY_REQUEST_LIMIT_MESSAGE,
+} from "../../credits/checkCredits.js";
 import { computeRealCost } from "../../credits/realCost.js";
 import { consumeCredits } from "../../credits/consumeCredits.js";
 import { insertMessage } from "../../persistence/messages.js";
@@ -182,12 +189,22 @@ async function executeStep(
   let model = modelCandidates[0];
 
   const gateEstimate = await resolveCreditGateEstimate(fastify, STEP_COMPLEXITY, user.planTier);
-  const allowed = await checkCredits(fastify, user.id, gateEstimate);
-  if (!allowed) {
+  // Atomically reserves gateEstimate against the DAILY pool as part of this
+  // same call (reserve_daily_credits, migration 0022) — see
+  // checkAndReserveCredits' doc comment in checkCredits.ts. Every exit path
+  // below MUST settle this reservation exactly once — see the try/finally.
+  const gate = await checkAndReserveCredits(fastify, user.id, gateEstimate);
+  if (!gate.allowed) {
     await markStep(fastify, workflowRunId, stepIndex, { status: "failed" });
     sse.workflowStepStatus({ stepIndex, status: "failed", title: step.title });
     return { kind: "failed", reason: await resolveCreditRejectionMessage(fastify, user.id, gateEstimate) };
   }
+
+  // Set to the real charged amount only once this step's generation
+  // genuinely succeeds (right after either computeRealCost call below);
+  // stays 0 on every other exit, fully releasing the reservation.
+  let dailyActualCost = 0;
+  try {
 
   const userContent = `${step.detailedPrompt}${buildPriorStepsBlock(priorOutputs)}`;
 
@@ -229,6 +246,7 @@ async function executeStep(
     }
 
     const realCost = await computeRealCost(fastify, step.category, model, result.usage);
+    dailyActualCost = realCost.creditsCharged;
     await consumeCredits(fastify, {
       userId: user.id,
       creditCost: realCost.creditsCharged,
@@ -355,6 +373,7 @@ async function executeStep(
   }
 
   const realCost = await computeRealCost(fastify, step.category, model, usage);
+  dailyActualCost = realCost.creditsCharged;
   await consumeCredits(fastify, {
     userId: user.id,
     creditCost: realCost.creditsCharged,
@@ -380,6 +399,9 @@ async function executeStep(
     modelDisplayName: friendlyModelName(model.openrouter_model_id),
   });
   return { kind: "completed", output: fullText, creditsCharged: realCost.creditsCharged };
+  } finally {
+    await settleDailyReservation(fastify, user.id, gate.dailyReserved, dailyActualCost);
+  }
 }
 
 // Shared sequential loop used by both a fresh start and a resume. Persists

@@ -20,18 +20,18 @@ import {
   explainModelSelection,
 } from "../cortex/index.js";
 import { shouldExtractMemory, extractAndUpdateMemory } from "../memory/extractMemory.js";
-import { checkCredits, resolveCreditRejectionMessage } from "../credits/checkCredits.js";
+import { checkAndReserveCredits, settleDailyReservation, resolveCreditRejectionMessage } from "../credits/checkCredits.js";
 import { consumeCredits } from "../credits/consumeCredits.js";
 import { resolveCreditGateEstimate } from "../credits/costBand.js";
 import { computeRealCost } from "../credits/realCost.js";
-import { streamCompletion, isRetryableOpenRouterError, isBalanceExceededError, type ChatContentPart } from "../openrouter/client.js";
+import { streamCompletion, isRetryableOpenRouterError, isBalanceExceededError, isModelUnavailableError, type ChatContentPart } from "../openrouter/client.js";
 import { resolveMaxTokens } from "../cortex/tokenBudget.js";
 import { SplexSSEWriter } from "../sse/writer.js";
 import { fetchOwnedFiles, buildImageDataUri, buildAttachmentTextBlock } from "../files/attachments.js";
 import { retrieveFileContext } from "../intelligence/retrieve.js";
 import { shouldUseWorkflow } from "../cortex/workflow/trigger.js";
 import { getActiveWorkflow, cancelActiveWorkflow, startWorkflow, resumeWorkflow } from "../cortex/workflow/orchestrator.js";
-import { recordModelOutcome, classifyFailure } from "../cortex/modelHealth.js";
+import { recordModelOutcome, recordModelFailure } from "../cortex/modelHealth.js";
 import { generateImage } from "../images/generate.js";
 import { generateSpeech } from "../audio/generate.js";
 import { submitVideoJob } from "../video/generate.js";
@@ -416,14 +416,28 @@ const chatRoutes: FastifyPluginAsync = async (fastify) => {
       // actual token usage (see step 10) and can differ from this estimate.
       const gateEstimate = await resolveCreditGateEstimate(fastify, decision.complexity, user.planTier);
 
-      // Step 6: hard gate before any generation happens.
-      const allowed = await checkCredits(fastify, user.id, gateEstimate);
-      if (!allowed) {
+      // Step 6: hard gate before any generation happens. Atomically
+      // reserves gateEstimate against the DAILY pool (reserve_daily_credits,
+      // migration 0022) as part of this same call — not just a read-only
+      // check — closing both the estimate-vs-real-cost gap and the
+      // concurrent-request race that previously let daily usage drift past
+      // the 150 cap (see checkAndReserveCredits' doc comment). Every exit
+      // path from here through the end of this turn MUST settle this
+      // reservation exactly once — see the try/finally below.
+      const gate = await checkAndReserveCredits(fastify, user.id, gateEstimate);
+      if (!gate.allowed) {
         sse.error({ message: await resolveCreditRejectionMessage(fastify, user.id, gateEstimate) });
         sse.done({ blocked: true, conversationId, userMessageId });
         sse.end();
         return;
       }
+
+      // Set to the real charged amount only once generation genuinely
+      // succeeds (right after computeRealCost below); stays 0 on every
+      // other exit (model unavailable, abort, empty response, thrown
+      // error), which fully releases the reservation via the finally.
+      let dailyActualCost = 0;
+      try {
 
       // Step 7: THE free/paid isolation mechanism. Ranked candidates (2 on
       // v1, 3 on v1.5 — see modelSelect.ts) — if the first hits a
@@ -495,7 +509,7 @@ const chatRoutes: FastifyPluginAsync = async (fastify) => {
           recordModelOutcome(fastify, model.id, "success", Date.now() - startedAt);
           break;
         } catch (err) {
-          recordModelOutcome(fastify, model.id, classifyFailure(err), Date.now() - startedAt);
+          recordModelFailure(fastify, model.id, err, Date.now() - startedAt);
           const isLastCandidate = i === modelCandidates.length - 1;
           if (!isLastCandidate && isRetryableOpenRouterError(err)) {
             fastify.log.warn(
@@ -538,6 +552,7 @@ const chatRoutes: FastifyPluginAsync = async (fastify) => {
       // usage x the category's real/shadow model cost — NOT the pre-flight
       // gate estimate above, and NOT a fixed token=credit mapping.
       const realCost = await computeRealCost(fastify, decision.category, model, usage);
+      dailyActualCost = realCost.creditsCharged;
 
       const assistantMessageId = await insertMessage(fastify, {
         conversationId,
@@ -598,6 +613,15 @@ const chatRoutes: FastifyPluginAsync = async (fastify) => {
       if (shouldExtractMemory(classifierInputMessage, history.length, (memoryRow?.summary_text ?? "").length)) {
         void extractAndUpdateMemory(fastify, user.id, classifierInputMessage, fullText);
       }
+      } finally {
+        // Fires on every exit from the try above — normal completion,
+        // an early return (model unavailable / aborted / empty response),
+        // or a thrown error re-thrown to the outer catch below.
+        // dailyActualCost is still 0 on every path that didn't reach the
+        // success assignment, which correctly releases the full
+        // reservation rather than leaking it against the user's daily pool.
+        await settleDailyReservation(fastify, user.id, gate.dailyReserved, dailyActualCost);
+      }
     } catch (err) {
       // Explicit field-by-field serialization, not the raw Error in `err` —
       // an Error's message/stack/name are non-enumerable own properties, so
@@ -627,9 +651,13 @@ const chatRoutes: FastifyPluginAsync = async (fastify) => {
         // account/key/balance itself, and no retry-with-a-different-model
         // helps here since every model shares the same account.
         sse.error({
-          message: isBalanceExceededError(err)
-            ? "This AI service is temporarily unavailable. Please try again shortly."
-            : "Something went wrong. Please try again.",
+          message:
+            isBalanceExceededError(err) || isModelUnavailableError(err)
+              ? // Same reasoning as the Worker port: an exhausted fallback
+                // chain whose last candidate was retired upstream is a known
+                // availability cause, not an unknown failure.
+                "This AI service is temporarily unavailable. Please try again shortly."
+              : "Something went wrong. Please try again.",
         });
         sse.done({ blocked: true, userMessageId });
         sse.end();

@@ -281,7 +281,41 @@ export async function completeOnce(opts: {
 // dominant real-world case); 5xx covers a transient upstream outage.
 export function isRetryableOpenRouterError(err: unknown): boolean {
   if (!(err instanceof Error)) return false;
-  return /OpenRouter (request|classifier request) failed \((429|5\d\d)\)/.test(err.message);
+  return (
+    /OpenRouter (request|classifier request) failed \((429|5\d\d)\)/.test(err.message) ||
+    // A model that no longer exists is permanently dead for THAT model but
+    // says nothing about the next candidate, so the fallback chain must
+    // keep going. Without this a single stale registry row aborted the
+    // whole request — see isModelUnavailableError below for the live
+    // incident this comes from.
+    isModelUnavailableError(err)
+  );
+}
+
+// "This specific model can't serve the request at all" — as opposed to
+// "the upstream is busy" (429/5xx, retryable) or "the account is out of
+// money" (402, retryable with nothing). OpenRouter answers 404 with
+// "No endpoints found for <model>" when a model id has been withdrawn or
+// has no live provider endpoints left.
+//
+// This existed as an unhandled gap, found in production: the registry
+// still listed nvidia/nemotron-nano-9b-v2:free after OpenRouter dropped
+// it, every call 404'd, and because 404 matched neither the retryable nor
+// the balance branch, the candidate loop rethrew immediately instead of
+// trying the next Free model — surfacing as a generic "Something went
+// wrong" even while a perfectly good Free candidate sat unused.
+//
+// Deliberately NOT folded into a plain 4xx match: 400/401/403/422 mean the
+// REQUEST is wrong (bad key, malformed body, unsupported parameter), and
+// those would fail identically against every other candidate, so burning
+// the whole fallback chain on them just multiplies latency for the same
+// end result.
+export function isModelUnavailableError(err: unknown): boolean {
+  if (!(err instanceof Error)) return false;
+  return (
+    /OpenRouter (request|classifier request) failed \(404\)/.test(err.message) ||
+    /No endpoints found/i.test(err.message)
+  );
 }
 
 // 402 specifically means "the account's available balance can't cover
