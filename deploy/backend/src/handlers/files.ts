@@ -4,6 +4,7 @@ import * as mammoth from "mammoth";
 import type { FileRow } from "../types/index.js";
 import { ocrImage, ocrPdf, isIntelligenceConfigured, IntelligenceNotConfiguredError } from "../intelligence/client.js";
 import { describeError } from "../openrouter/client.js";
+import { validateOwnedStoragePath } from "../files/storagePath.js";
 import { indexFileChunks } from "../intelligence/indexFile.js";
 import { type HandlerResult, ok, fail } from "./result.js";
 
@@ -96,6 +97,44 @@ async function tryIndexChunks(fastify: FastifyInstance, fileId: string, text: st
   }
 }
 
+// Re-checks the plan's total storage allowance against REAL sizes, after the
+// object exists. enforce_file_limits() (migration 0011) does the same sum at
+// INSERT time, but at that point size_bytes is only what the client declared.
+// Returns ok:true when the plan has no storage cap configured, matching the
+// trigger's own "null limit means unlimited" semantics for this counter.
+async function checkStorageQuota(
+  fastify: FastifyInstance,
+  userId: string,
+  planTier: string,
+  fileId: string,
+): Promise<{ ok: boolean; usedBytes?: number; limitBytes?: number }> {
+  const { data: limitRow } = await fastify.supabaseAdmin
+    .from("plan_limits")
+    .select("limit_amount")
+    .eq("plan_tier", planTier)
+    .eq("counter_type", "storage_bytes")
+    .maybeSingle();
+
+  const limitBytes = limitRow?.limit_amount as number | null | undefined;
+  if (limitBytes === null || limitBytes === undefined) return { ok: true };
+
+  const { data: rows, error } = await fastify.supabaseAdmin
+    .from("files")
+    .select("size_bytes")
+    .eq("user_id", userId);
+
+  if (error || !rows) {
+    // Fail OPEN on a lookup failure: the file is already uploaded and the
+    // INSERT trigger already applied its own check, so refusing here would
+    // punish the user for a transient database problem.
+    fastify.log.warn({ error, userId, fileId }, "storage quota re-check failed — allowing (insert-time trigger already applied)");
+    return { ok: true };
+  }
+
+  const usedBytes = rows.reduce((sum, r) => sum + Number((r as { size_bytes: number }).size_bytes ?? 0), 0);
+  return { ok: usedBytes <= limitBytes, usedBytes, limitBytes };
+}
+
 export async function processFile(
   fastify: FastifyInstance,
   userId: string,
@@ -115,6 +154,27 @@ export async function processFile(
 
   if (error || !fileData) return fail("File not found.", 404);
   const file = fileData as FileRow;
+
+  // AUTHORIZATION GATE — must run before ANY service-role Storage call.
+  //
+  // The row's user_id was already checked above, but that only proves the
+  // ROW is the caller's; storage_path is a separate value that was
+  // client-writable, and the download below uses the service-role client,
+  // which bypasses Storage RLS entirely. Without this, a user could point
+  // their own row at another user's object and have the backend fetch it.
+  //
+  // Deliberately placed before the "extracting" status write too, so a
+  // rejected request leaves no trace of progress and does no work at all.
+  const pathCheck = validateOwnedStoragePath(userId, file.id, file.storage_path);
+  if (!pathCheck.ok) {
+    fastify.log.error(
+      { fileId: file.id, userId, reason: pathCheck.reason },
+      "refused privileged storage read: storage_path is not inside the caller's namespace",
+    );
+    // Same 404 the not-found branch returns — a mismatched path must not
+    // reveal whether the referenced object exists.
+    return fail("File not found.", 404);
+  }
 
   await fastify.supabaseAdmin.from("files").update({ processing_status: "extracting" }).eq("id", file.id);
 
@@ -147,6 +207,30 @@ export async function processFile(
       .update({ processing_status: "failed", error_message: `File exceeds your plan's ${formatBytes(sizeLimit)} limit.` })
       .eq("id", file.id);
     return fail(`File exceeds your plan's ${formatBytes(sizeLimit)} limit.`, 413);
+  }
+
+  // Record the TRUE size, measured from the downloaded object.
+  //
+  // size_bytes is what enforce_file_limits() sums for the storage quota, and
+  // it was client-supplied — so a false value understated the user's usage
+  // permanently. Migration 0028 stops the client writing it (default 0), and
+  // this is where the real figure lands. Writing it before the quota check
+  // below means the check sees truth for this file and every prior one.
+  if (file.size_bytes !== buffer.byteLength) {
+    await fastify.supabaseAdmin.from("files").update({ size_bytes: buffer.byteLength }).eq("id", file.id);
+  }
+
+  // Storage quota, enforced here rather than only in the INSERT trigger.
+  // The trigger runs before the object exists, when the only size available
+  // is whatever the client claimed; this runs once the real bytes are known.
+  const quota = await checkStorageQuota(fastify, userId, planTier, file.id);
+  if (!quota.ok) {
+    fastify.log.warn({ fileId: file.id, userId, planTier, ...quota }, "storage quota exceeded on measured bytes");
+    await fastify.supabaseAdmin
+      .from("files")
+      .update({ processing_status: "failed", error_message: "You've hit your plan's storage limit." })
+      .eq("id", file.id);
+    return fail("You've hit your plan's storage limit.", 413);
   }
 
   if (file.mime_type?.startsWith("image/")) {

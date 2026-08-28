@@ -241,18 +241,25 @@ export function Composer({ onSend, onStop, isStreaming, disabled }: ComposerProp
         continue;
       }
 
+      // Only the genuine metadata is sent now. user_id, size_bytes and
+      // storage_path are database-owned as of migration 0028 — the client
+      // holds no write grant on them, because a client-chosen storage_path
+      // let a user point their row at someone else's object and have the
+      // backend read it with the service-role client.
+      //
+      // storage_path comes BACK from the insert: a trigger computes the
+      // canonical <user_id>/<id>/<sanitised filename>, so the value uploaded
+      // to is always the one the server will later validate, with no
+      // sanitisation rules duplicated here to drift out of sync.
       const { data: fileRow, error: insertError } = await supabase
         .from("files")
         .insert({
-          user_id: user.id,
           filename: file.name,
           file_type: file.type || "application/octet-stream",
           mime_type: file.type || null,
-          size_bytes: file.size,
-          storage_path: "", // set below once we have the file id
           processing_status: "uploaded",
         })
-        .select("id")
+        .select("id, storage_path")
         .single();
 
       if (insertError || !fileRow) {
@@ -270,10 +277,11 @@ export function Composer({ onSend, onStop, isStreaming, disabled }: ComposerProp
       }
 
       const fileId = fileRow.id as string;
-      const storagePath = `${user.id}/${fileId}/${file.name}`;
+      // Server-computed; never constructed here. Storage RLS independently
+      // requires the first path segment to equal auth.uid(), so an upload
+      // can only ever land in the caller's own namespace.
+      const storagePath = fileRow.storage_path as string;
       setAttachments((prev) => [...prev, { id: fileId, filename: file.name, mimeType: file.type || null, status: "uploading" }]);
-
-      await supabase.from("files").update({ storage_path: storagePath }).eq("id", fileId);
 
       const { error: uploadError } = await supabase.storage.from("uploads").upload(storagePath, file, {
         contentType: file.type || undefined,
