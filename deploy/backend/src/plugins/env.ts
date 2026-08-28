@@ -43,6 +43,9 @@ export type Env = z.infer<typeof envSchema>;
 
 declare module "fastify" {
   interface FastifyInstance {
+    // Present only on the Workers runtime (see worker/context.ts); Node
+    // keeps the process alive so background work needs no scheduler.
+    scheduleBackground?: (work: Promise<unknown>) => void;
     config: Env;
   }
 }

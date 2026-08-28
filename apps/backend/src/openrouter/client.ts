@@ -267,6 +267,9 @@ export async function completeOnce(opts: {
   messages: ChatMessageParam[];
   maxTokens?: number;
   tools?: OpenRouterTool[];
+  // Optional caller deadline — e.g. deep research's whole-run budget, so a
+  // multi-stage run cannot outlive it one 60s stage at a time.
+  signal?: AbortSignal;
 }): Promise<CompleteOnceResult> {
   const { fastify, model, messages, maxTokens = 200, tools } = opts;
 
@@ -295,7 +298,9 @@ export async function completeOnce(opts: {
     method: "POST",
     headers: openRouterHeaders(fastify),
     body: bodyFor(true),
-    signal: withDeadline(undefined, COMPLETE_TIMEOUT_MS),
+    // Caller signal (e.g. deep research's whole-run deadline) combined with
+    // this call's own ceiling — whichever fires first wins.
+    signal: withDeadline(opts.signal, COMPLETE_TIMEOUT_MS),
   });
 
   // Reasoning policy is provider-specific, not something this backend
@@ -312,7 +317,7 @@ export async function completeOnce(opts: {
         method: "POST",
         headers: openRouterHeaders(fastify),
         body: bodyFor(false),
-        signal: withDeadline(undefined, COMPLETE_TIMEOUT_MS),
+        signal: withDeadline(opts.signal, COMPLETE_TIMEOUT_MS),
       });
     } else {
       throw new OpenRouterError("classifier", response.status, text, model);

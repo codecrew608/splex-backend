@@ -19,7 +19,10 @@ describe("upstream call deadlines", () => {
   });
 
   it("completeOnce has a deadline on BOTH fetches (incl. the reasoning retry)", () => {
-    const hits = client.match(/withDeadline\(undefined, COMPLETE_TIMEOUT_MS\)/g) ?? [];
+    // Now also honours a caller-supplied signal — deep research passes its
+    // whole-run budget so a multi-stage run cannot outlive it one 60s call
+    // at a time. Whichever fires first wins.
+    const hits = client.match(/withDeadline\(opts\.signal, COMPLETE_TIMEOUT_MS\)/g) ?? [];
     // The classifier runs on the critical path of every ambiguous message —
     // previously it had no timeout AND no signal at all.
     expect(hits.length).toBe(2);

@@ -42,6 +42,19 @@ export interface WorkerCtx {
   config: WorkerConfig;
   supabaseAdmin: SupabaseClient;
   log: WorkerLogger;
+  // Per-request hook that keeps post-response work alive.
+  //
+  // Fire-and-forget bookkeeping (model health, auto-deactivating a retired
+  // model) is issued deep inside service modules that have no access to the
+  // request's ExecutionContext. On Workers a bare floating promise is
+  // killed when the isolate is torn down — the exact mechanism that left
+  // every user_memory row empty. Carrying the scheduler on the context lets
+  // those modules hand work to waitUntil without threading execCtx through
+  // every signature.
+  //
+  // Optional because the Node/Fastify build has no equivalent and needs
+  // none: that process stays alive on its own.
+  scheduleBackground?: (work: Promise<unknown>) => void;
 }
 
 export function buildWorkerCtx(env: RawWorkerEnv): WorkerCtx {

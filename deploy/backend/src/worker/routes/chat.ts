@@ -33,10 +33,15 @@ export async function handleChatRequest(request: Request, ctx: WorkerCtx, user: 
 
   const abortController = new AbortController();
   const { writer, response } = createSSEStream(() => abortController.abort());
+
+  // Per-request COPY, never a mutation of the shared ctx: two concurrent
+  // requests would otherwise overwrite each other's ExecutionContext and
+  // hand background work to the wrong (possibly already-finished) request.
+  const requestCtx: WorkerCtx = { ...ctx, scheduleBackground: (work) => execCtx.waitUntil(work) };
   // waitUntil is how a Worker keeps post-response work alive; the shared
   // orchestration takes it as ScheduleBackground so Node can pass its own.
   execCtx.waitUntil(
-    runChat(asFastifyInstance(ctx), writer, user, body, abortController, (work) => execCtx.waitUntil(work)),
+    runChat(asFastifyInstance(requestCtx), writer, user, body, abortController, (work) => execCtx.waitUntil(work)),
   );
   return response;
 }

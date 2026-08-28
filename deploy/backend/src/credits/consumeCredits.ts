@@ -46,10 +46,14 @@ async function callWithRetry(
   rpcName: string,
   rpcParams: Record<string, unknown>,
   logContext: Record<string, unknown>,
+  failure: { userId: string; creditCost: number; intent: string; pool: "monthly" | "daily" },
 ): Promise<void> {
+  let lastError: { message?: string } | null = null;
+
   for (let attempt = 1; attempt <= RETRY_ATTEMPTS; attempt++) {
     const { error } = await fastify.supabaseAdmin.rpc(rpcName, rpcParams);
     if (!error) return;
+    lastError = error;
 
     const isLastAttempt = attempt === RETRY_ATTEMPTS;
     fastify.log[isLastAttempt ? "error" : "warn"](
@@ -57,6 +61,41 @@ async function callWithRetry(
       isLastAttempt ? `${rpcName} RPC failed after retries — ledger may be under-charged` : `${rpcName} RPC failed, retrying`,
     );
     if (!isLastAttempt) await sleep(RETRY_DELAY_MS * attempt);
+  }
+
+  // Every retry failed. The billable work already happened, so the counters
+  // are now permanently short by creditCost with only a log line to show for
+  // it — and logs age out. Record it durably so the gap is recoverable.
+  //
+  // Deliberately NOT an auto-retry: replaying a charge without knowing
+  // whether the original partially applied risks double-charging, which is
+  // worse than under-charging. This preserves the fact; a human decides.
+  await recordChargeFailure(fastify, rpcName, lastError, failure);
+}
+
+async function recordChargeFailure(
+  fastify: FastifyInstance,
+  rpcName: string,
+  lastError: { message?: string } | null,
+  failure: { userId: string; creditCost: number; intent: string; pool: "monthly" | "daily" },
+): Promise<void> {
+  const { error } = await fastify.supabaseAdmin.from("credit_charge_failures").insert({
+    user_id: failure.userId,
+    rpc_name: rpcName,
+    credit_cost: failure.creditCost,
+    intent: failure.intent,
+    pool: failure.pool,
+    error_message: lastError?.message ?? null,
+  });
+
+  if (error) {
+    // The last line of defence itself failed. Nothing else can capture this,
+    // so make it as loud and as complete as possible — this exact log line is
+    // the only remaining trace of real spend that was never charged.
+    fastify.log.error(
+      { error, ...failure, rpcName, originalError: lastError?.message },
+      "CRITICAL: charge failed AND could not be recorded — usage is under-counted with no durable record",
+    );
   }
 }
 
@@ -83,11 +122,18 @@ export async function consumeCredits(fastify: FastifyInstance, params: ConsumeCr
       p_real_output_tokens: params.realOutputTokens ?? null,
     },
     logContext,
+    { userId: params.userId, creditCost: params.creditCost, intent: params.intent, pool: "monthly" },
   );
 
   // Callers that reserved up-front settle the daily side themselves; charging
   // it again here is a straight double-count. See skipDaily's doc comment.
   if (!params.skipDaily) {
-    await callWithRetry(fastify, "consume_daily_credits", { p_user_id: params.userId, p_credit_cost: params.creditCost }, logContext);
+    await callWithRetry(
+      fastify,
+      "consume_daily_credits",
+      { p_user_id: params.userId, p_credit_cost: params.creditCost },
+      logContext,
+      { userId: params.userId, creditCost: params.creditCost, intent: params.intent, pool: "daily" },
+    );
   }
 }

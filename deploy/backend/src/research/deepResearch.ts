@@ -77,7 +77,16 @@ async function runStage(
   model: ModelRegistryRow,
   intent: string,
   messages: Parameters<typeof completeOnce>[0]["messages"],
-  opts: { maxTokens?: number; tools?: Parameters<typeof completeOnce>[0]["tools"] } = {},
+  opts: {
+    maxTokens?: number;
+    tools?: Parameters<typeof completeOnce>[0]["tools"];
+    // Whole-run deadline, shared by every stage. Each individual call
+    // already has its own 60s ceiling in openrouter/client.ts, but five
+    // sequential stages plus tool calls could still stack to many minutes
+    // with nothing bounding the total. Passing one signal through every
+    // stage means the run as a whole cannot outlive its budget.
+    signal?: AbortSignal;
+  } = {},
 ): Promise<{ content: string; costCredits: number; costUsd: number }> {
   const { content, generationId } = await completeOnce({
     fastify,
@@ -85,6 +94,7 @@ async function runStage(
     messages,
     maxTokens: opts.maxTokens ?? 1500,
     tools: opts.tools,
+    signal: opts.signal,
   });
 
   const costUsd = generationId ? await fetchGenerationCost(fastify, generationId) : 0;
@@ -166,8 +176,18 @@ async function pickStageModel(fastify: FastifyInstance, category: string, planTi
 // doesn't need persistence/resume machinery a page reload would need to
 // recover (see chat.ts's workflow orchestrator for what that machinery
 // actually costs when a capability genuinely needs it).
+// Deep research runs many sequential provider calls. Without a single
+// overall budget, a run could sit open for many minutes — holding a credit
+// reservation and an SSE connection — while each individual call stayed
+// within its own limit. 8 minutes is generous for a legitimate multi-stage
+// report and still bounded.
+const DEEP_RESEARCH_RUN_BUDGET_MS = 8 * 60_000;
+
 export async function runDeepResearch(params: RunDeepResearchParams): Promise<void> {
   const { fastify, sse, user, conversationId, userMessageId, query, contextBlock } = params;
+
+  // One deadline for the whole run, passed to every stage below.
+  const runDeadline = AbortSignal.timeout(DEEP_RESEARCH_RUN_BUDGET_MS);
 
   const quota = await checkMediaQuota(fastify, user.id, user.planTier, "deep_research");
   if (!quota.allowed) {
@@ -233,7 +253,7 @@ export async function runDeepResearch(params: RunDeepResearchParams): Promise<vo
         },
         { role: "user", content: contextBlock ? `${contextBlock}\n\nResearch question: ${query}` : query },
       ],
-      { maxTokens: 400 },
+      { maxTokens: 400, signal: runDeadline },
     );
     totalCreditsCharged += planningResult.costCredits;
 
@@ -268,6 +288,7 @@ export async function runDeepResearch(params: RunDeepResearchParams): Promise<vo
         // silently produced zero sources during live testing.
         maxTokens: 3000,
         tools: [{ type: "openrouter:web_search", max_results: 6, max_total_results: 20, excluded_domains: BLOCKED_FETCH_DOMAINS }],
+        signal: runDeadline,
       },
     );
     totalCreditsCharged += searchResult.costCredits;
@@ -319,6 +340,7 @@ export async function runDeepResearch(params: RunDeepResearchParams): Promise<vo
         // maxPages URLs' worth of keyFacts arrays as JSON.
         maxTokens: 3200,
         tools: [{ type: "openrouter:web_fetch", max_content_tokens: 2000, blocked_domains: BLOCKED_FETCH_DOMAINS }],
+        signal: runDeadline,
       },
     );
     totalCreditsCharged += readResult.costCredits;
@@ -351,7 +373,7 @@ export async function runDeepResearch(params: RunDeepResearchParams): Promise<vo
         },
         { role: "user", content: `Research question: ${query}\n\n${evidenceBlock}` },
       ],
-      { maxTokens: 800 },
+      { maxTokens: 800, signal: runDeadline },
     );
     totalCreditsCharged += crossCheckResult.costCredits;
     const crossCheck = parseJsonObject<{ agreements?: unknown; conflicts?: unknown; uncertainties?: unknown }>(fastify, "cross_checking", crossCheckResult.content, {});
@@ -470,7 +492,7 @@ export async function runDeepResearch(params: RunDeepResearchParams): Promise<vo
             content: `Research question: ${query}\n\n${evidenceBlock2}\n\nCross-check findings:\nAgreements: ${JSON.stringify(finalCrossCheck.agreements ?? [])}\nConflicts: ${JSON.stringify(finalCrossCheck.conflicts ?? [])}\nUncertainties: ${JSON.stringify(finalCrossCheck.uncertainties ?? [])}`,
           },
         ],
-        { maxTokens: 2000 },
+        { maxTokens: 2000, signal: runDeadline },
       );
       totalCreditsCharged += writeResult.costCredits;
 

@@ -153,3 +153,35 @@ describe("credit safety across every provider outcome", () => {
     expect(noCandidates).toBeLessThan(setAt); // the early return happens before any charge is set
   });
 });
+
+describe("PROVIDER COST: no Free request can reach a paid model", () => {
+  const walk = (dir: string): string[] => {
+    const { readdirSync, statSync } = require("node:fs") as typeof import("node:fs");
+    return readdirSync(dir).flatMap((e: string) => {
+      const full = join(dir, e);
+      return statSync(full).isDirectory() ? walk(full) : full.endsWith(".ts") ? [full] : [];
+    });
+  };
+  const files = walk(SRC);
+
+  it("NO module uses the configured (paid) classifier model directly", () => {
+    const offenders = files.filter((f) => {
+      if (f.includes("classifierModel.ts") || f.includes("env.ts")) return false; // resolver + schema
+      return readFileSync(f, "utf8").includes("config.CORTEX_CLASSIFIER_MODEL_ID");
+    });
+    expect(offenders, `these bypass tier isolation: ${offenders.join(", ")}`).toEqual([]);
+  });
+
+  it("all three internal call sites resolve the model by tier", () => {
+    for (const f of ["cortex/classify.ts", "cortex/workflow/plan.ts", "memory/extractMemory.ts"]) {
+      expect(read(f), `${f} must be tier-aware`).toContain("resolveClassifierModel(fastify, planTier)");
+    }
+  });
+
+  it("candidate selection filters by variant and re-guards the final list", () => {
+    const src = read("cortex/modelSelect.ts");
+    expect(src).toContain('.eq("variant", variant)');
+    expect(src).toContain('planTier === "free"');
+    expect(src).toContain('s.model.variant === "free"'); // redundant cost-safety guard
+  });
+});

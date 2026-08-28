@@ -64,6 +64,13 @@ export function ensureEntitlementsPolling(): void {
 
   const load = useEntitlementsStore.getState().load;
   load();
-  setInterval(load, REFRESH_INTERVAL_MS);
+  // Skip the tick while the tab is hidden. The poller runs for the lifetime
+  // of the page, so a backgrounded tab would otherwise keep hitting
+  // /entitlements every 60s indefinitely for a user who cannot see the
+  // result. The focus listener below already refreshes the moment they come
+  // back, so nothing is stale when it matters.
+  setInterval(() => {
+    if (document.visibilityState === "visible") load();
+  }, REFRESH_INTERVAL_MS);
   window.addEventListener("focus", load);
 }

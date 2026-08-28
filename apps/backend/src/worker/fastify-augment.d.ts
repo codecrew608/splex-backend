@@ -21,5 +21,8 @@ declare module "fastify" {
   interface FastifyInstance {
     config: WorkerConfig;
     supabaseAdmin: SupabaseClient;
+    // Set per-request by the Worker router; absent on Node. See
+    // worker/context.ts's WorkerCtx.scheduleBackground.
+    scheduleBackground?: (work: Promise<unknown>) => void;
   }
 }

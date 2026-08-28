@@ -1,5 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import { completeOnce } from "../../openrouter/client.js";
+import { resolveClassifierModel } from "../classifierModel.js";
+import type { PlanTier } from "../../shared-types.js";
 
 export interface PlannedStep {
   title: string;
@@ -37,6 +39,7 @@ export async function planWorkflow(
   message: string,
   contextBlock: string,
   maxSteps: number,
+  planTier: PlanTier,
 ): Promise<PlanResult> {
   const userContent = contextBlock ? `${contextBlock}\n\nUser request:\n${message}` : `User request:\n${message}`;
 
@@ -44,7 +47,10 @@ export async function planWorkflow(
   try {
     const result = await completeOnce({
       fastify,
-      model: fastify.config.CORTEX_CLASSIFIER_MODEL_ID,
+      // Tier-aware. Free users can run workflows (3 steps on the free
+      // plan), so planning must not reach the configured PAID model — the
+      // same leak fixed in classify.ts and extractMemory.ts.
+      model: await resolveClassifierModel(fastify, planTier),
       messages: [
         { role: "system", content: buildPlannerSystemPrompt(maxSteps) },
         { role: "user", content: userContent },

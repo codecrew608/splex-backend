@@ -516,7 +516,7 @@ export async function startWorkflow(params: {
   const cortexVersion = resolveCortexVersion(user.planTier);
 
   const limits = await getWorkflowLimits(fastify, user.planTier);
-  const plan = await planWorkflow(fastify, message, contextBlock, limits.maxSteps);
+  const plan = await planWorkflow(fastify, message, contextBlock, limits.maxSteps, user.planTier);
 
   if (plan.outcome === "fallback") {
     return { handled: false };
@@ -666,7 +666,7 @@ export async function resumeWorkflow(params: {
   if (run.clarification_step_index === null || run.plan === null) {
     const limits = await getWorkflowLimits(fastify, user.planTier);
     const augmentedContext = `${contextBlock}\n\nThe user was previously asked: "${run.clarification_question ?? ""}"\nTheir answer: ${answer}`;
-    const plan = await planWorkflow(fastify, "(see clarification above)", augmentedContext, limits.maxSteps);
+    const plan = await planWorkflow(fastify, "(see clarification above)", augmentedContext, limits.maxSteps, user.planTier);
 
     if (plan.outcome === "fallback") {
       await fastify.supabaseAdmin.from("workflow_runs").update({ status: "cancelled" }).eq("id", run.id);

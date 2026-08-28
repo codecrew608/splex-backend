@@ -8,6 +8,28 @@ export type ModelOutcome = "success" | "failure" | "timeout";
 // telemetry must never fail, slow, or block a user-facing generation that
 // already succeeded, so this swallows its own errors and is called without
 // await at every call site.
+// Hands fire-and-forget bookkeeping to the runtime's background scheduler
+// when there is one.
+//
+// On Workers a bare `void promise` is abandoned the moment the isolate is
+// torn down — the same mechanism that silently prevented every memory
+// extraction from ever landing. These writes are small, but "small" is not
+// "instant", and a health record or a model deactivation that never commits
+// is a routing decision made on stale data. On Node there is no scheduler
+// and none is needed: the process outlives the response.
+function runBackground(fastify: FastifyInstance, work: PromiseLike<unknown>): void {
+  // Supabase query builders are thenable but not full Promises, so wrap
+  // before attaching handlers.
+  const scheduled = Promise.resolve(work).catch((err: unknown) => {
+    fastify.log.warn({ err }, "background bookkeeping failed (non-fatal)");
+  });
+  if (fastify.scheduleBackground) {
+    fastify.scheduleBackground(scheduled);
+    return;
+  }
+  void scheduled;
+}
+
 export function recordModelOutcome(
   fastify: FastifyInstance,
   modelId: string,
@@ -15,16 +37,17 @@ export function recordModelOutcome(
   latencyMs?: number,
   costUsd = 0,
 ): void {
-  void fastify.supabaseAdmin
-    .rpc("record_model_health", {
+  runBackground(
+    fastify,
+    fastify.supabaseAdmin.rpc("record_model_health", {
       p_model_id: modelId,
       p_outcome: outcome,
       p_latency_ms: latencyMs ?? null,
       p_cost_usd: costUsd,
-    })
-    .then(({ error }: { error: { message: string } | null }) => {
+    }).then(({ error }: { error: { message: string } | null }) => {
       if (error) fastify.log.warn({ error, modelId, outcome }, "record_model_health failed (non-fatal)");
-    });
+    }),
+  );
 }
 
 // An aborted/timed-out fetch surfaces as one of these — distinguishing
@@ -61,7 +84,7 @@ export function recordModelFailure(
     // Not a health signal either — the model is GONE, not unhealthy, and
     // scoring it down would be pointless when it can never succeed again.
     // Retire it instead so the next request never selects it.
-    void deactivateUnavailableModel(fastify, modelId, err);
+    deactivateUnavailableModel(fastify, modelId, err);
     return;
   }
   recordModelOutcome(fastify, modelId, classifyFailure(err), latencyMs);
@@ -86,11 +109,14 @@ function deactivateUnavailableModel(fastify: FastifyInstance, modelId: string, e
     { modelId, errorMessage: err instanceof Error ? err.message : String(err) },
     "model unavailable upstream — deactivating registry row so routing stops selecting it",
   );
-  void fastify.supabaseAdmin
-    .from("model_registry")
-    .update({ is_active: false })
-    .eq("id", modelId)
-    .then(({ error }: { error: { message: string } | null }) => {
-      if (error) fastify.log.warn({ error, modelId }, "failed to deactivate unavailable model (non-fatal)");
-    });
+  runBackground(
+    fastify,
+    fastify.supabaseAdmin
+      .from("model_registry")
+      .update({ is_active: false })
+      .eq("id", modelId)
+      .then(({ error }: { error: { message: string } | null }) => {
+        if (error) fastify.log.warn({ error, modelId }, "failed to deactivate unavailable model (non-fatal)");
+      }),
+  );
 }
