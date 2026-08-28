@@ -30,6 +30,13 @@ const workerEnvSchema = z.object({
   // unreachable, and every call site already treats that as
   // non-fatal/skip (see worker/router.ts's OCR/embedding fallback).
   INTELLIGENCE_SERVICE_URL: z.string().url().optional(),
+  // Bearer token for the sidecar above. On Workers, unlike Fastify's
+  // loopback default, INTELLIGENCE_SERVICE_URL (when set at all) always
+  // points across the network — the sidecar refuses to start network-bound
+  // without a token (see services/intelligence/main.py), so this is
+  // effectively required whenever that URL is set. Optional in the schema
+  // because "URL unset, service just not deployed" must remain valid.
+  INTELLIGENCE_SERVICE_TOKEN: z.string().min(1).optional(),
   LOG_LEVEL: z.string().default("info"),
 });
 

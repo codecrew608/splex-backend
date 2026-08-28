@@ -5,11 +5,13 @@
   "compatibility_date": "2026-08-21",
   "compatibility_flags": ["nodejs_compat"],
   // Private-only, deliberately: no public route, no custom domain, and
-  // workers_dev is off. This service has no auth on /embed or /ocr/* (see
-  // DEPLOYMENT.md) — the ONLY thing allowed to reach it is the backend
-  // Worker, via the private container network address set in the
-  // backend's INTELLIGENCE_SERVICE_URL. Do not add a `routes` block or
-  // flip workers_dev to true here without adding request auth first.
+  // workers_dev is off. main.py now REQUIRES a bearer token whenever
+  // HOST=0.0.0.0 (see its startup guard) — it refuses to boot without one
+  // — so this is defense in depth on top of that, not the only gate. Do
+  // not add a `routes` block or flip workers_dev to true here without
+  // re-verifying request auth is actually enforced (GET /health's
+  // response includes "auth": "enabled"/"disabled" — check it after any
+  // deploy that touches this file).
   "workers_dev": false,
   "containers": [
     {
@@ -17,11 +19,17 @@
       // Builds from this service's own existing, already build-tested
       // Dockerfile one level up — never a second Dockerfile to maintain.
       "image": "../Dockerfile",
-      "max_instances": 3,
-      "env": {
-        "HOST": "0.0.0.0",
-        "PORT": "8100"
-      }
+      "max_instances": 3
+      // No "env" here: current wrangler (verified: 4.127.1) rejects
+      // "containers[].env" as an unexpected field — it is silently a
+      // no-op, not "committed non-secret config" as an earlier version of
+      // this comment claimed. HOST/PORT come from the Dockerfile's own
+      // ENV (HOST=0.0.0.0; PORT defaults to 8100 in main.py, matching
+      // defaultPort below). INTELLIGENCE_SERVICE_TOKEN is injected at
+      // runtime by container-entry.ts's envVars override instead, sourced
+      // from a Worker secret (`wrangler secret put
+      // INTELLIGENCE_SERVICE_TOKEN`, run from this directory) — that
+      // mechanism is verified to actually work; this field was not.
     }
   ],
   "durable_objects": {

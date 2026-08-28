@@ -203,7 +203,58 @@ SUPABASE_URL=... SUPABASE_SERVICE_ROLE_KEY=... node scripts/audit-model-registry
 
 | Item | Status |
 |---|---|
-| Intelligence sidecar (`INTELLIGENCE_SERVICE_URL`) | **Not deployed.** Image OCR and file-context RAG are inert; the code detects this and reports "not configured" rather than a fault. Deploy the service and set the var to enable them. |
+| Intelligence sidecar (`INTELLIGENCE_SERVICE_URL`) | **Not deployed.** Image OCR and file-context RAG are inert; the code detects this and reports "not configured" rather than a fault. §10 covers the deploy steps and their exact preconditions. |
 | Staging environment | None. All verification is local + production. A second Worker (`splex-backend-worker-staging`) and Vercel preview would close this. |
 | Free image generation | Disabled (`plan_limits` = 0) because OpenRouter currently has **no** `:free` model that outputs images. A product decision, reversible by changing that row — no code change. |
 | Web search caching | None. Identical queries cost full price each time. Worth adding if search volume grows. |
+
+---
+
+## 10. Intelligence sidecar deployment
+
+`services/intelligence/` — Tesseract OCR + BGE-small embeddings (`main.py`,
+FastAPI). Everything the repo can do for this is done: the service now
+**refuses to start** unauthenticated on any non-loopback `HOST` (a same-class
+fix to the media-URL and rate-limit hardening in §2/§8 — see `main.py`'s
+startup guard), every endpoint but `/health` requires a bearer token, and
+both request bodies and `/embed` batch size are capped so one caller can't
+exhaust the container's memory or CPU. `services/intelligence/test_main.py`
+covers all of that (`.venv/bin/python test_main.py`, no pytest required).
+
+Two things remain genuinely external — a real machine to run the container
+on, and a token value only you can generate:
+
+1. **A container platform with Docker + buildx.** `services/intelligence/cloudflare/`
+   is a real, typechecked (`npm install && npm run typecheck`), deployable
+   Wrangler project — but Cloudflare Containers builds the image with
+   BuildKit, and `wrangler deploy --dry-run` from this repo's own dev
+   machine failed with `unknown flag: --load` because its local Docker
+   lacks buildx. That's this machine's Docker install, not the repo; deploy
+   from a machine (or CI runner) with a current Docker + buildx, or use any
+   other platform that can run `services/intelligence/Dockerfile` and route
+   the backend to it.
+2. **`INTELLIGENCE_SERVICE_TOKEN`.** Generate one (`openssl rand -hex 32`)
+   and set it in **three** places — all three, or the deploy is either
+   unreachable or unauthenticated:
+   ```bash
+   # a) the sidecar container reads it via container-entry.ts's envVars
+   cd services/intelligence/cloudflare
+   npx wrangler secret put INTELLIGENCE_SERVICE_TOKEN
+
+   # b) the backend Worker sends it as a bearer header (intelligence/client.ts)
+   cd deploy/backend
+   npx wrangler secret put INTELLIGENCE_SERVICE_TOKEN
+
+   # c) point the backend at the deployed sidecar and redeploy
+   npx wrangler secret put INTELLIGENCE_SERVICE_URL   # e.g. https://splex-intelligence.<account>.workers.dev
+   npx wrangler deploy
+   ```
+   Verify with `curl <sidecar-url>/health` — the response includes
+   `"auth": "enabled"`. If it reads `"disabled"`, step (a) didn't reach the
+   container; re-check the secret and redeploy the sidecar before trusting
+   any OCR/RAG result.
+
+Until both are done, `INTELLIGENCE_SERVICE_URL` should stay unset in the
+Worker — leaving it unset is the fail-safe state (see `intelligence/client.ts`:
+every call site distinguishes "not configured" from a genuine fault), not a
+half-finished one.

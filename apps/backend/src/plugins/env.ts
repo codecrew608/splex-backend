@@ -36,6 +36,12 @@ const envSchema = z.object({
   // Local FastAPI sidecar — Tesseract OCR + BGE-small embeddings. See
   // services/intelligence/main.py.
   INTELLIGENCE_SERVICE_URL: z.string().url().default("http://127.0.0.1:8100"),
+  // Bearer token for the sidecar above. Optional here because the default
+  // URL is loopback-only, where main.py itself runs unauthenticated (only
+  // this machine can reach it). If INTELLIGENCE_SERVICE_URL is ever
+  // repointed at a network address, the sidecar refuses to start without a
+  // matching token — see main.py's startup guard — so this must be set too.
+  INTELLIGENCE_SERVICE_TOKEN: z.string().min(1).optional(),
   LOG_LEVEL: z.string().default("info"),
 });
 

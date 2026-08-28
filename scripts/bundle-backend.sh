@@ -166,6 +166,7 @@ OPENROUTER_APP_NAME=SPLEX
 CORTEX_CLASSIFIER_MODEL_ID=
 CREDITS_PER_USD=25000
 INTELLIGENCE_SERVICE_URL=
+INTELLIGENCE_SERVICE_TOKEN=
 LOG_LEVEL=info
 EOF
 
@@ -231,6 +232,7 @@ OPENROUTER_APP_NAME=SPLEX
 CORTEX_CLASSIFIER_MODEL_ID=
 CREDITS_PER_USD=20000
 INTELLIGENCE_SERVICE_URL=
+INTELLIGENCE_SERVICE_TOKEN=
 LOG_LEVEL=info
 EOF
 
@@ -252,16 +254,14 @@ cat > "$OUT/cloudflare/wrangler.jsonc" <<'EOF'
     {
       "class_name": "SplexBackendContainer",
       "image": "../Dockerfile",
-      "max_instances": 5,
-      // Non-secret only — SUPABASE_SERVICE_ROLE_KEY and OPENROUTER_API_KEY
-      // are set via `wrangler secret put` (see DEPLOYMENT.md), never here.
-      "env": {
-        "PORT": "4000",
-        "OPENROUTER_BASE_URL": "https://openrouter.ai/api/v1",
-        "OPENROUTER_APP_NAME": "SPLEX",
-        "CREDITS_PER_USD": "25000",
-        "LOG_LEVEL": "info"
-      }
+      "max_instances": 5
+      // No "env" here: current wrangler (verified against 4.127.1) rejects
+      // "containers[].env" as an unexpected field — it is a no-op, not the
+      // non-secret config it looks like. This option is superseded by the
+      // Workers-native target above and not the active deploy path, so it
+      // is left uncorrected rather than reworked to inject config via
+      // envVars (see services/intelligence/cloudflare/container-entry.ts
+      // for the pattern that does work, if this option is ever revived).
     }
   ],
   "durable_objects": {
