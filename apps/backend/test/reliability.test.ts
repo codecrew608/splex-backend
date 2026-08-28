@@ -128,3 +128,68 @@ describe("frontend resilience", () => {
     }
   });
 });
+
+describe("final hardening pass", () => {
+  it("signed URLs are short-lived, not year-long bearer capabilities", () => {
+    const src = read("handlers/media.ts");
+    expect(src).toContain("const SIGNED_URL_TTL_SECONDS = 60 * 60 * 24 * 7;");
+    expect(src).not.toContain("60 * 60 * 24 * 365");
+  });
+
+  it("the Worker's top-level catch logs structured fields, and only the PATH", () => {
+    const src = read("worker/index.ts");
+    expect(src).toContain("...describeError(err)");
+    // full URL would carry query strings into logs
+    expect(src).toContain("path: new URL(request.url).pathname");
+    expect(src).not.toContain("{ err, url: request.url }");
+  });
+
+  it("rate limiting is a single atomic upsert (migration 0030)", () => {
+    const mig = readFileSync(join(ROOT, "db/migrations/0030_atomic_rate_limit_and_bucket_cleanup.sql"), "utf8");
+    // Strip comments before asserting: the migration deliberately QUOTES the
+    // old racy statement in its header to explain what it replaces, and a
+    // naive match would flag that documentation as the defect.
+    const sql = mig.replace(/^\s*--.*$/gm, "");
+    expect(sql).not.toMatch(/select window_start, count into/);
+    expect(mig).toContain("on conflict (user_id, route_name) do update");
+    expect(mig).toContain("returning count into v_count");
+    expect(mig).toContain("return v_count <= p_max;");
+    // still service-role only
+    expect(mig).toContain("grant execute on function public.check_and_increment_rate_limit");
+    expect(mig).toMatch(/revoke execute on function public\.check_and_increment_rate_limit\([^)]*\) from public, anon, authenticated/);
+  });
+
+  it("entitlement polling skips ticks it cannot serve", () => {
+    const src = readFileSync(join(SRC, "..", "..", "web", "state", "entitlementsStore.ts"), "utf8");
+    expect(src).toContain('document.visibilityState === "visible" && navigator.onLine !== false');
+    expect(src).toContain('addEventListener("online", load)');
+  });
+
+  it("the toolchain is pinned in exactly one place each", () => {
+    const pkg = JSON.parse(readFileSync(join(ROOT, "package.json"), "utf8"));
+    expect(pkg.packageManager).toMatch(/^pnpm@\d+\.\d+\.\d+$/);
+    expect(readFileSync(join(ROOT, ".nvmrc"), "utf8").trim()).toBe("22");
+    const ci = readFileSync(join(ROOT, ".github/workflows/ci.yml"), "utf8");
+    expect(ci).toContain("node-version-file: .nvmrc");
+    // CI must not restate a pnpm version that could drift from packageManager
+    expect(ci).not.toMatch(/pnpm\/action-setup@v4\s*\n\s*with:\s*\n\s*version:/);
+  });
+
+  it("both bundle scripts pin npm for lockfile determinism", () => {
+    for (const f of ["scripts/bundle-backend.sh", "scripts/bundle-frontend.sh"]) {
+      const src = readFileSync(join(ROOT, f), "utf8");
+      expect(src).toMatch(/NPM_PIN="npm@\d+\.\d+\.\d+"/);
+      expect(src).toContain('npx --yes "$NPM_PIN" install');
+    }
+  });
+
+  it("deployment knowledge is documented, not tribal", () => {
+    const doc = readFileSync(join(ROOT, "DEPLOYMENT.md"), "utf8");
+    for (const section of ["Root Directory", "wrangler secret put", "Rotation", "Deploy order", "prune_stale_rate_limit_buckets"]) {
+      expect(doc).toContain(section);
+    }
+    // must not contain an actual secret value
+    expect(doc).not.toMatch(/eyJ[A-Za-z0-9_-]{20,}\./);
+    expect(doc).not.toMatch(/sk-[A-Za-z0-9-]{20,}/);
+  });
+});

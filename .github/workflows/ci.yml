@@ -21,14 +21,19 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # No `version:` — pnpm/action-setup reads packageManager from
+      # package.json, so CI and every developer use the identical pnpm
+      # rather than "whatever 11.x resolves to today".
       - uses: pnpm/action-setup@v4
-        with:
-          version: 11
 
       - uses: actions/setup-node@v4
         with:
-          # Matches the engines field in the root package.json.
-          node-version: 22
+          # Reads .nvmrc, so the Node version lives in exactly one place.
+          # It must stay 22.x: package-lock.json content is npm-version
+          # dependent (npm 11 writes a "libc" field npm 10 strips), and the
+          # deploy bundles' lockfiles are generated with a pinned npm 10 to
+          # match node:22-slim. See scripts/bundle-*.sh.
+          node-version-file: .nvmrc
           cache: pnpm
 
       - name: Install

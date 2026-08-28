@@ -19,7 +19,18 @@ export interface MediaStatusResponse {
   errorMessage?: string;
 }
 
-const SIGNED_URL_TTL_SECONDS = 60 * 60 * 24 * 365;
+// 7 days, not a year.
+//
+// A signed URL is a bearer capability: anyone holding it can fetch the
+// object, with no auth and no revocation. A 365-day lifetime meant one
+// leaked link (browser history, a shared screenshot, a proxy log) exposed
+// that video for a year.
+//
+// 7 days is safe because the URL is NOT the durable reference — the client
+// re-polls /media/:id/status, which mints a fresh URL from the stored path
+// on every call, and the chat message stores the storage path rather than
+// the signed link. So expiry costs a re-poll, not access.
+const SIGNED_URL_TTL_SECONDS = 60 * 60 * 24 * 7;
 const FAILED_MESSAGE = "Video generation failed. Please try again.";
 
 // GET /media/:mediaId/status — polled by the frontend while an async media

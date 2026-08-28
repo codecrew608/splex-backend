@@ -14,6 +14,7 @@ import { handleDeleteAccount, handleSaveProfile } from "./routes/account.js";
 import { handleMediaStatus } from "./routes/media.js";
 import { handleGetEntitlements } from "./routes/entitlements.js";
 import type { AuthedUser } from "../types/index.js";
+import { describeError } from "../openrouter/client.js";
 
 // Same per-route limits as the Fastify original's fastify.rateLimitByUser
 // calls (plugins/userRateLimit.ts) — see routes/chat.ts, files.ts,
@@ -169,7 +170,15 @@ export default {
     } catch (err) {
       // Same backstop role as server.ts's global setErrorHandler — never
       // leak a raw thrown error's message to the client.
-      ctx.log.error({ err, url: request.url }, "unhandled error reached Worker fetch() handler");
+      // describeError, not a raw Error: an Error's fields are non-enumerable,
+      // so `{ err }` serialises to "{}" in Cloudflare's log capture — the exact
+      // blindness that made the production model failures undiagnosable.
+      // Logs the PATH only, never the full URL, so query strings can never
+      // carry user data into logs.
+      ctx.log.error(
+        { ...describeError(err), path: new URL(request.url).pathname },
+        "unhandled error reached Worker fetch() handler",
+      );
       return withCors(
         jsonResponse({ message: "Something went wrong. Please try again." }, 500),
         request.headers.get("origin"),

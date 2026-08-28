@@ -70,7 +70,13 @@ export function ensureEntitlementsPolling(): void {
   // result. The focus listener below already refreshes the moment they come
   // back, so nothing is stale when it matters.
   setInterval(() => {
-    if (document.visibilityState === "visible") load();
+    // Skip a tick that cannot succeed: a hidden tab has nobody to show the
+    // result to, and an offline browser would only flip the store into its
+    // error state and blank the credits display until the next tick.
+    if (document.visibilityState === "visible" && navigator.onLine !== false) load();
   }, REFRESH_INTERVAL_MS);
   window.addEventListener("focus", load);
+  // Refresh the moment connectivity returns rather than waiting out the
+  // remainder of the interval showing a stale "—".
+  window.addEventListener("online", load);
 }
