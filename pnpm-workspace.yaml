@@ -11,5 +11,40 @@ packages:
 # silently ignored (not an error, just a no-op) under the v11 this repo
 # and its Docker base image both use — `allowBuilds` replaced it, as a
 # {package: boolean} map rather than a plain list.
+#
+# The list is deliberately EXHAUSTIVE and explicit rather than a blanket
+# opt-out: `pnpm install --frozen-lockfile` on a clean runner reports every
+# package whose install scripts it refused to run, and these three are the
+# complete set for this lockfile (verified against pnpm's own pendingBuilds
+# state, not guessed). Anything added later must be justified here before
+# it is trusted — a postinstall script runs arbitrary code with the
+# installing user's privileges, which is exactly the attack pnpm's default
+# is guarding against.
 allowBuilds:
+  # Transitive dep of tsx. Its postinstall selects the platform-specific
+  # native binary (@esbuild/linux-x64 et al).
   esbuild: true
+
+  # Pulled in by next@15 (image optimisation) and miniflare. Its install
+  # step resolves the correct prebuilt libvips binding for the platform
+  # (@img/sharp-linux-x64 + @img/sharp-libvips-*). Without it Next falls
+  # back to a slower path and logs a warning on every build.
+  #
+  # Safe to trust: first-party package of the sharp project, the image
+  # backend Next.js itself depends on — declining it would mean declining
+  # a core Next dependency, not avoiding a third-party risk.
+  sharp: true
+
+  # Pulled in by wrangler (and miniflare / @cloudflare/unenv-preset).
+  # workerd IS the Cloudflare Workers runtime; its install step links the
+  # platform-specific binary (@cloudflare/workerd-linux-64 et al).
+  #
+  # Safe to trust: published by Cloudflare as the runtime for the platform
+  # this backend deploys to. Required, not optional — wrangler cannot run,
+  # and `wrangler deploy` cannot bundle, without the binary this resolves.
+  #
+  # Newly required because wrangler was added to apps/backend's
+  # devDependencies for the Worker deploy path; that is why CI only started
+  # failing on it now, and why a local install kept working — an existing
+  # node_modules carries prior approval state that a fresh runner does not.
+  workerd: true
