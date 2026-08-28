@@ -87,6 +87,17 @@ describe("credit charging invariants (source-level)", () => {
     // the old read-only gate must be gone from the async path
     expect(gen).not.toMatch(/const creditsAllowed = await checkCredits\(/);
   });
+
+  it("editing/regenerating always cancels an in-flight workflow; a bare resume only stashes it", () => {
+    // Pins the exact branch workflow.test.ts's scenario-2 cases hand-reproduce
+    // (there's no exported unit to import chat.ts's inline decision — see
+    // that file's own comment) — so a refactor here can't silently drift
+    // out of sync with what those runtime tests actually proved.
+    const chat = read("handlers/chat.ts");
+    expect(chat).toContain('if (body.regenerateMessageId || active.status !== "awaiting_clarification") {');
+    expect(chat).toContain("await cancelActiveWorkflow(fastify, conversationId);");
+    expect(chat).toContain("resumableWorkflow = active;");
+  });
 });
 
 describe("file upload limits are enforced server-side", () => {
