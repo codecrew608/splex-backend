@@ -26,7 +26,7 @@ import { checkAndReserveCredits, settleDailyReservation, resolveCreditRejectionM
 import { consumeCredits } from "../credits/consumeCredits.js";
 import { resolveCreditGateEstimate } from "../credits/costBand.js";
 import { computeRealCost } from "../credits/realCost.js";
-import { streamCompletion, isRetryableOpenRouterError, isBalanceExceededError, isModelUnavailableError, type ChatContentPart } from "../openrouter/client.js";
+import { streamCompletion, isRetryableOpenRouterError, isBalanceExceededError, isModelUnavailableError, type ChatContentPart, describeError } from "../openrouter/client.js";
 import { resolveMaxTokens } from "../cortex/tokenBudget.js";
 import { fetchOwnedFiles, buildImageDataUri, buildAttachmentTextBlock } from "../files/attachments.js";
 import { retrieveFileContext } from "../intelligence/retrieve.js";
@@ -152,7 +152,7 @@ export async function runChat(
     // UI animates against is unchanged. Errors stay owned by
     // runCortexClassification (it resolves to a general fallback rather
     // than rejecting), so this can't become an unhandled rejection.
-    const classificationPromise = runCortexClassification(fastify, classifierInputMessage);
+    const classificationPromise = runCortexClassification(fastify, classifierInputMessage, user.planTier);
 
     const [{ data: memoryRow }, fileContext, projectContext] = await Promise.all([
       fastify.supabaseAdmin.from("user_memory").select("summary_text").eq("user_id", user.id).maybeSingle(),
@@ -358,7 +358,10 @@ export async function runChat(
         recordModelFailure(fastify, model.id, err, Date.now() - startedAt);
         const isLastCandidate = i === modelCandidates.length - 1;
         if (!isLastCandidate && isRetryableOpenRouterError(err)) {
-          fastify.log.warn({ err, model: model.openrouter_model_id, category: decision.category }, "model call failed, retrying with fallback candidate");
+          fastify.log.warn(
+            { ...describeError(err), model: model.openrouter_model_id, category: decision.category },
+            "model call failed, retrying with fallback candidate",
+          );
           continue;
         }
         throw err;
@@ -440,7 +443,7 @@ export async function runChat(
       // has already been streamed and ended above, so this adds no latency
       // to what they see, and extractAndUpdateMemory swallows its own
       // errors.
-      scheduleBackground(extractAndUpdateMemory(fastify, user.id, classifierInputMessage, fullText));
+      scheduleBackground(extractAndUpdateMemory(fastify, user.id, user.planTier, classifierInputMessage, fullText));
     }
     } finally {
       // Fires on every exit from the try above — see routes/chat.ts's
@@ -460,11 +463,7 @@ export async function runChat(
     // body, headers, or any secret — just what the JS runtime put on the
     // Error object.
     fastify.log.error(
-      {
-        errorName: err instanceof Error ? err.name : typeof err,
-        errorMessage: err instanceof Error ? err.message : String(err),
-        errorStack: err instanceof Error ? err.stack?.slice(0, 1000) : undefined,
-      },
+      describeError(err),
       "/chat request failed",
     );
     sse.error({

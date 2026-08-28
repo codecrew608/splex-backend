@@ -1,6 +1,8 @@
 import type { FastifyInstance } from "fastify";
 import { INTENTS, GENERAL_FALLBACK_INTENT, type IntentDefinition } from "./intents.js";
 import { completeOnce } from "../openrouter/client.js";
+import { resolveClassifierModel } from "./classifierModel.js";
+import type { PlanTier } from "@splex/shared-types";
 
 export interface ClassificationResult {
   intentId: string;
@@ -41,11 +43,12 @@ Valid category values: coding, reasoning, math, writing, vision, documents, gene
 "reason" must be a short (<20 words) human-readable explanation of why you picked this intent.
 If uncertain, use intentId "general_qa", category "general".`;
 
-async function classifyWithFallbackModel(fastify: FastifyInstance, message: string): Promise<ClassificationResult> {
+async function classifyWithFallbackModel(fastify: FastifyInstance, message: string, planTier: PlanTier): Promise<ClassificationResult> {
   try {
     const { content: raw } = await completeOnce({
       fastify,
-      model: fastify.config.CORTEX_CLASSIFIER_MODEL_ID,
+      // Tier-aware: a Free request must never reach a paid model.
+      model: await resolveClassifierModel(fastify, planTier),
       messages: [
         { role: "system", content: CLASSIFIER_SYSTEM_PROMPT },
         { role: "user", content: message },
@@ -87,7 +90,7 @@ async function classifyWithFallbackModel(fastify: FastifyInstance, message: stri
   }
 }
 
-export async function classifyIntent(fastify: FastifyInstance, message: string): Promise<ClassificationResult> {
+export async function classifyIntent(fastify: FastifyInstance, message: string, planTier: PlanTier): Promise<ClassificationResult> {
   // Greetings resolve deterministically — no classifier round-trip.
   //
   // This is the single biggest latency win available on short messages,
@@ -155,5 +158,5 @@ export async function classifyIntent(fastify: FastifyInstance, message: string):
   if (isTooShortOrGeneric(message)) {
     fastify.log.debug({ wordCount: message.trim().split(/\s+/).length }, "short message with no keyword signal — using classifier");
   }
-  return classifyWithFallbackModel(fastify, message);
+  return classifyWithFallbackModel(fastify, message, planTier);
 }

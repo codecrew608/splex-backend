@@ -79,6 +79,32 @@ async function fetchHealth(fastify: FastifyInstance, modelIds: string[]): Promis
 // given model can get rate-limited independently of SPLEX's own traffic
 // (observed live, repeatedly). Same-variant fallback to "general" only if
 // the category itself has no rows — never crosses free/paid.
+// Categories that must NEVER fall back to "general".
+//
+// The general fallback exists so a text category with no curated rows
+// (say "math") still answers using a general text model — a reasonable
+// degradation, because those models genuinely can do the job.
+//
+// It is catastrophic for a category whose work a text model physically
+// cannot perform. Live production evidence: migration 0024 deactivated the
+// only free/image row (no :free model on OpenRouter emits images), which
+// left free/image with zero rows — so every Free image request fell
+// through to "general" and dispatched z-ai/glm-5.2:free and
+// minimax/minimax-m2.7:free, both text-only, to generate a picture. They
+// failed 100% of the time, burned two provider round-trips per request,
+// and surfaced as a generic error instead of the honest "this capability
+// is unavailable".
+//
+// An empty pool for these categories is a REAL answer — the caller's
+// `candidates.length === 0` branch already renders the correct
+// "temporarily unavailable" message. Returning wrong-capability models is
+// strictly worse than returning none.
+const NO_GENERAL_FALLBACK = new Set(["image", "audio", "video", "ppt"]);
+
+function canFallBackToGeneral(category: string): boolean {
+  return !NO_GENERAL_FALLBACK.has(category);
+}
+
 export async function selectModelCandidates(
   fastify: FastifyInstance,
   category: string,
@@ -92,7 +118,7 @@ export async function selectModelCandidates(
 
   let pool = await queryModelRegistry(fastify, category, variant, planTier);
   let effectiveCategory = category;
-  if (pool.length === 0) {
+  if (pool.length === 0 && canFallBackToGeneral(category)) {
     pool = await queryModelRegistry(fastify, "general", variant, planTier);
     effectiveCategory = "general";
   }

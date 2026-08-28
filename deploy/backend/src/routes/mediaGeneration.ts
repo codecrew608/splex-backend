@@ -25,7 +25,7 @@ import { consumeCredits } from "../credits/consumeCredits.js";
 import { insertMessage } from "../persistence/messages.js";
 import { insertCortexDecision } from "../persistence/cortexDecisions.js";
 import { recordModelOutcome, recordModelFailure } from "../cortex/modelHealth.js";
-import { isBalanceExceededError } from "../openrouter/client.js";
+import { isBalanceExceededError, describeError } from "../openrouter/client.js";
 import type { ModelRegistryRow } from "../types/index.js";
 
 export interface SyncMediaGenerationResult {
@@ -128,7 +128,7 @@ export async function handleSyncMediaGeneration<R extends SyncMediaGenerationRes
       } catch (err) {
         lastError = err;
         recordModelFailure(fastify, model.id, err, Date.now() - startedAt);
-        fastify.log.warn({ err, model: model.openrouter_model_id, kind }, "media generation failed, trying next candidate");
+        fastify.log.warn({ ...describeError(err), model: model.openrouter_model_id, kind }, "media generation failed, trying next candidate");
       }
     }
 
@@ -339,7 +339,7 @@ export async function handleAsyncMediaGeneration(params: AsyncMediaGenerationPar
     } catch (err) {
       lastError = err;
       recordModelFailure(fastify, model.id, err, Date.now() - startedAt);
-      fastify.log.warn({ err, model: model.openrouter_model_id, kind }, "async media submit failed, trying next candidate");
+      fastify.log.warn({ ...describeError(err), model: model.openrouter_model_id, kind }, "async media submit failed, trying next candidate");
     }
   }
 

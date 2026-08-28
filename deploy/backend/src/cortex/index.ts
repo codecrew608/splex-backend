@@ -1,3 +1,4 @@
+import type { PlanTier } from "../shared-types.js";
 import type { FastifyInstance } from "fastify";
 import type { ComplexityLevel } from "../shared-types.js";
 import { classifyIntent } from "./classify.js";
@@ -13,8 +14,8 @@ export interface CortexDecision {
   reason: string;
 }
 
-export async function runCortexClassification(fastify: FastifyInstance, message: string): Promise<CortexDecision> {
-  const classification = await classifyIntent(fastify, message);
+export async function runCortexClassification(fastify: FastifyInstance, message: string, planTier: PlanTier): Promise<CortexDecision> {
+  const classification = await classifyIntent(fastify, message, planTier);
   const complexity = estimateComplexity(message);
 
   return {

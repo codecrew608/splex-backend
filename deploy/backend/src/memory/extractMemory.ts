@@ -1,5 +1,7 @@
 import type { FastifyInstance } from "fastify";
-import { completeOnce } from "../openrouter/client.js";
+import { completeOnce, describeError } from "../openrouter/client.js";
+import { resolveClassifierModel } from "../cortex/classifierModel.js";
+import type { PlanTier } from "../shared-types.js";
 
 // Hybrid trigger, same pattern as Cortex's classifier: don't call an LLM on
 // every single turn (cost + latency), only when there's a real signal.
@@ -57,6 +59,7 @@ If nothing new/durable, set changed:false and return the existing summary unchan
 export async function extractAndUpdateMemory(
   fastify: FastifyInstance,
   userId: string,
+  planTier: PlanTier,
   userMessage: string,
   assistantResponse: string,
 ): Promise<void> {
@@ -71,7 +74,9 @@ export async function extractAndUpdateMemory(
 
     const { content: raw } = await completeOnce({
       fastify,
-      model: fastify.config.CORTEX_CLASSIFIER_MODEL_ID,
+      // Tier-aware — memory upkeep for a Free user must not bill the
+      // paid account (see resolveClassifierModel).
+      model: await resolveClassifierModel(fastify, planTier),
       messages: [
         { role: "system", content: EXTRACT_SYSTEM_PROMPT },
         {
@@ -92,6 +97,6 @@ export async function extractAndUpdateMemory(
       .from("user_memory")
       .upsert({ user_id: userId, summary_text: parsed.summary.trim() }, { onConflict: "user_id" });
   } catch (err) {
-    fastify.log.warn({ err }, "memory extraction failed — non-fatal, response already sent");
+    fastify.log.warn(describeError(err), "memory extraction failed — non-fatal, response already sent");
   }
 }

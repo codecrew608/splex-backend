@@ -2,7 +2,8 @@ import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import * as mammoth from "mammoth";
 import type { FileRow } from "../types/index.js";
-import { ocrImage, ocrPdf } from "../intelligence/client.js";
+import { ocrImage, ocrPdf, isIntelligenceConfigured, IntelligenceNotConfiguredError } from "../intelligence/client.js";
+import { describeError } from "../openrouter/client.js";
 import { indexFileChunks } from "../intelligence/indexFile.js";
 import { type HandlerResult, ok, fail } from "./result.js";
 
@@ -81,10 +82,17 @@ export type PdfTextExtractor = (buffer: Buffer) => Promise<string>;
 // upload — a file that fails to index is still usable as a direct chat
 // attachment via files.extracted_text.
 async function tryIndexChunks(fastify: FastifyInstance, fileId: string, text: string): Promise<void> {
+  // Skip before attempting: indexing needs embeddings, and without the
+  // sidecar every call would throw on a path that cannot succeed in this
+  // environment — noise that masked the real cause.
+  if (!isIntelligenceConfigured(fastify)) {
+    fastify.log.warn({ fileId, capability: "rag_indexing" }, "chunk indexing skipped — intelligence service not configured");
+    return;
+  }
   try {
     await indexFileChunks(fastify, fileId, text);
   } catch (err) {
-    fastify.log.warn({ err, fileId }, "file chunk indexing failed — non-fatal, file still usable as an attachment");
+    fastify.log.error({ ...describeError(err), fileId }, "file chunk indexing failed against a configured service");
   }
 }
 
@@ -153,7 +161,17 @@ export async function processFile(
     try {
       ocrText = await ocrImage(fastify, buffer);
     } catch (err) {
-      fastify.log.warn({ err, fileId: file.id }, "image OCR failed — non-fatal, vision attachment still works");
+      if (err instanceof IntelligenceNotConfiguredError) {
+        // A deployment gap, not a fault. Logged distinctly so it can never
+        // again be mistaken for a provider error — which is exactly how it
+        // read in production, where OCR is simply not deployed.
+        fastify.log.warn(
+          { fileId: file.id, capability: "image_ocr" },
+          "image OCR skipped — intelligence service not configured in this environment",
+        );
+      } else {
+        fastify.log.error({ ...describeError(err), fileId: file.id }, "image OCR failed against a configured service");
+      }
     }
     const truncated = ocrText.length > TEXT_EXTRACT_CAP ? ocrText.slice(0, TEXT_EXTRACT_CAP) : ocrText;
 
@@ -186,7 +204,17 @@ export async function processFile(
           const ocrText = await ocrPdf(fastify, buffer);
           if (ocrText.trim().length > extractedText.trim().length) extractedText = ocrText;
         } catch (err) {
-          fastify.log.warn({ err, fileId: file.id }, "scanned-PDF OCR fallback failed, keeping extracted output");
+          if (err instanceof IntelligenceNotConfiguredError) {
+            fastify.log.warn(
+              { fileId: file.id, capability: "pdf_ocr" },
+              "scanned-PDF OCR skipped — intelligence service not configured in this environment",
+            );
+          } else {
+            fastify.log.error(
+              { ...describeError(err), fileId: file.id },
+              "scanned-PDF OCR failed against a configured service",
+            );
+          }
         }
       }
     } else if (file.mime_type === DOCX_MIME) {

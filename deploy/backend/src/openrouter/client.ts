@@ -40,6 +40,64 @@ export interface StreamCompletionResult {
   aborted: boolean;
 }
 
+// A provider failure that carries WHY, in enumerable fields.
+//
+// Production logs showed "err: {}" for every model failure, because an
+// Error's name/message/stack are non-enumerable own properties: any plain
+// JSON serializer (Cloudflare's console capture, pino's default object
+// serializer) sees an empty object. Every repeated model failure in
+// production was therefore undiagnosable — the exact situation this class
+// exists to end.
+//
+// status/body/model are plain own properties, so they survive
+// JSON.stringify and reach `wrangler tail` intact.
+//
+// The body is truncated and carries only what OpenRouter returned about
+// the REQUEST's failure — never the Authorization header, never the
+// prompt, never user content.
+export class OpenRouterError extends Error {
+  readonly status: number;
+  readonly body: string;
+  readonly model: string | null;
+  readonly kind: "stream" | "classifier";
+
+  constructor(kind: "stream" | "classifier", status: number, body: string, model: string | null) {
+    // Message shape preserved EXACTLY — isRetryableOpenRouterError,
+    // isBalanceExceededError and isModelUnavailableError all regex this
+    // string, and existing tests assert on it.
+    super(`OpenRouter ${kind === "classifier" ? "classifier request" : "request"} failed (${status}): ${body.slice(0, 500)}`);
+    this.name = "OpenRouterError";
+    this.status = status;
+    this.body = body.slice(0, 500);
+    this.model = model;
+    this.kind = kind;
+  }
+}
+
+// Turns any thrown value into plain, enumerable fields a JSON serializer
+// can actually render. Use this at EVERY log site that reports a caught
+// error, or the log says "{}" and tells you nothing.
+export function describeError(err: unknown): Record<string, unknown> {
+  if (err instanceof OpenRouterError) {
+    return {
+      errorName: err.name,
+      errorMessage: err.message,
+      status: err.status,
+      // Provider's own explanation — the single most useful field, and the
+      // one that was missing during the outage.
+      providerBody: err.body,
+      model: err.model,
+      retryable: isRetryableOpenRouterError(err),
+      modelUnavailable: isModelUnavailableError(err),
+      balanceExceeded: isBalanceExceededError(err),
+    };
+  }
+  if (err instanceof Error) {
+    return { errorName: err.name, errorMessage: err.message, errorStack: err.stack?.slice(0, 600) };
+  }
+  return { errorName: typeof err, errorMessage: String(err) };
+}
+
 export function openRouterHeaders(fastify: FastifyInstance): Record<string, string> {
   return {
     Authorization: `Bearer ${fastify.config.OPENROUTER_API_KEY}`,
@@ -97,7 +155,7 @@ export async function streamCompletion(opts: StreamCompletionOptions): Promise<S
 
   if (!response.ok || !response.body) {
     const text = await response.text().catch(() => "");
-    throw new Error(`OpenRouter request failed (${response.status}): ${text.slice(0, 500)}`);
+    throw new OpenRouterError("stream", response.status, text, model);
   }
 
   const reader = response.body.getReader();
@@ -257,13 +315,13 @@ export async function completeOnce(opts: {
         signal: withDeadline(undefined, COMPLETE_TIMEOUT_MS),
       });
     } else {
-      throw new Error(`OpenRouter classifier request failed (${response.status}): ${text.slice(0, 500)}`);
+      throw new OpenRouterError("classifier", response.status, text, model);
     }
   }
 
   if (!response.ok) {
     const text = await response.text().catch(() => "");
-    throw new Error(`OpenRouter classifier request failed (${response.status}): ${text.slice(0, 500)}`);
+    throw new OpenRouterError("classifier", response.status, text, model);
   }
 
   const json = (await response.json()) as {
