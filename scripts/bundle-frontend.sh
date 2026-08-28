@@ -10,6 +10,26 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
+# Lockfile generation is PINNED to a specific npm.
+#
+# package-lock.json content is npm-version-dependent: npm 11 writes a
+# "libc": ["glibc"|"musl"] field on platform-specific native packages that
+# npm 10 does not understand and strips back out. Regenerating with a
+# different npm than the one that last wrote the file therefore produces a
+# spurious 200-line diff — which is exactly what failed CI's deploy/ parity
+# gate, on a bundle whose SOURCE was byte-identical.
+#
+# Pinning here (rather than assuming the caller's Node) is what makes the
+# scripts genuinely deterministic: the output is the same on a maintainer's
+# machine, on a fresh CI runner, and in the Docker build, whatever Node
+# happens to be on PATH.
+#
+# 10.x is the correct target, not the newest: deploy/backend/Dockerfile
+# builds on node:22-slim, the root package.json requires node >=22, and CI
+# pins node 22 — all of which ship npm 10. The lockfile should describe what
+# those environments will actually install.
+NPM_PIN="npm@10.9.8"
+
 OUT=deploy/frontend
 rm -rf "$OUT"
 mkdir -p "$OUT"
@@ -65,6 +85,6 @@ EOF
 # DOES bundle locally and would need a real `npm install` in this folder
 # first. If the frontend ever moves from Vercel to Workers, change this line
 # to a full install rather than rediscovering it as a failed deploy.
-( cd "$OUT" && npm install --package-lock-only --silent )
+( cd "$OUT" && npx --yes "$NPM_PIN" install --package-lock-only --silent )
 
 echo "Bundle written to $OUT"
