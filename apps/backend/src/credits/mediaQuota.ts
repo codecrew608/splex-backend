@@ -1,6 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import type { PlanTier } from "@splex/shared-types";
-import { getQuotaState, type Capability } from "../entitlements/index.js";
+import { checkDualPeriodQuota } from "../entitlements/index.js";
 
 // "Media" is a loose label at this point — web_search/deep_research
 // produce no file, just billable work tracked the same way (see
@@ -12,24 +12,64 @@ export type MediaStatus = "queued" | "processing" | "completed" | "failed" | "ca
 export interface MediaQuota {
   allowed: boolean;
   used: number;
-  limit: number | null; // null = unlimited
+  limit: number | null; // null = unlimited — the DAILY figure, for the existing per-day messaging call sites
+  monthlyUsed: number;
+  monthlyLimit: number | null;
+  // Which ceiling actually blocked the request, so callers can give a
+  // more specific "you've hit this month's limit" vs "today's" message
+  // instead of always implying it was the daily one.
+  blockedBy: "daily" | "monthly" | null;
 }
 
-// Thin adapter over the central entitlement service — the quota rules
-// themselves (limit lookup, usage counting, IST day boundary, fail-closed
-// on error) now live in exactly one place (entitlements/index.ts) rather
-// than being duplicated here. Kept as its own function with an unchanged
-// signature so the three media handlers that call it need no edits; every
-// MediaKind is also a Capability by construction, so the mapping is an
-// identity cast rather than another lookup table to keep in sync.
+// plan_limits counter_type for each kind's DAILY ceiling (migrations
+// 0011/0015/0016). The monthly counterpart is this name + "_monthly"
+// (migration 0033) — one consistent suffix rather than a second lookup
+// table to keep in sync.
+const DAILY_COUNTER_TYPE: Record<MediaKind, string> = {
+  image: "image_generations",
+  audio: "audio_minutes", // duration-based, not count-based — see below
+  video: "video_generations",
+  ppt: "ppt_generations",
+  web_search: "web_searches",
+  deep_research: "deep_research",
+};
+
+// Central day+month capability ceiling check (spec: "IMAGE GENERATION:
+// 5/day, 60/month", etc — migration 0033). Audio is duration-summed
+// (generated_media.duration_seconds), not row-counted, because the spec's
+// audio ceiling is stated in MINUTES, not generation count — a 10-second
+// clip and a 5-minute one must not cost the same quota.
 export async function checkMediaQuota(
   fastify: FastifyInstance,
   userId: string,
   planTier: PlanTier,
   kind: MediaKind,
 ): Promise<MediaQuota> {
-  const state = await getQuotaState(fastify, userId, planTier, kind as Capability);
-  return { allowed: state.allowed, used: state.used, limit: state.limit };
+  const dailyCounterType = DAILY_COUNTER_TYPE[kind];
+  const monthlyCounterType = `${dailyCounterType}_monthly`;
+  const dual =
+    kind === "audio"
+      ? await checkDualPeriodQuota(
+          fastify, userId, planTier, dailyCounterType, monthlyCounterType,
+          { kind: "generated_media_minutes", mediaKind: "audio", period: "day" },
+          { kind: "generated_media_minutes", mediaKind: "audio", period: "month" },
+        )
+      : await checkDualPeriodQuota(
+          fastify, userId, planTier, dailyCounterType, monthlyCounterType,
+          { kind: "generated_media", mediaKind: kind, period: "day" },
+          { kind: "generated_media", mediaKind: kind, period: "month" },
+        );
+
+  const dailyOk = dual.dailyLimit === null || dual.dailyUsed < dual.dailyLimit;
+  const monthlyOk = dual.monthlyLimit === null || dual.monthlyUsed < dual.monthlyLimit;
+  return {
+    allowed: dual.allowed,
+    used: dual.dailyUsed,
+    limit: dual.dailyLimit,
+    monthlyUsed: dual.monthlyUsed,
+    monthlyLimit: dual.monthlyLimit,
+    blockedBy: dual.allowed ? null : !dailyOk ? "daily" : !monthlyOk ? "monthly" : null,
+  };
 }
 
 // "1 active concurrent generation" guardrail (spec, video specifically) —
@@ -148,6 +188,10 @@ export async function recordMediaGeneration(
     costUsd?: number | null;
     creditsCharged?: number | null;
     errorMessage?: string | null;
+    // Audio only (migration 0033) — estimated from the returned MP3's byte
+    // size (see audio/generate.ts), feeds the duration-summed audio_minutes
+    // quota in checkMediaQuota. Always null for every other kind.
+    durationSeconds?: number | null;
   },
 ): Promise<string | null> {
   const { data, error } = await fastify.supabaseAdmin
@@ -164,6 +208,7 @@ export async function recordMediaGeneration(
       cost_usd: params.costUsd ?? null,
       credits_charged: params.creditsCharged ?? null,
       error_message: params.errorMessage ?? null,
+      duration_seconds: params.durationSeconds ?? null,
       completed_at: params.status === "completed" ? new Date().toISOString() : null,
     })
     .select("id")

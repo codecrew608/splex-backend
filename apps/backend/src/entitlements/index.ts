@@ -27,9 +27,19 @@ export type Capability =
 // Avoids a fourth near-identical tracking table.
 type UsageSource =
   | { kind: "none" } // no quota — always allowed if the plan permits it at all
-  | { kind: "generated_media"; mediaKind: "image" | "audio" | "video" | "ppt" | "web_search" | "deep_research"; period: "day" }
+  | { kind: "generated_media"; mediaKind: "image" | "audio" | "video" | "ppt" | "web_search" | "deep_research"; period: "day" | "month" }
   | { kind: "usage_counters"; counterType: string; period: "day" | "month" }
-  | { kind: "row_count"; table: "projects" | "files"; period: "all" | "month" };
+  | { kind: "row_count"; table: "projects" | "files"; period: "all" | "month" }
+  // Sum of generated_media.duration_seconds (migration 0033) for a
+  // duration-billed kind (audio) rather than a row count — a 10-second
+  // clip and a 5-minute one must not count the same against the cap.
+  | { kind: "generated_media_minutes"; mediaKind: "audio"; period: "day" | "month" }
+  // vision/workflow ownership isn't a direct column on messages/
+  // workflow_runs (only conversation_id is) — these join through
+  // conversations -> projects to reach user_id, same ownership chain
+  // fetchOwnedFiles-style helpers already use elsewhere in this codebase.
+  | { kind: "vision_messages"; period: "day" | "month" }
+  | { kind: "workflow_runs"; period: "day" | "month" };
 
 interface CapabilityConfig {
   // plan_limits.counter_type this capability's cap lives under. null = the
@@ -130,10 +140,100 @@ async function fetchUsage(fastify: FastifyInstance, userId: string, source: Usag
       // A failed generation is never charged and never counts against the
       // cap — same rule the credit system uses for failed completions.
       .neq("status", "failed")
-      .gte("created_at", startOfTodayIST());
+      .gte("created_at", source.period === "day" ? startOfTodayIST() : startOfMonthIST());
     if (error) {
       fastify.log.error({ error, userId, mediaKind: source.mediaKind }, "generated_media usage count failed");
       return Number.POSITIVE_INFINITY; // fail closed
+    }
+    return count ?? 0;
+  }
+
+  if (source.kind === "generated_media_minutes") {
+    const { data, error } = await fastify.supabaseAdmin
+      .from("generated_media")
+      .select("duration_seconds")
+      .eq("user_id", userId)
+      .eq("kind", source.mediaKind)
+      .neq("status", "failed")
+      .gte("created_at", source.period === "day" ? startOfTodayIST() : startOfMonthIST());
+    if (error) {
+      fastify.log.error({ error, userId, mediaKind: source.mediaKind }, "generated_media duration sum failed");
+      return Number.POSITIVE_INFINITY; // fail closed
+    }
+    // duration_seconds is null for any row generated before migration 0033
+    // (or for a kind this isn't tracked on) — treated as 0 seconds rather
+    // than skipped, so a historical row can never inflate a NaN sum.
+    const totalSeconds = (data ?? []).reduce((sum: number, row: { duration_seconds: number | null }) => sum + (row.duration_seconds ?? 0), 0);
+    return totalSeconds / 60;
+  }
+
+  if (source.kind === "vision_messages" || source.kind === "workflow_runs") {
+    // Neither messages nor workflow_runs carries user_id directly (only
+    // conversation_id) — ownership is reached via conversations ->
+    // projects, same chain as everything else in this file. Deliberately
+    // three plain single-table queries rather than one PostgREST embedded
+    // filter across three hops: this codebase has no precedent for
+    // multi-level embedded-resource filtering, and getting an untested
+    // filter path wrong here would fail SILENTLY (wrong count, not an
+    // error) rather than loudly — not a risk worth taking on a
+    // quota-enforcement path for a data volume (low hundreds of rows
+    // system-wide) where three round trips cost nothing real.
+    const since = source.period === "day" ? startOfTodayIST() : startOfMonthIST();
+    const { data: ownProjects, error: projErr } = await fastify.supabaseAdmin
+      .from("projects")
+      .select("id")
+      .eq("user_id", userId);
+    if (projErr) {
+      fastify.log.error({ error: projErr, userId }, "usage lookup: project ownership query failed");
+      return Number.POSITIVE_INFINITY;
+    }
+    const projectIds = (ownProjects ?? []).map((r: { id: string }) => r.id);
+    if (projectIds.length === 0) return 0;
+
+    const { data: ownConvos, error: convErr } = await fastify.supabaseAdmin
+      .from("conversations")
+      .select("id")
+      .in("project_id", projectIds);
+    if (convErr) {
+      fastify.log.error({ error: convErr, userId }, "usage lookup: conversation ownership query failed");
+      return Number.POSITIVE_INFINITY;
+    }
+    const conversationIds = (ownConvos ?? []).map((r: { id: string }) => r.id);
+    if (conversationIds.length === 0) return 0;
+
+    if (source.kind === "vision_messages") {
+      const { data: ownMessages, error: msgErr } = await fastify.supabaseAdmin
+        .from("messages")
+        .select("id")
+        .in("conversation_id", conversationIds);
+      if (msgErr) {
+        fastify.log.error({ error: msgErr, userId }, "usage lookup: message ownership query failed");
+        return Number.POSITIVE_INFINITY;
+      }
+      const messageIds = (ownMessages ?? []).map((r: { id: string }) => r.id);
+      if (messageIds.length === 0) return 0;
+
+      const { count, error } = await fastify.supabaseAdmin
+        .from("cortex_decisions")
+        .select("id", { count: "exact", head: true })
+        .eq("category", "vision")
+        .in("message_id", messageIds)
+        .gte("created_at", since);
+      if (error) {
+        fastify.log.error({ error, userId }, "vision usage count failed");
+        return Number.POSITIVE_INFINITY;
+      }
+      return count ?? 0;
+    }
+
+    const { count, error } = await fastify.supabaseAdmin
+      .from("workflow_runs")
+      .select("id", { count: "exact", head: true })
+      .in("conversation_id", conversationIds)
+      .gte("created_at", since);
+    if (error) {
+      fastify.log.error({ error, userId }, "workflow run usage count failed");
+      return Number.POSITIVE_INFINITY;
     }
     return count ?? 0;
   }
@@ -219,6 +319,48 @@ export async function canUseCapability(
   capability: Capability,
 ): Promise<boolean> {
   return (await getQuotaState(fastify, userId, planTier, capability)).allowed;
+}
+
+export interface DualPeriodQuota {
+  dailyUsed: number;
+  dailyLimit: number | null;
+  monthlyUsed: number;
+  monthlyLimit: number | null;
+  allowed: boolean;
+}
+
+// The structural per-capability day+month ceiling layer (spec: "IMAGE
+// GENERATION: 5/day, 60/month", etc. — migration 0033). Deliberately a
+// second, separate check from getQuotaState/canUseCapability above,
+// mirroring how credits/dailyCredits are already two independent checks
+// rather than one — a capability can be entitled at all (canUseCapability)
+// while still being structurally capped this month (this function).
+// Fails CLOSED the same way fetchLimit always has: a missing/errored
+// limit row denies rather than defaulting to unlimited.
+export async function checkDualPeriodQuota(
+  fastify: FastifyInstance,
+  userId: string,
+  planTier: PlanTier,
+  dailyCounterType: string,
+  monthlyCounterType: string,
+  dailySource: UsageSource,
+  monthlySource: UsageSource,
+): Promise<DualPeriodQuota> {
+  const [dailyLimit, monthlyLimit, dailyUsed, monthlyUsed] = await Promise.all([
+    fetchLimit(fastify, planTier, dailyCounterType),
+    fetchLimit(fastify, planTier, monthlyCounterType),
+    fetchUsage(fastify, userId, dailySource),
+    fetchUsage(fastify, userId, monthlySource),
+  ]);
+  const dailyOk = dailyLimit === null ? true : dailyLimit !== undefined && dailyUsed < dailyLimit;
+  const monthlyOk = monthlyLimit === null ? true : monthlyLimit !== undefined && monthlyUsed < monthlyLimit;
+  return {
+    dailyUsed,
+    dailyLimit: dailyLimit === undefined ? 0 : dailyLimit,
+    monthlyUsed,
+    monthlyLimit: monthlyLimit === undefined ? 0 : monthlyLimit,
+    allowed: dailyOk && monthlyOk,
+  };
 }
 
 export async function getRemainingQuota(

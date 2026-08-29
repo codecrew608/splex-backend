@@ -6,7 +6,35 @@ export interface GenerateSpeechResult {
   url: string;
   storagePath: string;
   costUsd: number;
+  // Estimated from the returned MP3's byte size (see MP3_BYTES_PER_SECOND
+  // below) — OpenRouter's TTS response carries no duration field, only raw
+  // audio bytes. Persisted to generated_media.duration_seconds and summed
+  // for the audio_minutes quota (migration 0033).
+  durationSeconds: number;
 }
+
+// Standard speech rate used ONLY as a pre-flight estimate, before any
+// bytes exist to measure — caps input length so a request can't ask for
+// something the 5-minute-per-request ceiling would reject anyway after
+// spending. 150 wpm is a commonly cited average TTS/speech rate; this is
+// an estimate, not a measurement — the real, billed duration is the
+// byte-size-based one computed after generation, below.
+const WORDS_PER_MINUTE_ESTIMATE = 150;
+export const MAX_AUDIO_MINUTES_PER_REQUEST = 5;
+export const MAX_AUDIO_INPUT_WORDS = WORDS_PER_MINUTE_ESTIMATE * MAX_AUDIO_MINUTES_PER_REQUEST;
+
+export function estimateAudioRequestMinutes(text: string): number {
+  const words = text.trim().split(/\s+/).filter(Boolean).length;
+  return words / WORDS_PER_MINUTE_ESTIMATE;
+}
+
+// 128kbps mono/stereo MP3 (a common default TTS output bitrate) = 16,000
+// bytes/sec. Provider responses don't declare their actual bitrate, so
+// this is a reasonable estimate, not an exact reading — documented as such
+// wherever it's used (generated_media.duration_seconds, the audio_minutes
+// quota). Erring toward slightly overestimating duration is the safer
+// direction for a quota meant to bound cost, not the reverse.
+const MP3_BYTES_PER_SECOND = 16_000;
 
 // Neutral default voice for the registered TTS model (see migration
 // 0018) — OpenRouter requires an explicit voice unless the provider
@@ -54,6 +82,7 @@ export async function generateSpeech(
 
   const stored = await storeGeneratedMedia(fastify, userId, bytes, "audio/mpeg", "mp3");
   const costUsd = generationId ? await fetchGenerationCost(fastify, generationId) : 0;
+  const durationSeconds = Math.max(1, Math.round(bytes.length / MP3_BYTES_PER_SECOND));
 
-  return { ...stored, costUsd };
+  return { ...stored, costUsd, durationSeconds };
 }

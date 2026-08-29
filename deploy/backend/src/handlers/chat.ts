@@ -34,7 +34,8 @@ import { shouldUseWorkflow } from "../cortex/workflow/trigger.js";
 import { getActiveWorkflow, cancelActiveWorkflow, startWorkflow, resumeWorkflow } from "../cortex/workflow/orchestrator.js";
 import { recordModelOutcome, recordModelFailure } from "../cortex/modelHealth.js";
 import { generateImage } from "../images/generate.js";
-import { generateSpeech } from "../audio/generate.js";
+import { generateSpeech, estimateAudioRequestMinutes, MAX_AUDIO_MINUTES_PER_REQUEST } from "../audio/generate.js";
+import { checkDualPeriodQuota } from "../entitlements/index.js";
 import { submitVideoJob } from "../video/generate.js";
 import { generatePpt } from "../ppt/generate.js";
 import { handleWebSearch, runDeepResearch } from "../research/handler.js";
@@ -190,6 +191,34 @@ export async function runChat(
     if (hasImageAttachment) {
       decision.category = "vision";
       decision.categoryLabel = categoryToLabel("vision");
+
+      // Structural ceiling (spec: "VISION INPUTS: 20/day, 300/month" —
+      // migration 0033) — explicitly a PAID-only ceiling, not applied to
+      // Free. Vision/image-understanding is a CORE capability Free already
+      // has (per the original Free/Paid spec); it stays governed purely by
+      // Free's existing credit pool + free-tier vision model availability,
+      // exactly as before this change. Adding a hard count cap for Free
+      // here would be a real regression, not a new protection — the spec's
+      // "IMPLEMENT LIMITS" list under CAPABILITY LIMITS is explicitly
+      // scoped to "Paid capability ceilings" (see that section's own
+      // header), so this check simply doesn't run for Free.
+      if (user.planTier !== "free") {
+        const visionQuota = await checkDualPeriodQuota(
+          fastify, user.id, user.planTier, "vision_inputs", "vision_inputs_monthly",
+          { kind: "vision_messages", period: "day" },
+          { kind: "vision_messages", period: "month" },
+        );
+        if (!visionQuota.allowed) {
+          const message =
+            visionQuota.dailyLimit !== null && visionQuota.dailyUsed >= visionQuota.dailyLimit
+              ? `You've reached today's vision/image-understanding limit (${visionQuota.dailyLimit}/day).`
+              : `You've reached this month's vision/image-understanding limit (${visionQuota.monthlyLimit}).`;
+          sse.error({ message });
+          sse.done({ blocked: true, conversationId, userMessageId });
+          sse.end();
+          return;
+        }
+      }
     }
     sse.cortexStatus({ stage: "detecting_requirements", label: "Detecting requirements..." });
 
@@ -201,9 +230,11 @@ export async function runChat(
         generate: (f, uid, m, p) => generateImage(f, uid, m.openrouter_model_id, p),
         buildMarkdown: (result, prompt) => `![${prompt.slice(0, 200).replace(/[[\]]/g, "")}](${result.url})`,
         quotaExceededMessage: (quota: MediaQuota) =>
-          quota.limit === 0
-            ? "Image generation isn't available on your plan."
-            : `You've reached today's image generation limit (${quota.limit}/day${user.planTier === "free" ? " on Free — upgrade to Starter for 5/day" : ""}).`,
+          quota.blockedBy === "monthly"
+            ? `You've reached this month's image generation limit (${quota.monthlyLimit}).`
+            : quota.limit === 0
+              ? "Image generation isn't available on your plan."
+              : `You've reached today's image generation limit (${quota.limit}/day${user.planTier === "free" ? " on Free — upgrade to Starter for 5/day" : ""}).`,
         unavailableMessage: "Image generation is temporarily unavailable, please try again shortly.",
         failedMessage: "Image generation failed, please try again.",
       });
@@ -211,6 +242,16 @@ export async function runChat(
     }
 
     if (decision.category === "audio") {
+      // Request-level safety ceiling (spec: max 5 minutes/request), checked
+      // BEFORE any provider call or credit reservation — an estimate from
+      // input length, since there's nothing to measure yet (see
+      // audio/generate.ts's estimateAudioRequestMinutes doc comment).
+      if (estimateAudioRequestMinutes(classifierInputMessage) > MAX_AUDIO_MINUTES_PER_REQUEST) {
+        sse.error({ message: `That's too long for one audio generation (max ~${MAX_AUDIO_MINUTES_PER_REQUEST} minutes). Try a shorter script, or split it into multiple requests.` });
+        sse.done({ blocked: true, conversationId, userMessageId });
+        sse.end();
+        return;
+      }
       sse.cortexStatus({ stage: "selecting_capability", label: "Generating audio..." });
       await handleSyncMediaGeneration({
         fastify, sse, user, conversationId, userMessageId, decision,
@@ -218,9 +259,11 @@ export async function runChat(
         generate: (f, uid, m, p) => generateSpeech(f, uid, m.openrouter_model_id, p),
         buildMarkdown: (result) => `[🔊 Generated audio](${result.url})`,
         quotaExceededMessage: (quota: MediaQuota) =>
-          quota.limit === 0
-            ? "Text-to-speech is a Starter feature — upgrade to unlock 5 generations/day."
-            : `You've reached today's audio generation limit (${quota.limit}/day).`,
+          quota.blockedBy === "monthly"
+            ? `You've reached this month's audio generation limit (${quota.monthlyLimit} minutes).`
+            : quota.limit === 0
+              ? "Text-to-speech is a Starter feature — upgrade to unlock it."
+              : `You've reached today's audio generation limit (${quota.limit} minutes/day).`,
         unavailableMessage: "Audio generation is temporarily unavailable, please try again shortly.",
         failedMessage: "Audio generation failed, please try again.",
       });
@@ -235,9 +278,11 @@ export async function runChat(
         generate: generatePpt,
         buildMarkdown: (result) => `[📊 Download presentation (${result.slideCount} slides)](${result.url})`,
         quotaExceededMessage: (quota: MediaQuota) =>
-          quota.limit === 0
-            ? "Presentation generation is a Starter feature — upgrade to unlock 2 per day."
-            : `You've reached today's presentation limit (${quota.limit}/day).`,
+          quota.blockedBy === "monthly"
+            ? `You've reached this month's presentation limit (${quota.monthlyLimit}).`
+            : quota.limit === 0
+              ? "Presentation generation is a Starter feature — upgrade to unlock it."
+              : `You've reached today's presentation limit (${quota.limit}/day).`,
         unavailableMessage: "Presentation generation is temporarily unavailable, please try again shortly.",
         failedMessage: "Presentation generation failed, please try again.",
       });
@@ -264,9 +309,11 @@ export async function runChat(
         submit: submitVideoJob,
         placeholderContent: "🎬 Generating your video — this can take a minute or two.",
         quotaExceededMessage: (quota: MediaQuota) =>
-          quota.limit === 0
-            ? "Video generation is a Starter feature — upgrade to unlock 2 generations/day."
-            : `You've reached today's video generation limit (${quota.limit}/day).`,
+          quota.blockedBy === "monthly"
+            ? `You've reached this month's video generation limit (${quota.monthlyLimit}).`
+            : quota.limit === 0
+              ? "Video generation is a Starter feature — upgrade to unlock it."
+              : `You've reached today's video generation limit (${quota.limit}/day).`,
         concurrencyExceededMessage: "You already have a video generating — wait for it to finish before starting another.",
         unavailableMessage: "Video generation is temporarily unavailable, please try again shortly.",
         submitFailedMessage: "Couldn't start video generation, please try again.",

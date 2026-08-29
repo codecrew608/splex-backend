@@ -38,9 +38,11 @@ export async function handleWebSearch(params: HandleWebSearchParams): Promise<vo
   const quota = await checkMediaQuota(fastify, user.id, user.planTier, "web_search");
   if (!quota.allowed) {
     const message =
-      quota.limit === 0
-        ? "Web search isn't available on your plan."
-        : `You've reached today's web search limit (${quota.limit}/day).`;
+      quota.blockedBy === "monthly"
+        ? `You've reached this month's web search limit (${quota.monthlyLimit}).`
+        : quota.limit === 0
+          ? "Web search isn't available on your plan."
+          : `You've reached today's web search limit (${quota.limit}/day).`;
     sse.error({ message });
     sse.done({ blocked: true, conversationId, userMessageId });
     sse.end();

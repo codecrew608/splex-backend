@@ -202,9 +202,11 @@ export async function runDeepResearch(params: RunDeepResearchParams): Promise<vo
   const quota = await checkMediaQuota(fastify, user.id, user.planTier, "deep_research");
   if (!quota.allowed) {
     const message =
-      quota.limit === 0
-        ? "Deep research is a Starter feature — upgrade to unlock it."
-        : `You've reached today's deep research limit (${quota.limit}/day).`;
+      quota.blockedBy === "monthly"
+        ? `You've reached this month's deep research limit (${quota.monthlyLimit}).`
+        : quota.limit === 0
+          ? "Deep research is a Starter feature — upgrade to unlock it."
+          : `You've reached today's deep research limit (${quota.limit}/day).`;
     sse.error({ message });
     sse.done({ blocked: true, conversationId, userMessageId });
     sse.end();

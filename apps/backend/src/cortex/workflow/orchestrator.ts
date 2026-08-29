@@ -24,6 +24,7 @@ import { insertMessage } from "../../persistence/messages.js";
 import { insertCortexDecision } from "../../persistence/cortexDecisions.js";
 import { planWorkflow, type PlannedStep } from "./plan.js";
 import { getWorkflowLimits } from "./limits.js";
+import { checkDualPeriodQuota } from "../../entitlements/index.js";
 
 const STALE_MS = 5 * 60 * 1000;
 // Workflow steps are substantial generation tasks by nature — gate/charge
@@ -574,6 +575,32 @@ export async function startWorkflow(params: {
   if (limits.maxSteps <= 0) {
     return { handled: false };
   }
+
+  // Structural RUN-COUNT ceiling (spec: "WORKFLOWS/AGENTS: 3 runs/day, 30
+  // runs/month" — migration 0033), distinct from maxSteps/maxCostCredits
+  // above (which cap a single run's size, not how many runs a user starts).
+  // Checked before planWorkflow so an exhausted quota never spends a real
+  // planner call — same reasoning as the maxSteps guard. Unlike that
+  // guard, this IS a genuine "you're out of quota" outcome the user should
+  // see, not a silent downgrade to plain chat, so it reports handled:true
+  // with a clean SSE error, matching every other premium capability's
+  // quota-exceeded behavior (routes/mediaGeneration.ts, research/*.ts).
+  const runQuota = await checkDualPeriodQuota(
+    fastify, user.id, user.planTier, "workflow_runs", "workflow_runs_monthly",
+    { kind: "workflow_runs", period: "day" },
+    { kind: "workflow_runs", period: "month" },
+  );
+  if (!runQuota.allowed) {
+    const message =
+      runQuota.dailyLimit !== null && runQuota.dailyUsed >= runQuota.dailyLimit
+        ? `You've reached today's workflow limit (${runQuota.dailyLimit}/day).`
+        : `You've reached this month's workflow limit (${runQuota.monthlyLimit}).`;
+    sse.error({ message });
+    sse.done({ blocked: true, conversationId, userMessageId });
+    sse.end();
+    return { handled: true };
+  }
+
   const plan = await planWorkflow(fastify, message, contextBlock, limits.maxSteps, user.planTier);
 
   if (plan.outcome === "fallback") {

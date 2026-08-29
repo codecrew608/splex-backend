@@ -32,6 +32,9 @@ export interface SyncMediaGenerationResult {
   url: string;
   storagePath: string;
   costUsd: number;
+  // Audio only (audio/generate.ts) — undefined for every other kind, in
+  // which case recordMediaGeneration persists null, same as before.
+  durationSeconds?: number;
 }
 
 // Generic over the concrete result type so a capability whose generator
@@ -175,6 +178,7 @@ export async function handleSyncMediaGeneration<R extends SyncMediaGenerationRes
       prompt,
       costUsd: result.costUsd,
       creditsCharged,
+      durationSeconds: result.durationSeconds ?? null,
     });
 
     await insertCortexDecision(fastify, {
