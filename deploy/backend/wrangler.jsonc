@@ -35,7 +35,7 @@
     "OPENROUTER_SITE_URL": "https://splex-ai.vercel.app",
     "OPENROUTER_APP_NAME": "SPLEX",
     "CORTEX_CLASSIFIER_MODEL_ID": "qwen/qwen-2.5-72b-instruct",
-    "CREDITS_PER_USD": "20000",
+    "CREDITS_PER_USD": "120000",
     "LOG_LEVEL": "info"
   }
 }

@@ -41,9 +41,31 @@ const PROFILE_WEIGHTS: Record<RoutingProfile, ProfileWeights> = {
   // "Simple question: cost > latency > maximum quality"
   cheap_fast: { quality: 0.5, capabilityFit: 0.5, reliability: 1.0, cost: 2.0, latency: 1.2 },
   // "Coding: coding quality > reliability > cost"
-  coding: { quality: 1.0, capabilityFit: 2.0, reliability: 1.4, cost: 0.7, latency: 0.4 },
+  //
+  // Same defect as deep_quality (see its comment): verified against real
+  // migration-0032 prices, cost 0.7 let a much cheaper coding_score-80
+  // candidate (Flash) outscore the coding_score-92 primary (GLM) outright —
+  // a 62-point cost-penalty spread beat a 24-point capabilityFit spread even
+  // at 2.0x weight. Rebalanced the same way: cost weight materially lower,
+  // capabilityFit weight higher, re-verified against the real scoring
+  // function (cortex/routing.test.ts) for the whole approved pool, not just
+  // the pair that first exposed it.
+  coding: { quality: 1.0, capabilityFit: 2.4, reliability: 1.4, cost: 0.35, latency: 0.4 },
   // "Complex workflow: quality > reliability > cost > latency"
-  deep_quality: { quality: 2.0, capabilityFit: 1.2, reliability: 1.5, cost: 0.8, latency: 0.3 },
+  //
+  // cost was 0.8 and capabilityFit 1.2. Verified against migration 0032's
+  // REAL prices (not the stale figures the registry had before it): with
+  // those weights, GLM 5.2 — the spec's stated primary for reasoning,
+  // research, writing and complex general chat — lost to cheaper candidates
+  // in every one of those categories, because cost's log-scaled spread
+  // across this five-model pool (~62 points) exceeded quality's spread
+  // (~12 points raw, ~14 points even at the old 1.2x) by enough to dominate
+  // regardless of which model was actually better. "Quality > cost" was true
+  // in the comment and false in the arithmetic. Rebalanced so it is true in
+  // both, and re-verified against the full pool (see cortex/routing.test.ts
+  // for the worked cases this was checked against, including the ones that
+  // motivated the change).
+  deep_quality: { quality: 2.0, capabilityFit: 1.6, reliability: 1.5, cost: 0.35, latency: 0.3 },
   // "Media generation: quality > cost > latency"
   media: { quality: 2.0, capabilityFit: 1.0, reliability: 1.2, cost: 1.0, latency: 0.3 },
 };

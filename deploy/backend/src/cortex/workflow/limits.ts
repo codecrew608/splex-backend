@@ -6,10 +6,15 @@ export interface WorkflowLimits {
   maxCostCredits: number;
 }
 
-// Matches the free tier's own plan_limits values — used only if the lookup
-// itself fails (not if the row is legitimately absent for some tier), so
-// staying conservative here never accidentally grants more than intended.
-const FALLBACK_LIMITS: WorkflowLimits = { maxSteps: 3, maxCostCredits: 5000 };
+// Used only if the plan_limits lookup itself fails (not if the row is
+// legitimately absent for some tier). maxSteps: 0 fails CLOSED rather than
+// defaulting to Free's old value (3) — Free is entitled to zero workflow
+// steps (see migration 0032), so any nonzero fallback here would leak
+// workflow capability to Free on a transient DB error. This degrades
+// safely to plain chat (orchestrator.ts's maxSteps<=0 guard), not to an
+// error, so failing closed costs nothing but a temporarily-unavailable
+// workflow for a Paid user during that same outage.
+const FALLBACK_LIMITS: WorkflowLimits = { maxSteps: 0, maxCostCredits: 5000 };
 
 export async function getWorkflowLimits(fastify: FastifyInstance, planTier: PlanTier): Promise<WorkflowLimits> {
   const { data, error } = await fastify.supabaseAdmin

@@ -564,6 +564,16 @@ export async function startWorkflow(params: {
   const cortexVersion = resolveCortexVersion(user.planTier);
 
   const limits = await getWorkflowLimits(fastify, user.planTier);
+  // maxSteps:0 means this tier's product entitlement is "no workflows" (see
+  // plan_limits, migration 0032 — Free excludes workflows/agents entirely).
+  // Without this check, planWorkflow would still spend a real planner-model
+  // call asking for "between 2 and 0 steps", a prompt that makes no sense
+  // and produces an empty/broken plan either way. Falling through to
+  // ordinary single-shot chat is the correct, zero-cost degradation — the
+  // same "fallback" outcome shouldUseWorkflow's caller already handles.
+  if (limits.maxSteps <= 0) {
+    return { handled: false };
+  }
   const plan = await planWorkflow(fastify, message, contextBlock, limits.maxSteps, user.planTier);
 
   if (plan.outcome === "fallback") {
@@ -713,6 +723,13 @@ export async function resumeWorkflow(params: {
   // round is its own request, not an unbounded in-request loop.
   if (run.clarification_step_index === null || run.plan === null) {
     const limits = await getWorkflowLimits(fastify, user.planTier);
+    // Same zero-step guard as startWorkflow — a plan-tier downgrade
+    // between the original request and this resume must not spend a
+    // planner call it can never legally use.
+    if (limits.maxSteps <= 0) {
+      await fastify.supabaseAdmin.from("workflow_runs").update({ status: "cancelled" }).eq("id", run.id);
+      return { handled: false };
+    }
     const augmentedContext = `${contextBlock}\n\nThe user was previously asked: "${run.clarification_question ?? ""}"\nTheir answer: ${answer}`;
     const plan = await planWorkflow(fastify, "(see clarification above)", augmentedContext, limits.maxSteps, user.planTier);
 

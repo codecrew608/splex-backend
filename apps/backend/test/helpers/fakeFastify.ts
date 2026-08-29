@@ -28,6 +28,17 @@ export interface FakeState {
   nextId: number;
   rpcCalls: Array<{ name: string; params: Record<string, unknown> }>;
   logs: Array<{ level: string; msg: string }>;
+  // Opt-in seed for plan_limits rows, keyed by counter_type, for the
+  // single planTier this state represents. Undefined (the default) keeps
+  // every table/counter_type resolving to the generic stub's `null` —
+  // zero behavior change for the other three suites that share this fake
+  // and don't set it. Only getWorkflowLimits() reads plan_limits directly
+  // among the code this file exercises, so this exists to let workflow
+  // scenario tests seed workflow_steps/workflow_cost with real per-tier
+  // values instead of accidentally depending on getWorkflowLimits' own
+  // error-fallback path (which now fails CLOSED to maxSteps:0) standing
+  // in for "the real DB has a normal row here".
+  planLimits?: Record<string, number | null>;
 }
 
 export function makeState(overrides: Partial<FakeState> = {}): FakeState {
@@ -319,11 +330,30 @@ export function makeFastify(state: FakeState) {
         return makeWorkflowBuilder(table, state);
       }
 
+      if (table === "plan_limits" && state.planLimits) {
+        // Only reachable when a test opts in via state.planLimits — see
+        // that field's doc comment. Filters ignored (same simplification
+        // as the rest of this generic stub): getWorkflowLimits' own .in()
+        // already narrows to the two counter_types it cares about, and
+        // this fake only ever represents a single plan_tier per test run.
+        const rows = Object.entries(state.planLimits).map(([counter_type, limit_amount]) => ({ counter_type, limit_amount }));
+        const api: Record<string, unknown> = {};
+        const chain = () => api;
+        Object.assign(api, {
+          select: chain, eq: chain, in: chain, gte: chain, order: chain, limit: chain,
+          single: async () => ({ data: rows[0] ?? null, error: null }),
+          maybeSingle: async () => ({ data: rows[0] ?? null, error: null }),
+          then: (res: (v: unknown) => unknown) => res({ data: rows, error: null }),
+        });
+        return api;
+      }
+
       // Original fully-generic stub, unchanged, for every other table
-      // (generated_media, plan_limits, credit_cost_bands, model_registry,
-      // user_memory, cortex_decisions, ...): always resolves null/[],
-      // which is exactly the conservative-fallback behavior those code
-      // paths are already written (and tested) to degrade into.
+      // (generated_media, plan_limits without an explicit seed,
+      // credit_cost_bands, model_registry, user_memory, cortex_decisions,
+      // ...): always resolves null/[], which is exactly the
+      // conservative-fallback behavior those code paths are already
+      // written (and tested) to degrade into.
       const api: Record<string, unknown> = {};
       const chain = () => api;
       Object.assign(api, {

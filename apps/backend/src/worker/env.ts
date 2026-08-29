@@ -23,7 +23,7 @@ const workerEnvSchema = z.object({
   OPENROUTER_SITE_URL: z.string().url(),
   OPENROUTER_APP_NAME: z.string().default("SPLEX"),
   CORTEX_CLASSIFIER_MODEL_ID: z.string().min(1),
-  CREDITS_PER_USD: z.coerce.number().positive().default(20_000),
+  CREDITS_PER_USD: z.coerce.number().positive().default(120_000),
   // Optional here (unlike the Fastify schema, which defaults to a
   // loopback URL) — on Workers there is no "same machine" to default to;
   // an unset value means the intelligence service is genuinely

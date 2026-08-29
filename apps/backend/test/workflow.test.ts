@@ -81,7 +81,7 @@ beforeEach(() => {
 
 describe("scenario 1: clarification pause -> resume", () => {
   it("1a: a planning-stage clarification pauses before any charge is even attempted", async () => {
-    const state = makeState({ planTier: "pro", dailyLimit: 750, monthlyLimit: 15000 });
+    const state = makeState({ planTier: "pro", dailyLimit: 750, monthlyLimit: 15000, planLimits: { workflow_steps: 10, workflow_cost: 40000 } });
     const fastify = makeFastify(state);
     const sse = makeFakeSSE();
     vi.mocked(planWorkflow).mockResolvedValueOnce({ outcome: "clarify", question: "Which color scheme?" });
@@ -109,7 +109,7 @@ describe("scenario 1: clarification pause -> resume", () => {
   });
 
   it("1b: resuming a planning-stage pause runs the re-planned step(s) to completion, charged once", async () => {
-    const state = makeState({ planTier: "pro", dailyLimit: 750, monthlyLimit: 15000 });
+    const state = makeState({ planTier: "pro", dailyLimit: 750, monthlyLimit: 15000, planLimits: { workflow_steps: 10, workflow_cost: 40000 } });
     const fastify = makeFastify(state);
     const sse = makeFakeSSE();
     const runId = makeWorkflowRun(state, {
@@ -152,7 +152,7 @@ describe("scenario 1: clarification pause -> resume", () => {
   });
 
   it("1c: a non-final step's clarifying question pauses mid-execution; both attempted steps are charged", async () => {
-    const state = makeState({ planTier: "pro", dailyLimit: 750, monthlyLimit: 15000 });
+    const state = makeState({ planTier: "pro", dailyLimit: 750, monthlyLimit: 15000, planLimits: { workflow_steps: 10, workflow_cost: 40000 } });
     const fastify = makeFastify(state);
     const sse = makeFakeSSE();
     vi.mocked(planWorkflow).mockResolvedValueOnce({
@@ -204,7 +204,7 @@ describe("scenario 1: clarification pause -> resume", () => {
     // ceiling (it's a true-up, not a new admission check — see checkCredits.ts),
     // but the fresh RESERVE this resume attempts for step1's retry does check
     // against the cap, so the fixture has to leave room for it.
-    const state = makeState({ planTier: "pro", dailyLimit: 5000, monthlyLimit: 15000, dailyUsed: STEP_COST * 2, monthlyUsed: STEP_COST * 2 });
+    const state = makeState({ planTier: "pro", dailyLimit: 5000, monthlyLimit: 15000, dailyUsed: STEP_COST * 2, monthlyUsed: STEP_COST * 2, planLimits: { workflow_steps: 10, workflow_cost: 40000 } });
     const fastify = makeFastify(state);
     const sse = makeFakeSSE();
 
@@ -296,7 +296,7 @@ describe("scenario 1: clarification pause -> resume", () => {
 
 describe("displayed charge integrity: what the user is shown equals what they were charged", () => {
   it("a normal (never-paused) workflow displays exactly the sum of its steps", async () => {
-    const state = makeState({ planTier: "pro", dailyLimit: 5000, monthlyLimit: 15000 });
+    const state = makeState({ planTier: "pro", dailyLimit: 5000, monthlyLimit: 15000, planLimits: { workflow_steps: 10, workflow_cost: 40000 } });
     const fastify = makeFastify(state);
     const sse = makeFakeSSE();
     vi.mocked(planWorkflow).mockResolvedValueOnce({
@@ -321,7 +321,7 @@ describe("displayed charge integrity: what the user is shown equals what they we
   });
 
   it("a FAILED workflow displays no charge at all — it inserts no assistant message", async () => {
-    const state = makeState({ planTier: "pro", dailyLimit: 5000, monthlyLimit: 15000 });
+    const state = makeState({ planTier: "pro", dailyLimit: 5000, monthlyLimit: 15000, planLimits: { workflow_steps: 10, workflow_cost: 40000 } });
     const fastify = makeFastify(state);
     const sse = makeFakeSSE();
     vi.mocked(planWorkflow).mockResolvedValueOnce({
@@ -349,7 +349,7 @@ describe("displayed charge integrity: what the user is shown equals what they we
   });
 
   it("a CANCELLED workflow displays no charge — cancellation writes no message", async () => {
-    const state = makeState({ planTier: "pro", dailyLimit: 5000, monthlyLimit: 15000 });
+    const state = makeState({ planTier: "pro", dailyLimit: 5000, monthlyLimit: 15000, planLimits: { workflow_steps: 10, workflow_cost: 40000 } });
     const fastify = makeFastify(state);
     const runId = makeWorkflowRun(state, { conversation_id: "conv-1", status: "running" });
 
@@ -361,20 +361,49 @@ describe("displayed charge integrity: what the user is shown equals what they we
     expect(state.monthlyUsed).toBe(0);
   });
 
-  it("a workflow blocked before any step runs charges nothing and displays nothing", async () => {
-    // Structural per-plan workflow-cost ceiling rejects the plan upfront.
-    const state = makeState({ planTier: "free", dailyLimit: 150, monthlyLimit: 3000 });
+  it("Free (workflow_steps: 0, migration 0032) never even attempts to plan — silent no-op, not a visible error", async () => {
+    // Free's real entitlement is zero workflow steps (spec: no
+    // workflows/agents on Free). The maxSteps<=0 guard in startWorkflow
+    // returns {handled:false} before planWorkflow is ever called, so
+    // chat.ts's caller falls through to ordinary single-shot chat — no
+    // wasted planner call, no SSE error event of its own (an "error"
+    // here would be the WRONG signal: this isn't a failure, it's simply
+    // not a workflow request for this tier).
+    const state = makeState({ planTier: "free", dailyLimit: 150, monthlyLimit: 3000, planLimits: { workflow_steps: 0, workflow_cost: 25000 } });
+    const fastify = makeFastify(state);
+    const sse = makeFakeSSE();
+
+    const result = await startWorkflow({
+      fastify, sse, user: { ...USER, planTier: "free" }, conversationId: "conv-1", userMessageId: "msg-1",
+      message: "enormous", contextBlock: "", systemPromptText: "sys", abortSignal: abortSignal(),
+    });
+
+    expect(result).toEqual({ handled: false });
+    expect(vi.mocked(planWorkflow)).not.toHaveBeenCalled();
+    expect(state.dailyUsed).toBe(0);
+    expect(state.monthlyUsed).toBe(0);
+    expect(state.messages.size).toBe(0);
+    expect(state.workflowSteps.size).toBe(0);
+    expect(sse.events.length).toBe(0);
+  });
+
+  it("a plan too large for a paid user's per-workflow ceiling is rejected upfront, charging nothing", async () => {
+    // Structural per-plan workflow-cost ceiling rejects the plan before any
+    // step executes — distinct from the zero-step-budget case above: this
+    // user genuinely has workflows (workflow_steps: 10), the PLAN itself is
+    // just too expensive for the per-workflow ceiling (workflow_cost).
+    const state = makeState({ planTier: "pro", dailyLimit: 750, monthlyLimit: 15000, planLimits: { workflow_steps: 10, workflow_cost: 40000 } });
     const fastify = makeFastify(state);
     const sse = makeFakeSSE();
     vi.mocked(planWorkflow).mockResolvedValueOnce({
       outcome: "workflow",
-      // Fallback limits are maxSteps:3 / maxCostCredits:5000 and the
-      // fallback per-step estimate is 50 -> 200 steps * 50 = 10000 > 5000.
-      steps: Array.from({ length: 200 }, (_, i) => ({ title: `S${i}`, category: "writing", detailedPrompt: "..." })),
+      // credit_cost_bands isn't seeded in this fake, so resolveWorkflowStepEstimate
+      // always takes its error-fallback flat estimate of 50/step -> 900 * 50 = 45000 > 40000.
+      steps: Array.from({ length: 900 }, (_, i) => ({ title: `S${i}`, category: "writing", detailedPrompt: "..." })),
     });
 
     await startWorkflow({
-      fastify, sse, user: { ...USER, planTier: "free" }, conversationId: "conv-1", userMessageId: "msg-1",
+      fastify, sse, user: { ...USER, planTier: "pro" }, conversationId: "conv-1", userMessageId: "msg-1",
       message: "enormous", contextBlock: "", systemPromptText: "sys", abortSignal: abortSignal(),
     });
 
@@ -449,7 +478,7 @@ describe("scenario 2: edit/regenerate cancellation", () => {
 
 describe("scenario 3: zero live candidates -> zero credit charge", () => {
   it("3a: zero candidates for a fresh single-step plan fails cleanly, with only the harmless upfront affordability check", async () => {
-    const state = makeState({ planTier: "pro", dailyLimit: 750, monthlyLimit: 15000 });
+    const state = makeState({ planTier: "pro", dailyLimit: 750, monthlyLimit: 15000, planLimits: { workflow_steps: 10, workflow_cost: 40000 } });
     const fastify = makeFastify(state);
     const sse = makeFakeSSE();
     vi.mocked(planWorkflow).mockResolvedValueOnce({
@@ -474,7 +503,7 @@ describe("scenario 3: zero live candidates -> zero credit charge", () => {
   });
 
   it("3b: the cleanest form -- resuming straight into a no-candidates step calls zero credit RPCs at all", async () => {
-    const state = makeState({ planTier: "pro", dailyLimit: 750, monthlyLimit: 15000 });
+    const state = makeState({ planTier: "pro", dailyLimit: 750, monthlyLimit: 15000, planLimits: { workflow_steps: 10, workflow_cost: 40000 } });
     const fastify = makeFastify(state);
     const sse = makeFakeSSE();
     const steps = [{ title: "Step A", category: "video", categoryLabel: "Video", detailedPrompt: "..." }];
@@ -503,7 +532,7 @@ describe("scenario 3: zero live candidates -> zero credit charge", () => {
   });
 
   it("3c: an earlier step's legitimate charge survives a later step having no candidates", async () => {
-    const state = makeState({ planTier: "pro", dailyLimit: 750, monthlyLimit: 15000 });
+    const state = makeState({ planTier: "pro", dailyLimit: 750, monthlyLimit: 15000, planLimits: { workflow_steps: 10, workflow_cost: 40000 } });
     const fastify = makeFastify(state);
     const sse = makeFakeSSE();
     vi.mocked(planWorkflow).mockResolvedValueOnce({
@@ -584,7 +613,7 @@ describe("scenario 4: stale-run reaping", () => {
 
 describe("scenario 5: the atomic-claim race in resumeWorkflow", () => {
   it("5a: two concurrent resumes on the same run execute exactly once, charged exactly once", async () => {
-    const state = makeState({ planTier: "pro", dailyLimit: 750, monthlyLimit: 15000 });
+    const state = makeState({ planTier: "pro", dailyLimit: 750, monthlyLimit: 15000, planLimits: { workflow_steps: 10, workflow_cost: 40000 } });
     const fastify = makeFastify(state);
     const runId = makeWorkflowRun(state, {
       status: "awaiting_clarification",
@@ -613,7 +642,7 @@ describe("scenario 5: the atomic-claim race in resumeWorkflow", () => {
   });
 
   it("5b, order A (cancel wins the race): a cancel ahead of a resume blocks the claim entirely -- nothing executes, nothing is charged", async () => {
-    const state = makeState({ planTier: "pro", dailyLimit: 750, monthlyLimit: 15000 });
+    const state = makeState({ planTier: "pro", dailyLimit: 750, monthlyLimit: 15000, planLimits: { workflow_steps: 10, workflow_cost: 40000 } });
     const fastify = makeFastify(state);
     const runId = makeWorkflowRun(state, {
       status: "awaiting_clarification",
@@ -645,7 +674,7 @@ describe("scenario 5: the atomic-claim race in resumeWorkflow", () => {
     // so nothing is generated and nothing is charged. The cancelled state
     // also survives: no terminal write can overwrite it, because each one
     // is conditional on the run still being 'running'.
-    const state = makeState({ planTier: "pro", dailyLimit: 750, monthlyLimit: 15000 });
+    const state = makeState({ planTier: "pro", dailyLimit: 750, monthlyLimit: 15000, planLimits: { workflow_steps: 10, workflow_cost: 40000 } });
     const fastify = makeFastify(state);
     const runId = makeWorkflowRun(state, {
       status: "awaiting_clarification",
@@ -675,7 +704,7 @@ describe("scenario 5: the atomic-claim race in resumeWorkflow", () => {
   });
 
   it("5c: a cancel between steps stops the run before any further step is dispatched or charged", async () => {
-    const state = makeState({ planTier: "pro", dailyLimit: 5000, monthlyLimit: 15000 });
+    const state = makeState({ planTier: "pro", dailyLimit: 5000, monthlyLimit: 15000, planLimits: { workflow_steps: 10, workflow_cost: 40000 } });
     const fastify = makeFastify(state);
     const sse = makeFakeSSE();
     vi.mocked(planWorkflow).mockResolvedValueOnce({

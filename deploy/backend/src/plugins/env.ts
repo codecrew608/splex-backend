@@ -32,7 +32,7 @@ const envSchema = z.object({
   CORTEX_CLASSIFIER_MODEL_ID: z.string().min(1),
   // SPLEX Credits <-> USD conversion rate. Deliberately NOT a token=credit
   // mapping — see credits/realCost.ts. Tunable without changing what users see.
-  CREDITS_PER_USD: z.coerce.number().positive().default(20_000),
+  CREDITS_PER_USD: z.coerce.number().positive().default(120_000),
   // Local FastAPI sidecar — Tesseract OCR + BGE-small embeddings. See
   // services/intelligence/main.py.
   INTELLIGENCE_SERVICE_URL: z.string().url().default("http://127.0.0.1:8100"),
