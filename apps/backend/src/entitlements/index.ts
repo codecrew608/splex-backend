@@ -394,54 +394,31 @@ export async function getDailyLimit(
 // renders only when a real cap exists.
 const UI_CAPABILITIES: Capability[] = ["image", "video", "audio", "ppt", "web_search", "deep_research", "files", "projects", "chat"];
 
-export interface CreditBalance {
-  used: number;
-  limit: number | null;
-  available: boolean;
-}
-
 export interface EntitlementSnapshot {
   planTier: PlanTier;
-  credits: CreditBalance;
-  dailyCredits: CreditBalance;
   quotas: QuotaState[];
 }
 
 // One round trip for the whole usage panel (see routes/entitlements.ts).
 // Never includes model ids, provider names, or costs — this is a
 // user-facing surface.
+//
+// Deliberately does NOT include monthly/daily SPLEX credit balances.
+// SPLEX credits are an internal backend metering unit, not a product
+// concept — the frontend must never render "X / Y credits" anywhere, and
+// this endpoint is the one thing it's allowed to call for its own state,
+// so the fix belongs here: never compute or send the number in the first
+// place, rather than trust every caller to just not render a field that's
+// sitting right there in the response. getCreditLimit/getDailyLimit above
+// are left in place as internal utilities (still correct, still usable by
+// backend-only code) — only this frontend-facing aggregate stopped
+// calling them.
 export async function getEntitlementSnapshot(
   fastify: FastifyInstance,
   userId: string,
   planTier: PlanTier,
 ): Promise<EntitlementSnapshot> {
-  const [creditLimit, creditsUsed, dailyCreditLimit, dailyCreditsUsed, ...quotas] = await Promise.all([
-    getCreditLimit(fastify, planTier),
-    fetchUsage(fastify, userId, { kind: "usage_counters", counterType: "credits", period: "month" }),
-    fetchLimit(fastify, planTier, "daily_credits"),
-    // Reuses the same IST day-boundary usage_counters lookup pattern as
-    // every other per-day quota in this file — see check_daily_credits'/
-    // consume_daily_credits' own comment (migration 0018) for why IST
-    // specifically, not UTC.
-    fetchUsage(fastify, userId, { kind: "usage_counters", counterType: "daily_credits", period: "day" }),
-    ...UI_CAPABILITIES.map((c) => getQuotaState(fastify, userId, planTier, c)),
-  ]);
+  const quotas = await Promise.all(UI_CAPABILITIES.map((c) => getQuotaState(fastify, userId, planTier, c)));
 
-  return {
-    planTier,
-    credits: {
-      used: Number.isFinite(creditsUsed) ? creditsUsed : 0,
-      limit: creditLimit === undefined ? null : creditLimit,
-      // False when the limit genuinely couldn't be resolved — the UI shows
-      // "—" rather than inventing a percentage (spec: never falsely display
-      // 100% remaining).
-      available: creditLimit !== undefined,
-    },
-    dailyCredits: {
-      used: Number.isFinite(dailyCreditsUsed) ? dailyCreditsUsed : 0,
-      limit: dailyCreditLimit === undefined ? null : dailyCreditLimit,
-      available: dailyCreditLimit !== undefined,
-    },
-    quotas: quotas as QuotaState[],
-  };
+  return { planTier, quotas };
 }

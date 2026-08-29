@@ -211,8 +211,8 @@ export async function runChat(
         if (!visionQuota.allowed) {
           const message =
             visionQuota.dailyLimit !== null && visionQuota.dailyUsed >= visionQuota.dailyLimit
-              ? `You've reached today's vision/image-understanding limit (${visionQuota.dailyLimit}/day).`
-              : `You've reached this month's vision/image-understanding limit (${visionQuota.monthlyLimit}).`;
+              ? "Your current usage limit has been reached. Please try again later."
+              : "Your current plan limit has been reached. Please try again later or upgrade your plan.";
           sse.error({ message });
           sse.done({ blocked: true, conversationId, userMessageId });
           sse.end();
@@ -231,10 +231,10 @@ export async function runChat(
         buildMarkdown: (result, prompt) => `![${prompt.slice(0, 200).replace(/[[\]]/g, "")}](${result.url})`,
         quotaExceededMessage: (quota: MediaQuota) =>
           quota.blockedBy === "monthly"
-            ? `You've reached this month's image generation limit (${quota.monthlyLimit}).`
+            ? "Your current plan limit has been reached. Please try again later or upgrade your plan."
             : quota.limit === 0
               ? "Image generation isn't available on your plan."
-              : `You've reached today's image generation limit (${quota.limit}/day${user.planTier === "free" ? " on Free — upgrade to Starter for 5/day" : ""}).`,
+              : "Your current usage limit has been reached. Please try again later.",
         unavailableMessage: "Image generation is temporarily unavailable, please try again shortly.",
         failedMessage: "Image generation failed, please try again.",
       });
@@ -260,10 +260,10 @@ export async function runChat(
         buildMarkdown: (result) => `[🔊 Generated audio](${result.url})`,
         quotaExceededMessage: (quota: MediaQuota) =>
           quota.blockedBy === "monthly"
-            ? `You've reached this month's audio generation limit (${quota.monthlyLimit} minutes).`
+            ? "Your current plan limit has been reached. Please try again later or upgrade your plan."
             : quota.limit === 0
               ? "Text-to-speech is a Starter feature — upgrade to unlock it."
-              : `You've reached today's audio generation limit (${quota.limit} minutes/day).`,
+              : "Your current usage limit has been reached. Please try again later.",
         unavailableMessage: "Audio generation is temporarily unavailable, please try again shortly.",
         failedMessage: "Audio generation failed, please try again.",
       });
@@ -279,10 +279,10 @@ export async function runChat(
         buildMarkdown: (result) => `[📊 Download presentation (${result.slideCount} slides)](${result.url})`,
         quotaExceededMessage: (quota: MediaQuota) =>
           quota.blockedBy === "monthly"
-            ? `You've reached this month's presentation limit (${quota.monthlyLimit}).`
+            ? "Your current plan limit has been reached. Please try again later or upgrade your plan."
             : quota.limit === 0
               ? "Presentation generation is a Starter feature — upgrade to unlock it."
-              : `You've reached today's presentation limit (${quota.limit}/day).`,
+              : "Your current usage limit has been reached. Please try again later.",
         unavailableMessage: "Presentation generation is temporarily unavailable, please try again shortly.",
         failedMessage: "Presentation generation failed, please try again.",
       });
@@ -310,10 +310,10 @@ export async function runChat(
         placeholderContent: "🎬 Generating your video — this can take a minute or two.",
         quotaExceededMessage: (quota: MediaQuota) =>
           quota.blockedBy === "monthly"
-            ? `You've reached this month's video generation limit (${quota.monthlyLimit}).`
+            ? "Your current plan limit has been reached. Please try again later or upgrade your plan."
             : quota.limit === 0
               ? "Video generation is a Starter feature — upgrade to unlock it."
-              : `You've reached today's video generation limit (${quota.limit}/day).`,
+              : "Your current usage limit has been reached. Please try again later.",
         concurrencyExceededMessage: "You already have a video generating — wait for it to finish before starting another.",
         unavailableMessage: "Video generation is temporarily unavailable, please try again shortly.",
         submitFailedMessage: "Couldn't start video generation, please try again.",
@@ -465,10 +465,12 @@ export async function runChat(
       skipDaily: true,
     });
 
+    // realCost.creditsCharged is real, persisted (consumeCredits above) —
+    // never sent to the client, on either field. SPLEX credits are an
+    // internal metering unit, not a product-facing number.
     sse.done({
       messageId: assistantMessageId,
       conversationId,
-      creditsCharged: realCost.creditsCharged,
       userMessageId,
       routing: {
         cortexVersion,
@@ -476,7 +478,6 @@ export async function runChat(
         complexity: decision.complexity,
         modelDisplayName: friendlyModelName(model.openrouter_model_id),
         reason: explainModelSelection(decision.category, decision.complexity, cortexVersion),
-        creditsCharged: realCost.creditsCharged,
         responseTimeMs: Date.now() - requestStartedAt,
       },
     });

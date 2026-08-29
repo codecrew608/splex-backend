@@ -69,14 +69,14 @@ export function MessageCortexDisclosure({ workflowSteps, cortexVersion, routing 
 
   if (!routing) return null;
 
-  // Credits deliberately absent. routing.creditsCharged is still delivered
-  // and still recorded server-side — this is a display decision, not a
-  // billing one. Watching a per-message cost tick up made users anxious
-  // about asking the next question, which is the opposite of what the
-  // routing disclosure is for: it exists to show that a considered choice
-  // was made on their behalf, not to invoice them line by line. The
-  // balance meter in the sidebar remains the one place credits surface in
-  // the app, so hitting a daily cap is still never a surprise.
+  // Credits deliberately absent — SPLEX credits are an internal backend
+  // metering unit, never shown anywhere in the product UI (see
+  // DoneEventData/CortexRoutingInfo in shared-types: creditsCharged isn't
+  // even sent to the client anymore, not just hidden here). This panel
+  // exists to show that a considered model choice was made on the user's
+  // behalf, not to invoice them line by line — watching a per-message
+  // cost tick up made users anxious about asking the next question, which
+  // is the opposite of the point.
   const rows: Array<[string, string]> = [
     ["Model", routing.modelDisplayName],
     ["Complexity", complexityLabel(routing.complexity)],

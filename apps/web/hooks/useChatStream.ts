@@ -77,7 +77,6 @@ function emptyMessage(id: string, conversationId: string, role: "user" | "assist
     content,
     intent: null,
     complexity: null,
-    creditsCharged: null,
     createdAt: new Date().toISOString(),
   };
 }

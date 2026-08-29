@@ -9,19 +9,14 @@ import { MemoryEditor } from "@/components/memory/MemoryEditor";
 import { planDisplayName } from "@/lib/planDisplay";
 import type { PlanTier } from "@/shared-types";
 
-// Bare-date (not timestamp) period keys, Asia/Kolkata — matches the
-// backend entitlement service's own convention (entitlements/index.ts).
-// Filtering by the CURRENT period explicitly, rather than taking whatever
-// usage_counters row happens to be most recent, is what this page fixed
-// here too — the same live-caught bug (a user's very first page load of a
-// new period would otherwise show a prior period's stale count).
-function todayDateIST(): string {
-  return new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Kolkata" }).format(new Date());
-}
-function monthStartDateIST(): string {
-  return `${todayDateIST().slice(0, 7)}-01`;
-}
-
+// SPLEX credit balances (monthly/daily usage_counters vs plan_limits)
+// were previously queried and rendered directly here, with their own
+// progress bar. Removed — SPLEX credits are an internal backend metering
+// unit, never a product-facing number, regardless of whether the query
+// runs server-side (this page) or client-side. UsagePanel below still
+// shows per-capability feature usage (e.g. "3/5 images today"), which is
+// legitimate product UX and stays; it goes through the backend's own
+// GET /entitlements, never a direct plan_limits/usage_counters read.
 export default async function SettingsPage() {
   const supabase = await createClient();
   const {
@@ -33,30 +28,7 @@ export default async function SettingsPage() {
   const { data: profile } = await supabase.from("users").select("plan_tier").eq("id", user.id).single();
   const planTier = (profile?.plan_tier ?? "free") as PlanTier;
 
-  const [{ data: usageRow }, { data: limitRow }, { data: dailyUsageRow }, { data: dailyLimitRow }, { data: memoryRow }] = await Promise.all([
-    supabase
-      .from("usage_counters")
-      .select("used")
-      .eq("user_id", user.id)
-      .eq("counter_type", "credits")
-      .eq("period_start", monthStartDateIST())
-      .maybeSingle(),
-    supabase.from("plan_limits").select("limit_amount").eq("plan_tier", planTier).eq("counter_type", "credits").maybeSingle(),
-    supabase
-      .from("usage_counters")
-      .select("used")
-      .eq("user_id", user.id)
-      .eq("counter_type", "daily_credits")
-      .eq("period_start", todayDateIST())
-      .maybeSingle(),
-    supabase.from("plan_limits").select("limit_amount").eq("plan_tier", planTier).eq("counter_type", "daily_credits").maybeSingle(),
-    supabase.from("user_memory").select("summary_text").eq("user_id", user.id).maybeSingle(),
-  ]);
-
-  const creditsUsed = usageRow?.used ?? 0;
-  const creditsTotal = limitRow?.limit_amount ?? 0;
-  const dailyUsed = dailyUsageRow?.used ?? 0;
-  const dailyTotal = dailyLimitRow?.limit_amount ?? null;
+  const { data: memoryRow } = await supabase.from("user_memory").select("summary_text").eq("user_id", user.id).maybeSingle();
 
   return (
     <div className="mx-auto h-dvh max-w-2xl overflow-y-auto px-4 pb-10 pt-14 sm:px-6 sm:pt-10">
@@ -72,15 +44,6 @@ export default async function SettingsPage() {
         <div className="mt-1 flex items-center justify-between gap-4">
           <div>
             <p className="text-sm text-foreground">{planDisplayName(planTier)}</p>
-            <p className="text-xs text-muted-foreground">
-              {creditsTotal > 0 ? `${creditsUsed.toLocaleString()} / ${creditsTotal.toLocaleString()}` : "—"} SPLEX Credits used this
-              cycle
-            </p>
-            {dailyTotal !== null && (
-              <p className="text-xs text-muted-foreground">
-                {dailyUsed.toLocaleString()} / {dailyTotal.toLocaleString()} SPLEX Credits used today
-              </p>
-            )}
           </div>
           {planTier === "free" ? (
             <Link
@@ -92,12 +55,6 @@ export default async function SettingsPage() {
           ) : (
             <CancelSubscriptionButton />
           )}
-        </div>
-        <div className="mt-3 h-1.5 w-full overflow-hidden rounded-full bg-surface-raised">
-          <div
-            className="h-full rounded-full bg-accent"
-            style={{ width: `${creditsTotal > 0 ? Math.min(100, (creditsUsed / creditsTotal) * 100) : 0}%` }}
-          />
         </div>
       </div>
 

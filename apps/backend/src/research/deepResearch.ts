@@ -203,10 +203,10 @@ export async function runDeepResearch(params: RunDeepResearchParams): Promise<vo
   if (!quota.allowed) {
     const message =
       quota.blockedBy === "monthly"
-        ? `You've reached this month's deep research limit (${quota.monthlyLimit}).`
+        ? "Your current plan limit has been reached. Please try again later or upgrade your plan."
         : quota.limit === 0
           ? "Deep research is a Starter feature — upgrade to unlock it."
-          : `You've reached today's deep research limit (${quota.limit}/day).`;
+          : "Your current usage limit has been reached. Please try again later.";
     sse.error({ message });
     sse.done({ blocked: true, conversationId, userMessageId });
     sse.end();
@@ -470,7 +470,10 @@ export async function runDeepResearch(params: RunDeepResearchParams): Promise<vo
         });
 
         sse.token({ delta: content });
-        sse.done({ messageId: assistantMessageId, conversationId, userMessageId, creditsCharged: totalCreditsCharged });
+        // totalCreditsCharged is real, persisted (insertMessage above,
+        // consumeCredits below) — never sent to the client; SPLEX credits
+        // are an internal metering unit, not a product-facing number.
+        sse.done({ messageId: assistantMessageId, conversationId, userMessageId });
         sse.end();
         return;
       }
@@ -538,11 +541,11 @@ export async function runDeepResearch(params: RunDeepResearchParams): Promise<vo
       });
 
       sse.token({ delta: writeResult.content });
+      // totalCreditsCharged is real, persisted — never sent to the client.
       sse.done({
         messageId: assistantMessageId,
         conversationId,
         userMessageId,
-        creditsCharged: totalCreditsCharged,
         citations,
       });
       sse.end();

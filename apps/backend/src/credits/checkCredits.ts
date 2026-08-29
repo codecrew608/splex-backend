@@ -74,9 +74,12 @@ export type CreditRejectionReason =
 // "...to complete this multi-step request" rather than this generic
 // string — can still reuse the exact same daily-limit text rather than
 // duplicating the literal string at every call site.
+// Deliberately generic — never "SPLEX credits", never a number. SPLEX
+// credits are an internal backend metering unit; the user should see a
+// normal product-style limit message, not internal accounting terms.
 export const DAILY_REQUEST_LIMIT_MESSAGE = "You've reached your daily request limit. Please try again tomorrow.";
-export const DAILY_CREDIT_LIMIT_MESSAGE = "You've reached your daily SPLEX credit limit. Please try again tomorrow.";
-const CREDITS_EXHAUSTED_MESSAGE = "You've used your available SPLEX credits.";
+export const DAILY_CREDIT_LIMIT_MESSAGE = "Your current usage limit has been reached. Please try again tomorrow.";
+const CREDITS_EXHAUSTED_MESSAGE = "Your current plan limit has been reached. Please try again later or upgrade your plan.";
 
 // Determines WHY a preceding checkCredits()/checkAndReserveCredits() call
 // returned false — never call this to decide whether to allow a request,

@@ -23,9 +23,15 @@ export default async function ConversationPage({ params }: PageProps) {
     notFound();
   }
 
+  // credits_charged is deliberately NOT selected — SPLEX credits are an
+  // internal backend metering unit, never sent to the client. This was
+  // previously fetched and threaded all the way into ChatMessage without
+  // ever being rendered anywhere (see MessageCortexDisclosure.tsx's own
+  // "credits deliberately absent" comment) — real backend data reaching
+  // the browser's RSC payload for a UI element that never displayed it.
   const { data: messageRows } = await supabase
     .from("messages")
-    .select("id, conversation_id, role, content, intent, complexity, credits_charged, created_at")
+    .select("id, conversation_id, role, content, intent, complexity, created_at")
     .eq("conversation_id", conversationId)
     .order("created_at", { ascending: true });
 
@@ -36,7 +42,6 @@ export default async function ConversationPage({ params }: PageProps) {
     content: row.content,
     intent: row.intent,
     complexity: row.complexity,
-    creditsCharged: row.credits_charged,
     createdAt: row.created_at,
   }));
 

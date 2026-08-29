@@ -205,7 +205,11 @@ export async function handleSyncMediaGeneration<R extends SyncMediaGenerationRes
       skipDaily: true,
     });
 
-    sse.done({ messageId: assistantMessageId, conversationId, creditsCharged, userMessageId });
+    // creditsCharged is computed above (dailyActualCost, consumeCredits,
+    // recordMediaGeneration) and persisted, but never sent to the client —
+    // SPLEX credits are an internal metering unit, not a product-facing
+    // number (see DoneEventData's own doc comment in shared-types).
+    sse.done({ messageId: assistantMessageId, conversationId, userMessageId });
     sse.end();
   } finally {
     await settleDailyReservation(fastify, user.id, gate.dailyReserved, dailyActualCost);

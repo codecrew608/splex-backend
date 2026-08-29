@@ -593,8 +593,8 @@ export async function startWorkflow(params: {
   if (!runQuota.allowed) {
     const message =
       runQuota.dailyLimit !== null && runQuota.dailyUsed >= runQuota.dailyLimit
-        ? `You've reached today's workflow limit (${runQuota.dailyLimit}/day).`
-        : `You've reached this month's workflow limit (${runQuota.monthlyLimit}).`;
+        ? "Your current usage limit has been reached. Please try again later."
+        : "Your current plan limit has been reached. Please try again later or upgrade your plan.";
     sse.error({ message });
     sse.done({ blocked: true, conversationId, userMessageId });
     sse.end();
@@ -645,7 +645,7 @@ export async function startWorkflow(params: {
   // workflow, distinct from "you're just low on credits").
   if (estimatedTotal > limits.maxCostCredits) {
     sse.error({
-      message: `This request is too large for your plan's per-workflow limit (${limits.maxCostCredits.toLocaleString()} credits). Try breaking it into smaller requests, or upgrade for a higher limit.`,
+      message: "This request is too large for your current plan limits. Try breaking it into smaller requests, or upgrade your plan.",
     });
     sse.done({ conversationId, userMessageId, blocked: true });
     sse.end();
@@ -664,7 +664,7 @@ export async function startWorkflow(params: {
       message:
         reason === "daily_request_limit_exhausted"
           ? DAILY_REQUEST_LIMIT_MESSAGE
-          : "You don't have enough SPLEX credits to complete this multi-step request.",
+          : "This request is too large for your current plan limits. Try breaking it into smaller requests, or upgrade your plan.",
     });
     sse.done({ conversationId, userMessageId, blocked: true });
     sse.end();
@@ -786,7 +786,7 @@ export async function resumeWorkflow(params: {
     if (estimatedTotal > limits.maxCostCredits) {
       await fastify.supabaseAdmin.from("workflow_runs").update({ status: "cancelled" }).eq("id", run.id);
       sse.error({
-        message: `This request is too large for your plan's per-workflow limit (${limits.maxCostCredits.toLocaleString()} credits). Try breaking it into smaller requests, or upgrade for a higher limit.`,
+        message: "This request is too large for your current plan limits. Try breaking it into smaller requests, or upgrade your plan.",
       });
       sse.done({ conversationId, userMessageId: run.user_message_id, blocked: true });
       sse.end();
@@ -802,7 +802,7 @@ export async function resumeWorkflow(params: {
         message:
           reason === "daily_request_limit_exhausted"
             ? DAILY_REQUEST_LIMIT_MESSAGE
-            : "You don't have enough SPLEX credits to complete this multi-step request.",
+            : "This request is too large for your current plan limits. Try breaking it into smaller requests, or upgrade your plan.",
       });
       sse.done({ conversationId, userMessageId: run.user_message_id, blocked: true });
       sse.end();
@@ -931,7 +931,9 @@ function finishRun(
     sse.end();
     return { handled: true };
   }
-  sse.done({ conversationId, userMessageId, creditsCharged: result.creditsCharged });
+  // result.creditsCharged is real, persisted per-step (executeStep's own
+  // insertMessage/consumeCredits calls) — never sent to the client.
+  sse.done({ conversationId, userMessageId });
   sse.end();
   return { handled: true };
 }

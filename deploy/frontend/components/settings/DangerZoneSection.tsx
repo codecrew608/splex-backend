@@ -68,7 +68,7 @@ export function DangerZoneSection() {
       <div className="border-t border-border pt-4">
         <p className="text-sm text-foreground">Delete account</p>
         <p className="text-xs text-muted-foreground">
-          Permanently deletes your account and everything in it — conversations, projects, files, credits history.
+          Permanently deletes your account and everything in it — conversations, projects, files, and usage history.
           This cannot be undone.
         </p>
 

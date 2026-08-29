@@ -94,7 +94,6 @@ export interface DoneEventData {
   // message that turn).
   userMessageId?: string;
   conversationId?: string;
-  creditsCharged?: number;
   blocked?: boolean;
   partial?: boolean;
   // True when a multi-step workflow paused mid-run to ask the user
@@ -151,7 +150,6 @@ export interface CortexRoutingInfo {
   complexity: ComplexityLevel;
   modelDisplayName: string;
   reason: string;
-  creditsCharged: number;
   responseTimeMs: number;
 }
 
@@ -212,7 +210,6 @@ export interface ChatMessage {
   content: string;
   intent: string | null;
   complexity: ComplexityLevel | null;
-  creditsCharged: number | null;
   createdAt: string;
 }
 
@@ -246,20 +243,13 @@ export interface QuotaState {
   allowed: boolean;
 }
 
-export interface CreditBalance {
-  used: number;
-  limit: number | null;
-  // False when the limit couldn't be resolved at all — the UI must show
-  // "—" rather than inventing a percentage.
-  available: boolean;
-}
-
+// SPLEX credit balances (monthly/daily) are a deliberate omission from
+// this type, not an oversight — they're an internal backend metering
+// unit, never a product-facing number. getEntitlementSnapshot
+// (apps/backend/src/entitlements/index.ts) computes and sends ONLY
+// capability quotas; there is no CreditBalance/credits/dailyCredits field
+// anywhere in what /entitlements returns.
 export interface EntitlementSnapshot {
   planTier: PlanTier;
-  // Two independent ceilings (migration 0018) — monthly is the original
-  // pool, daily is a separate day-scoped cap on top of it. Both must pass
-  // for a request to proceed; either can be the one that's exhausted.
-  credits: CreditBalance;
-  dailyCredits: CreditBalance;
   quotas: QuotaState[];
 }

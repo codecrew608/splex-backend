@@ -39,10 +39,10 @@ export async function handleWebSearch(params: HandleWebSearchParams): Promise<vo
   if (!quota.allowed) {
     const message =
       quota.blockedBy === "monthly"
-        ? `You've reached this month's web search limit (${quota.monthlyLimit}).`
+        ? "Your current plan limit has been reached. Please try again later or upgrade your plan."
         : quota.limit === 0
           ? "Web search isn't available on your plan."
-          : `You've reached today's web search limit (${quota.limit}/day).`;
+          : "Your current usage limit has been reached. Please try again later.";
     sse.error({ message });
     sse.done({ blocked: true, conversationId, userMessageId });
     sse.end();
@@ -193,11 +193,14 @@ export async function handleWebSearch(params: HandleWebSearchParams): Promise<vo
     // Absent (not []) when nothing was actually grounded — see
     // WebSearchResult.searched's doc comment for why this distinction is
     // load-bearing (never implying a search happened when it didn't).
+    // creditsCharged is computed above and persisted (insertMessage,
+    // recordMediaGeneration, consumeCredits), never sent to the client —
+    // SPLEX credits are an internal metering unit, not a product-facing
+    // number.
     sse.done({
       messageId: assistantMessageId,
       conversationId,
       userMessageId,
-      creditsCharged,
       citations: result.searched ? result.citations : undefined,
     });
     sse.end();

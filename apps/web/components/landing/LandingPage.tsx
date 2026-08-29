@@ -44,8 +44,8 @@ const PILLARS = [
   },
   {
     icon: Wallet,
-    title: "Credits, not tokens",
-    body: "One balance across chat, images, web search, files and Agent Workflows — nothing to convert in your head. Your balance sits in the sidebar; individual messages never interrupt you with a price tag.",
+    title: "One plan, no line-item pricing",
+    body: "Chat, images, web search, files and Agent Workflows are all part of your plan — nothing to convert in your head, no per-message price tag interrupting you mid-conversation.",
   },
   {
     icon: Cpu,
@@ -54,22 +54,25 @@ const PILLARS = [
   },
 ];
 
-// Live numbers from plan_limits, checked against production when this page
-// was written. Kept as plain copy rather than a live query on purpose:
-// this route renders for logged-out visitors, and a marketing page must
-// not open a database round-trip (or fail) for someone with no account.
-// The signed-in /upgrade page remains the live, authoritative one.
+// Feature/capability numbers from plan_limits, checked against production
+// when this page was written. Kept as plain copy rather than a live query
+// on purpose: this route renders for logged-out visitors, and a marketing
+// page must not open a database round-trip (or fail) for someone with no
+// account. The signed-in /upgrade page remains the live, authoritative
+// one. Deliberately no SPLEX credit numbers here — SPLEX credits are an
+// internal backend metering unit, never a product-facing number; every
+// line below is a per-CAPABILITY limit instead (how many images/searches/
+// workflow steps a plan includes).
 const PLANS = [
   {
     name: "Free",
     price: "₹0",
     period: "",
     features: [
-      "3,000 SPLEX Credits/month (150/day)",
+      "General chat, coding, math, reasoning & writing",
+      "Document and image understanding",
       "Up to 3 projects",
       "5 file uploads/month",
-      "2 image generations/day",
-      "Agent Workflows up to 3 steps",
     ],
     highlighted: false,
   },
@@ -78,11 +81,11 @@ const PLANS = [
     price: "₹199",
     period: "/mo",
     features: [
-      "15,000 SPLEX Credits/month (750/day)",
+      "Everything in Free, plus:",
       "Unlimited projects",
       "100 file uploads/month",
       "100 web searches/day",
-      "Deep Research, audio, video & presentations",
+      "Deep Research, image, audio, video & presentation generation",
       "Agent Workflows up to 10 steps",
     ],
     highlighted: true,
@@ -284,7 +287,7 @@ export function LandingPage() {
               Simple pricing
             </motion.h2>
             <motion.p variants={rise} className="mt-3 text-center text-[15px] text-muted-foreground">
-              SPLEX Credits, not tokens. One balance across everything.
+              No per-message pricing. One plan covers everything.
             </motion.p>
 
             <div className="mt-10 grid gap-4 sm:grid-cols-2 sm:gap-5">

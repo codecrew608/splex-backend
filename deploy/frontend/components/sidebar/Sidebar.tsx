@@ -7,13 +7,13 @@ import { createClient } from "@/lib/supabase/client";
 import { useSidebarStore } from "@/state/sidebarStore";
 import { useThemeStore } from "@/state/themeStore";
 import { useUserPlanTier } from "@/hooks/useUserPlanTier";
-import { useEntitlements } from "@/hooks/useEntitlements";
 import { planDisplayName } from "@/lib/planDisplay";
 import { cn } from "@/lib/cn";
 import { Logo } from "@/components/ui/Logo";
 import { ConversationList } from "./ConversationList";
 import { ProjectsList } from "./ProjectsList";
 import { FilesList } from "./FilesList";
+import { UsagePanel } from "./UsagePanel";
 
 interface SidebarProps {
   email: string;
@@ -29,7 +29,6 @@ export function Sidebar({ email }: SidebarProps) {
   const isMobile = useSidebarStore((s) => s.isMobile);
   const setIsMobile = useSidebarStore((s) => s.setIsMobile);
   const planTier = useUserPlanTier();
-  const { snapshot: entitlements, loading: creditsLoading, error: creditsError } = useEntitlements();
   const theme = useThemeStore((s) => s.theme);
   const toggleTheme = useThemeStore((s) => s.toggleTheme);
   // Pre-existing hydration mismatch, live-caught while working in this file
@@ -43,14 +42,6 @@ export function Sidebar({ email }: SidebarProps) {
   const [mounted, setMounted] = useState(false);
   useEffect(() => setMounted(true), []);
   const isDark = mounted && theme === "dark";
-  const credits = entitlements?.credits;
-  // available=false (a missing/unresolvable plan_limits row) must never
-  // render as a confident number, let alone "100%" — see migration 0012 for
-  // the bug this guards against. "—" is the only honest fallback.
-  const creditsDisplay =
-    creditsLoading || creditsError || !credits || !credits.available || credits.limit === null
-      ? "—"
-      : `${credits.used.toLocaleString()} / ${credits.limit.toLocaleString()} SPLEX Credits`;
 
   useEffect(() => {
     const mq = window.matchMedia(MOBILE_QUERY);
@@ -195,22 +186,17 @@ export function Sidebar({ email }: SidebarProps) {
                 </button>
               )}
             </div>
+            {/* Plan name + capability usage only — deliberately no SPLEX
+                credit balance or progress bar here. SPLEX credits are an
+                internal backend metering unit, never a product-facing
+                number (see UsagePanel: capability limits like "3/5 images
+                today" are legitimate product UX and stay; the underlying
+                credit currency that prices them never surfaces). */}
             <div className="flex flex-col gap-1.5">
               <div className="flex items-baseline justify-between font-mono text-[9.5px] uppercase tracking-[0.1em] text-muted-foreground">
                 <span>{planDisplayName(planTier)}</span>
               </div>
-              <span className="text-[13px] text-foreground">{creditsLoading ? "…" : creditsDisplay}</span>
-              <span className="block h-1 overflow-hidden rounded-[3px] bg-hover">
-                <span
-                  className="block h-full rounded-[3px] bg-accent transition-[width]"
-                  style={{
-                    width:
-                      creditsLoading || !credits || !credits.available || !credits.limit
-                        ? "0%"
-                        : `${Math.max(0, 100 - Math.round((credits.used / credits.limit) * 100))}%`,
-                  }}
-                />
-              </span>
+              <UsagePanel bordered={false} showLabel={false} />
             </div>
           </div>
 
