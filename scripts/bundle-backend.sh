@@ -30,6 +30,35 @@ cd "$(dirname "$0")/.."
 NPM_PIN="npm@10.9.8"
 
 OUT=deploy/backend
+
+# Preserve the existing lockfile across the rm -rf below.
+#
+# ROOT CAUSE this fixes: `rm -rf "$OUT"` deletes package-lock.json, so the
+# `npm install` further down had nothing to install FROM and re-resolved
+# every range against the live registry. Every dependency here is a caret
+# range, and ranges resolve to whatever is newest AT THAT MOMENT — so the
+# same commit produced different lockfiles at different times, and the CI
+# parity gate failed on a bundle whose source had not changed at all.
+#
+# Observed instance: @fastify/rate-limit depends on ip-address ^10.2.0.
+# The committed lockfile pinned 10.5.1; 10.7.0 was published later, so CI's
+# regeneration produced exactly 3 changed lines (version/resolved/integrity)
+# against an unmodified source tree.
+#
+# Restoring the lockfile before `npm install` makes npm honour the already
+# resolved versions instead of re-resolving, which is what makes this script
+# idempotent — and idempotence is precisely what the parity gate asserts.
+#
+# Dependency updates therefore become a DELIBERATE act (delete the lockfile,
+# or run npm update, and commit the result) rather than something that
+# happens silently to whoever regenerates the bundle next. That is the same
+# discipline any committed lockfile implies, and it is the point.
+LOCK_BACKUP=""
+if [ -f "$OUT/package-lock.json" ]; then
+  LOCK_BACKUP="$(mktemp)"
+  cp "$OUT/package-lock.json" "$LOCK_BACKUP"
+fi
+
 rm -rf "$OUT"
 mkdir -p "$OUT/src"
 
@@ -335,6 +364,15 @@ EOF
 # wrangler local pins the CLI version instead of letting `npx` fetch an
 # arbitrary one. deploy/backend/node_modules is gitignored (.gitignore's
 # "node_modules/" matches at any depth), so this never enters the repo.
+
+# Put the preserved lockfile back so npm installs the ALREADY RESOLVED
+# versions rather than re-resolving ranges against the live registry.
+# See the LOCK_BACKUP comment near the top of this script.
+if [ -n "$LOCK_BACKUP" ]; then
+  cp "$LOCK_BACKUP" "$OUT/package-lock.json"
+  rm -f "$LOCK_BACKUP"
+fi
+
 ( cd "$OUT" && npx --yes "$NPM_PIN" install --silent )
 
 echo "Bundle written to $OUT"
