@@ -1,42 +1,41 @@
--- 0033 — Paid capability day+month ceilings, on top of the existing
--- daily/monthly SPLEX credit pools (migration 0032 set those; this
--- migration does not touch credits/daily_credits at all).
+-- 0033 — Paid capability day+month ceilings: SCHEMA ONLY.
 --
--- Three things:
---   1. Schema: eleven new counter_type enum values (the monthly
---      counterpart of every premium capability, plus vision_inputs and
---      workflow_runs, which had no quota mechanism at all before this),
---      and one new nullable column (generated_media.duration_seconds,
---      for audio's minutes-based ceiling).
---   2. Paid (`pro`) ceilings, per spec:
---        image      5/day,  60/month
---        video      2/day,  15/month
---        ppt        2/day,  15/month
---        audio      10 min/day, 100 min/month   (duration-summed, not count)
---        web_search 20/day, 300/month
---        deep_research 3/day, 30/month
---        vision_inputs 20/day, 300/month        (Paid only — see below)
---        workflow_runs 3/day, 30/month           (run COUNT, distinct from
---                                                  the existing workflow_steps
---                                                  per-run step ceiling and
---                                                  workflow_cost per-run
---                                                  credit ceiling)
---   3. Free explicitly zeroed for every one of the above except
---      vision_inputs — vision/image-understanding is a CORE Free
---      capability (unchanged by this spec), governed by Free's existing
---      credit pool + free-tier model availability alone; adding a hard
---      count cap for Free here would be a regression, not a new
---      protection, so no free/vision_inputs row exists at all.
+-- Split from what was originally one file, after a real failed execution
+-- attempt against production returned:
 --
--- image_generations/video_generations/ppt_generations/web_searches/
--- deep_research already existed as DAILY-only ceilings (migrations
--- 0011/0012/0013/0015/0016). This migration adds their monthly
--- counterpart under a "_monthly" suffix rather than restructuring the
--- existing naming — one consistent, additive convention.
-
--- ---------------------------------------------------------------------------
--- 1. Schema
--- ---------------------------------------------------------------------------
+--   ERROR: 55P04: unsafe use of new value "image_generations_monthly" of
+--   enum type counter_type
+--
+-- Postgres will not let a transaction reference a brand-new enum value
+-- (compare it, cast it, insert it as data) in the SAME transaction that
+-- added it — the safety rule exists because other backends could already
+-- be mid-transaction against the old enum contents when the ADD VALUE
+-- runs, and allowing an uncommitted label to be used immediately would
+-- make the enum's on-disk representation ambiguous for them. The whole
+-- point of ADD VALUE is that it's cheap and lock-light BECAUSE it defers
+-- exactly this hazard onto "don't use it before it's committed" rather
+-- than rewriting the type.
+--
+-- This file contains ONLY the enum additions and the one plain-integer
+-- column add (which was never actually the problem — duration_seconds is
+-- a normal column, not an enum reference — but it's kept here because
+-- it's schema, not data, and grouping all DDL together makes the "run
+-- 0033, let it commit, then run 0034" instruction unambiguous). See
+-- 0034_paid_capability_ceilings_data.sql for the plan_limits rows that
+-- actually USE these new labels — that file MUST run only after this one
+-- has committed, as its own separate execution (see DEPLOYMENT.md / the
+-- report this was delivered with for the exact procedure).
+--
+-- Verified against a fresh read of production before writing this split:
+-- the earlier failed attempt left ZERO trace — none of these eleven
+-- labels exist on counter_type, generated_media has no duration_seconds
+-- column, and plan_limits is still exactly 33 rows. Postgres rolled the
+-- whole failed script back as one transaction; there is nothing partial
+-- to clean up. This file is safe to run once, fresh, from that state.
+--
+-- Idempotent: every statement uses IF NOT EXISTS, so re-running this file
+-- after a partial or full success is always safe and a no-op past the
+-- first successful run.
 
 alter type counter_type add value if not exists 'image_generations_monthly';
 alter type counter_type add value if not exists 'video_generations_monthly';
@@ -58,50 +57,12 @@ alter type counter_type add value if not exists 'workflow_runs_monthly';
 alter table public.generated_media add column if not exists duration_seconds integer;
 
 -- ---------------------------------------------------------------------------
--- 2. Paid ceilings
+-- Verification (run after this file, before running 0034)
 -- ---------------------------------------------------------------------------
--- NOTE ON PLpgSQL "insert ... on conflict do nothing": plan_limits' primary
--- key is (plan_tier, counter_type), so this is safe to re-run and safe
--- against a counter_type that already had a stray row from manual testing.
-
-insert into public.plan_limits (plan_tier, counter_type, limit_amount) values
-  ('pro', 'image_generations_monthly', 60),
-  ('pro', 'video_generations_monthly', 15),
-  ('pro', 'ppt_generations_monthly', 15),
-  ('pro', 'web_searches_monthly', 300),
-  ('pro', 'deep_research_monthly', 30),
-  ('pro', 'audio_minutes', 10),
-  ('pro', 'audio_minutes_monthly', 100),
-  ('pro', 'vision_inputs', 20),
-  ('pro', 'vision_inputs_monthly', 300),
-  ('pro', 'workflow_runs', 3),
-  ('pro', 'workflow_runs_monthly', 30)
-on conflict (plan_tier, counter_type) do update set limit_amount = excluded.limit_amount;
-
--- ---------------------------------------------------------------------------
--- 3. Free stays explicitly blocked from every premium ceiling above
---    (vision_inputs excluded on purpose — see the header comment).
--- ---------------------------------------------------------------------------
-
-insert into public.plan_limits (plan_tier, counter_type, limit_amount) values
-  ('free', 'image_generations_monthly', 0),
-  ('free', 'video_generations_monthly', 0),
-  ('free', 'ppt_generations_monthly', 0),
-  ('free', 'web_searches_monthly', 0),
-  ('free', 'deep_research_monthly', 0),
-  ('free', 'audio_minutes', 0),
-  ('free', 'audio_minutes_monthly', 0),
-  ('free', 'workflow_runs', 0),
-  ('free', 'workflow_runs_monthly', 0)
-on conflict (plan_tier, counter_type) do update set limit_amount = excluded.limit_amount;
-
--- ---------------------------------------------------------------------------
--- Verification
--- ---------------------------------------------------------------------------
--- select plan_tier, counter_type, limit_amount from public.plan_limits
---  where counter_type::text like '%_monthly' or counter_type::text in
---    ('audio_minutes','vision_inputs','workflow_runs')
---  order by counter_type, plan_tier;
+-- select enumlabel from pg_enum e join pg_type t on t.oid = e.enumtypid
+--  where t.typname = 'counter_type' order by e.enumsortorder;
+-- -- expect all eleven new labels present, in addition to the original 17.
 --
 -- select column_name from information_schema.columns
 --  where table_name = 'generated_media' and column_name = 'duration_seconds';
+-- -- expect one row.
