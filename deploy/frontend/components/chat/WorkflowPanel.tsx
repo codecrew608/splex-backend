@@ -26,6 +26,13 @@ export function WorkflowPanel({ workflow }: WorkflowPanelProps) {
   return (
     <div className="mx-auto w-full max-w-[720px] px-4">
       <div className="flex flex-col gap-[11px]">
+        {workflow.cortexVersion && workflow.steps.length > 0 && (
+          <div className="flex flex-col gap-[2px]">
+            <span className="font-mono text-[10px] uppercase tracking-[0.13em] text-accent">Cortex Engine {workflow.cortexVersion}</span>
+            <span className="text-[11px] text-muted-foreground">Workflow · {workflow.steps.length} steps</span>
+          </div>
+        )}
+
         {workflow.steps.length > 0 && (
           <div className="flex items-center gap-[9px]">
             <span className="h-[6px] w-[6px] shrink-0 animate-pulse-soft rounded-full bg-accent" />
@@ -41,6 +48,7 @@ export function WorkflowPanel({ workflow }: WorkflowPanelProps) {
               <div key={i} className="flex animate-fade-in-up items-center gap-[9px] text-[13.5px] text-muted-foreground">
                 <StepIcon status={step.status} />
                 <span className="truncate">{step.title}</span>
+                {step.modelDisplayName && <span className="shrink-0 truncate text-[12px]">— {step.modelDisplayName}</span>}
                 <span className="ml-auto shrink-0 font-mono text-[10px] uppercase tracking-wide">{step.categoryLabel}</span>
               </div>
             ))}

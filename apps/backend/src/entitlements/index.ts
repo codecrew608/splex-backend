@@ -143,6 +143,14 @@ async function fetchUsage(fastify: FastifyInstance, userId: string, source: Usag
       .from(source.table)
       .select("id", { count: "exact", head: true })
       .eq("user_id", userId);
+    // Only REAL projects count against the cap. The auto-created container
+    // behind every standalone chat is an implementation detail of the
+    // NOT NULL conversations.project_id constraint, not something the user
+    // chose to create — counting those meant an ordinary chat user blew
+    // through a 3-project cap within a day and could never create a real
+    // project again (observed live: 111 containers against an 8-project
+    // history). See migration 0023.
+    if (source.table === "projects") query = query.eq("is_implicit", false);
     if (source.period === "month") query = query.gte("created_at", startOfMonthIST());
     const { count, error } = await query;
     if (error) {

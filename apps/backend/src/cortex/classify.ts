@@ -1,6 +1,8 @@
 import type { FastifyInstance } from "fastify";
 import { INTENTS, GENERAL_FALLBACK_INTENT, type IntentDefinition } from "./intents.js";
 import { completeOnce } from "../openrouter/client.js";
+import { resolveClassifierModel } from "./classifierModel.js";
+import type { PlanTier } from "@splex/shared-types";
 
 export interface ClassificationResult {
   intentId: string;
@@ -41,11 +43,18 @@ Valid category values: coding, reasoning, math, writing, vision, documents, gene
 "reason" must be a short (<20 words) human-readable explanation of why you picked this intent.
 If uncertain, use intentId "general_qa", category "general".`;
 
-async function classifyWithFallbackModel(fastify: FastifyInstance, message: string): Promise<ClassificationResult> {
+async function classifyWithFallbackModel(fastify: FastifyInstance, message: string, planTier: PlanTier): Promise<ClassificationResult> {
   try {
+    // Tier-aware: a Free request must never reach a paid model. null means
+    // no free classifier is available, so skip the call entirely rather
+    // than spending — the catch below already produces exactly the right
+    // degraded result for that case.
+    const classifierModel = await resolveClassifierModel(fastify, planTier);
+    if (!classifierModel) throw new Error("no free classifier model available");
+
     const { content: raw } = await completeOnce({
       fastify,
-      model: fastify.config.CORTEX_CLASSIFIER_MODEL_ID,
+      model: classifierModel,
       messages: [
         { role: "system", content: CLASSIFIER_SYSTEM_PROMPT },
         { role: "user", content: message },
@@ -87,11 +96,39 @@ async function classifyWithFallbackModel(fastify: FastifyInstance, message: stri
   }
 }
 
-export async function classifyIntent(fastify: FastifyInstance, message: string): Promise<ClassificationResult> {
-  if (isTooShortOrGeneric(message)) {
-    return classifyWithFallbackModel(fastify, message);
+export async function classifyIntent(fastify: FastifyInstance, message: string, planTier: PlanTier): Promise<ClassificationResult> {
+  // Greetings resolve deterministically — no classifier round-trip.
+  //
+  // This is the single biggest latency win available on short messages,
+  // and the old ordering had it exactly backwards: isTooShortOrGeneric()
+  // ran BEFORE any keyword scoring, so the smallest, most obvious inputs
+  // ("hi") were the ones that paid for a full extra LLM call before the
+  // real answer could even start — roughly doubling time-to-first-token on
+  // precisely the messages a user expects to be instant.
+  //
+  // Safe because GREETING_RE is anchored (^...$) and matches only a bare
+  // salutation with trailing punctuation: "hi", "hello!", "yo". A greeting
+  // cannot secretly be an image or math request, so there is nothing for a
+  // classifier to discover here that the regex hasn't already settled.
+  if (GREETING_RE.test(message.trim())) {
+    return {
+      intentId: GENERAL_FALLBACK_INTENT.id,
+      category: GENERAL_FALLBACK_INTENT.category,
+      capabilities: GENERAL_FALLBACK_INTENT.capabilities,
+      reason: "Greeting — answered directly without a routing lookup.",
+      usedFallback: false,
+    };
   }
 
+  // Keyword scoring now runs BEFORE the short-message check, so a terse
+  // but unambiguous request resolves deterministically instead of paying
+  // for the classifier. Verified against the real intent table: "draw cat"
+  // is two words (old code: straight to the LLM) but carries a weak
+  // image_generation hit, so it now routes correctly AND instantly.
+  // Genuinely signal-free short input ("2+2", "tts this") still falls
+  // through to the classifier below — those carry real routing nuance that
+  // keywords can't settle, and quietly defaulting them to general would
+  // misroute media requests.
   const scored = scoreIntents(message);
   const withStrongHits = scored.filter((s) => s.strongHits > 0);
 
@@ -120,6 +157,12 @@ export async function classifyIntent(fastify: FastifyInstance, message: string):
     }
   }
 
-  // Zero matches, or ≥2 competing strong matches — genuinely ambiguous.
-  return classifyWithFallbackModel(fastify, message);
+  // Zero matches, ≥2 competing strong matches, or a short message with no
+  // keyword signal — genuinely ambiguous, so pay for the classifier.
+  // isTooShortOrGeneric is still consulted (not dead) as a readability
+  // marker for why a message with no hits reached here.
+  if (isTooShortOrGeneric(message)) {
+    fastify.log.debug({ wordCount: message.trim().split(/\s+/).length }, "short message with no keyword signal — using classifier");
+  }
+  return classifyWithFallbackModel(fastify, message, planTier);
 }

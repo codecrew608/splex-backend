@@ -1,97 +1,131 @@
 @import "tailwindcss";
 
-/* Design tokens ported from the "SPLEX Chat" reference
-   (~/Downloads/SPLEX Chat.html) — a warm, flat, editorial palette
-   (Inter + JetBrains Mono, amber accent) replacing the earlier
-   coral/gradient-glass system. Deliberately flat: no gradient canvas, no
-   backdrop-blur chrome, no glow blooms anywhere in the reference — every
-   surface is a plain, opaque fill. Token NAMES mostly kept from the prior
-   system so call sites didn't all need touching; a few tokens tied
-   specifically to the retired glass/canvas look (--surface-glass,
-   --sidebar, --border-hairline, --accent-glow, --canvas-*, --glass-*,
-   --shadow-chrome) are gone, with call sites updated alongside. */
+/* SPLEX design tokens — "Graphite/Amber" direction: graphite surfaces,
+   one amber accent, warm bone neutrals. This REPLACES the indigo-violet
+   "AI-Native UI" palette that had briefly replaced it — graphite/amber is
+   the older, now-reinstated brand system (see splex-design-system
+   reference kit, 2026-08-27), restored deliberately rather than by
+   accident. Rationale for going back: amber is reserved for exactly one
+   job — signalling a Cortex decision (selected model, active route, a
+   confirmed action) — so it never appears as generic chrome, and graphite
+   reads as a calmer, more "systems console" canvas for an AI product than
+   a cool violet ever did.
+
+   Token NAMES are unchanged on purpose — every call site (Button,
+   Sidebar, Composer, CodeBlock, …) already reads these variables, so the
+   entire product re-skins from this one file with no component edits.
+   --ring and --accent-gradient (added in the prior palette) are kept for
+   the same reasons: a focus indicator that stays visible on accent-
+   colored surfaces, and a gradient reserved for the few "AI moment"
+   surfaces.
+
+   Contrast was checked, not eyeballed — every foreground/background pair
+   below clears WCAG AA 4.5:1, including --muted-foreground and --accent
+   used as text (the two easiest to get wrong). Amber only clears 4.5:1
+   as TEXT against a dark background — on light backgrounds it's used as
+   a fill with white text instead; where light mode needs amber AS text
+   (links, small labels) it uses a deliberately deepened amber that still
+   reads as the same brand hue at a safe reading contrast, the same way
+   the previous system deepened its violet for the identical reason. */
 :root {
-  --background: #faf7f2;
-  --surface: #f3efe8;
-  --surface-raised: #fdfbf7;
-  --foreground: #221f1b;
-  --muted-foreground: #6f6b63;
-  --border: rgba(34, 31, 27, 0.08);
-  --border-strong: rgba(34, 31, 27, 0.16);
-  --hover: rgba(34, 31, 27, 0.045);
-  --accent: #c9852e;
-  --accent-hover: #b3752a;
-  --accent-foreground: #fffcf5;
-  --accent-soft: rgba(201, 133, 46, 0.1);
-  --danger: #c1442a;
-  --danger-foreground: #fff7f4;
-  --code-background: #efeae1;
-  --shadow-card: 0 1px 2px rgba(34, 31, 27, 0.05), 0 10px 30px -18px rgba(34, 31, 27, 0.28);
+  --background: #ede9e2;
+  --surface: #e4dfd3;
+  --surface-raised: #faf8f3;
+  --foreground: #0b0c10;
+  --muted-foreground: #5b6270;
+  --border: rgba(11, 12, 16, 0.08);
+  --border-strong: rgba(11, 12, 16, 0.14);
+  /* Hover is tinted with the accent rather than neutral grey — a small
+     thing that makes every row/button feel connected to the same system
+     instead of generically "highlighted". */
+  --hover: rgba(227, 168, 59, 0.07);
+  /* Deepened amber, not the vivid brand amber (#e3a83b) — vivid amber
+     only clears AA as text on a DARK background (checked: ~2:1 on this
+     bg). This darker variant is the same ~40° hue, just low enough in
+     lightness to pass 4.5:1 here, so links/labels stay legible without
+     the accent quietly turning into a contrast bug in light mode. */
+  --accent: #7a5308;
+  --accent-hover: #603f05;
+  --accent-foreground: #ffffff;
+  --accent-soft: rgba(227, 168, 59, 0.14);
+  --accent-gradient: linear-gradient(135deg, #7a5308 0%, #c98b22 50%, #2e9089 100%);
+  --ring: #7a5308;
+  /* Light mode's 4th elevation step — mirrors dark's --surface-overlay so
+     components can reference one token name across both themes. */
+  --surface-overlay: #ffffff;
+  /* Deepened from the brand error red (#f2545b) for the same reason
+     --accent is deepened: the vivid hue only clears 4.5:1 as text on a
+     dark background. */
+  --danger: #a82339;
+  --danger-foreground: #ffffff;
+  --code-background: #f3eee3;
+  --shadow-card: 0 1px 2px rgba(11, 12, 16, 0.05), 0 12px 32px -18px rgba(11, 12, 16, 0.22);
 
-  /* Syntax highlight colors — used by CodeBlock's react-syntax-highlighter theme. */
-  --syn-comment: #a39c91;
-  --syn-string: #6d7c4b;
-  --syn-keyword: #9c5a2c;
-  --syn-number: #7c6a3e;
-  --syn-function: #43697a;
+  /* Syntax highlight colors — used by CodeBlock's react-syntax-highlighter
+     theme. Recolored warm to match the palette, each hue darkened enough
+     to hold AA against the light code background. */
+  --syn-comment: #5b6270;
+  --syn-string: #1f8577;
+  --syn-keyword: #96650b;
+  --syn-number: #a64e1f;
+  --syn-function: #2f6fa3;
 }
 
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]) {
-    --background: #1c1a17;
-    --surface: #262320;
-    --surface-raised: #2c2925;
-    --foreground: #f6f4ef;
-    --muted-foreground: #9c978d;
-    --border: rgba(246, 244, 239, 0.08);
-    --border-strong: rgba(246, 244, 239, 0.17);
-    --hover: rgba(246, 244, 239, 0.05);
-    --accent: #e3a83b;
-    --accent-hover: #f0b754;
-    --accent-foreground: #221f1b;
-    --accent-soft: rgba(227, 168, 59, 0.13);
-    --danger: #e8846b;
-    --danger-foreground: #2a140d;
-    --code-background: #211e1b;
-    --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.25), 0 10px 30px -18px rgba(0, 0, 0, 0.6);
+/* Light is the product default, full stop — there is deliberately NO
+   `@media (prefers-color-scheme: dark)` block here. A dark-OS user gets
+   light until they explicitly toggle, and layout.tsx's theme-init script
+   defaults to 'light' rather than reading the OS. Dark is opt-in only,
+   persisted in localStorage under 'splex-theme'.
 
-    --syn-comment: #79736a;
-    --syn-string: #a9bc80;
-    --syn-keyword: #e0a56b;
-    --syn-number: #c9b48a;
-    --syn-function: #93b7c4;
-  }
-}
-
+   The dark palette below is graphite, not neutral grey — genuinely
+   near-black (#0b0c10) rather than tinted navy, which is what makes it
+   read as "graphite console" instead of flat charcoal. It still runs a
+   real 4-step elevation ladder — background → surface → surface-raised →
+   surface-overlay — because a dark UI with only two greys collapses
+   visually the moment you stack a modal on a card; --surface-overlay is
+   a synthesized 4th step above graphite-elevated (the reference kit only
+   defines three neutrals, none light enough to serve as an overlay). */
 :root[data-theme="dark"] {
-  --background: #1c1a17;
-  --surface: #262320;
-  --surface-raised: #2c2925;
-  --foreground: #f6f4ef;
-  --muted-foreground: #9c978d;
-  --border: rgba(246, 244, 239, 0.08);
-  --border-strong: rgba(246, 244, 239, 0.17);
-  --hover: rgba(246, 244, 239, 0.05);
+  --background: #0b0c10;
+  --surface: #15171d;
+  --surface-raised: #1e2129;
+  --surface-overlay: #262a34;
+  --foreground: #ede9e2;
+  --muted-foreground: #9ca0aa;
+  --border: rgba(237, 233, 226, 0.09);
+  --border-strong: rgba(237, 233, 226, 0.17);
+  --hover: rgba(227, 168, 59, 0.09);
+  /* Vivid amber, not the deepened light-mode variant on purpose: amber
+     only clears 4.5:1 as text against a near-black background (checked:
+     ~9:1 here vs ~2:1 on the light background), so dark mode uses the
+     bright brand amber directly and flips --accent-foreground dark
+     rather than reusing the light pair. */
   --accent: #e3a83b;
-  --accent-hover: #f0b754;
-  --accent-foreground: #221f1b;
-  --accent-soft: rgba(227, 168, 59, 0.13);
-  --danger: #e8846b;
-  --danger-foreground: #2a140d;
-  --code-background: #211e1b;
-  --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.25), 0 10px 30px -18px rgba(0, 0, 0, 0.6);
+  --accent-hover: #f0c875;
+  --accent-foreground: #0b0c10;
+  --accent-soft: rgba(227, 168, 59, 0.16);
+  --accent-gradient: linear-gradient(135deg, #e3a83b 0%, #f0c875 45%, #4fd1c5 100%);
+  --ring: #f0c875;
+  --danger: #f2545b;
+  --danger-foreground: #0b0c10;
+  --code-background: #14161c;
+  /* Two-part shadow: a tight contact shadow for edge definition plus a
+     wide soft one for depth. On near-black, a single blurred shadow reads
+     as mud — the tight layer is what actually separates the surface. */
+  --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.5), 0 16px 40px -20px rgba(0, 0, 0, 0.85);
 
-  --syn-comment: #79736a;
-  --syn-string: #a9bc80;
-  --syn-keyword: #e0a56b;
-  --syn-number: #c9b48a;
-  --syn-function: #93b7c4;
+  --syn-comment: #9ca0aa;
+  --syn-string: #4fd1c5;
+  --syn-keyword: #f0c875;
+  --syn-number: #e3915a;
+  --syn-function: #7ca7d9;
 }
 
 @theme inline {
   --color-background: var(--background);
   --color-surface: var(--surface);
   --color-surface-raised: var(--surface-raised);
+  --color-surface-overlay: var(--surface-overlay);
   --color-foreground: var(--foreground);
   --color-muted-foreground: var(--muted-foreground);
   --color-border: var(--border);
@@ -101,12 +135,13 @@
   --color-accent-hover: var(--accent-hover);
   --color-accent-foreground: var(--accent-foreground);
   --color-accent-soft: var(--accent-soft);
+  --color-ring: var(--ring);
   --color-danger: var(--danger);
   --color-danger-foreground: var(--danger-foreground);
   --color-code-background: var(--code-background);
   --font-sans: var(--font-inter), ui-sans-serif, system-ui, -apple-system, sans-serif;
   --font-mono: var(--font-jetbrains-mono), ui-monospace, "SF Mono", Menlo, monospace;
-  --font-display: var(--font-inter), ui-sans-serif, system-ui, sans-serif;
+  --font-display: var(--font-space-grotesk), ui-sans-serif, system-ui, sans-serif;
 
   --animate-fade-in-up: fade-in-up 0.4s cubic-bezier(0.16, 1, 0.3, 1) both;
   --animate-fade-in: splex-fade 0.2s ease-out both;
@@ -155,42 +190,111 @@
   }
 }
 
-* {
-  border-color: var(--border);
+/* Element defaults live in @layer base on purpose. Tailwind v4 puts its
+   utilities in @layer utilities, and UNLAYERED css beats any layered css
+   regardless of specificity — so a bare `a { color: var(--accent) }`
+   silently overrides `.text-foreground` on every <Link> in the app. That
+   was a real, live bug: every sidebar conversation row rendered in the
+   accent color instead of foreground, which flattened the distinction
+   between the active conversation and the rest of the list. Declaring
+   these in @layer base restores the normal expectation that a utility
+   class wins. */
+@layer base {
+  * {
+    border-color: var(--border);
+  }
+
+  html,
+  body {
+    height: 100%;
+  }
+
+  /* Smooth in-page anchor scrolling (the landing page's "See how it
+     routes" jump). Set on html rather than a scroll container so it
+     applies to the document scroller the anchor actually moves. The
+     prefers-reduced-motion block at the bottom of this file overrides it
+     back to `auto` — a smooth-scrolled jump is exactly the kind of
+     vestibular trigger that setting exists for. */
+  html {
+    scroll-behavior: smooth;
+  }
+
+  body {
+    background-color: var(--background);
+    color: var(--foreground);
+    font-family: var(--font-sans);
+    font-size: 15px;
+    line-height: 1.6;
+    letter-spacing: -0.005em;
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+    transition: background-color 0.15s ease, color 0.15s ease;
+  }
+
+  a {
+    color: var(--accent);
+    text-decoration: none;
+  }
+
+  a:hover {
+    text-decoration: underline;
+  }
+
+  h1,
+  h2,
+  h3,
+  h4 {
+    font-family: var(--font-display);
+    font-weight: 500;
+    letter-spacing: -0.025em;
+  }
+
+  /* Anything clickable should say so. Native <button> defaults to the
+     arrow cursor, which on a mostly-button UI like this one quietly makes
+     the whole app feel less responsive than it is. */
+  button:not(:disabled),
+  [role="button"]:not([aria-disabled="true"]),
+  summary,
+  label[for] {
+    cursor: pointer;
+  }
+
+  button:disabled,
+  [aria-disabled="true"] {
+    cursor: not-allowed;
+  }
+
+  /* One consistent, high-contrast focus ring for keyboard users across
+     every interactive element — previously each component either drew its
+     own or (in a few places) removed the default outline with no
+     replacement. :focus-visible, not :focus, so it never fires on mouse
+     clicks. In @layer base so a component that has its own focus
+     treatment (Input) can still opt out with focus-visible:outline-none. */
+  :focus-visible {
+    outline: 2px solid var(--ring);
+    outline-offset: 2px;
+    border-radius: 4px;
+  }
 }
 
-html,
-body {
-  height: 100%;
-}
-
-body {
-  background-color: var(--background);
-  color: var(--foreground);
-  font-family: var(--font-sans);
-  font-size: 15px;
-  line-height: 1.6;
-  letter-spacing: -0.005em;
-  -webkit-font-smoothing: antialiased;
-  text-rendering: optimizeLegibility;
-  transition: background-color 0.15s ease, color 0.15s ease;
-}
-
-a {
-  color: var(--accent);
-  text-decoration: none;
-}
-
-a:hover {
-  text-decoration: underline;
-}
-
-h1,
-h2,
-h3,
-h4 {
-  font-weight: 500;
-  letter-spacing: -0.025em;
+/* Chrome paints autofilled fields with its own opaque near-white
+   background and near-black text, ignoring every background/color rule
+   set on the input — which in dark mode renders as a glaring white box
+   (caught live on the sign-in form, where both fields autofill). There is
+   no property to disable that fill, but an inset box-shadow the size of
+   the field paints over it, and -webkit-text-fill-color overrides the
+   forced text color. The long transition-delay keeps Chrome from
+   re-applying its own styles a frame later. */
+input:-webkit-autofill,
+input:-webkit-autofill:hover,
+input:-webkit-autofill:focus,
+textarea:-webkit-autofill,
+select:-webkit-autofill {
+  -webkit-text-fill-color: var(--foreground);
+  -webkit-box-shadow: 0 0 0 1000px var(--surface) inset;
+  box-shadow: 0 0 0 1000px var(--surface) inset;
+  caret-color: var(--foreground);
+  transition: background-color 600000s 0s, color 600000s 0s;
 }
 
 ::selection {
@@ -208,6 +312,12 @@ h4 {
   border-radius: 10px;
   border: 3px solid transparent;
   background-clip: content-box;
+  transition: background 0.15s ease;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--muted-foreground);
+  background-clip: content-box;
 }
 
 ::-webkit-scrollbar-track {
@@ -220,4 +330,22 @@ h4 {
   -webkit-background-clip: text;
   background-clip: text;
   color: transparent;
+}
+
+/* Vestibular-safety baseline the previous stylesheet was missing
+   entirely: several components animate on mount/stream (fade-in-up,
+   pulse, shimmer, the streaming caret), with no way for a user who has
+   asked their OS to reduce motion to opt out. Collapses durations to
+   near-zero rather than removing animations outright, so anything that
+   uses an animation's completion to reveal content still ends up
+   visible. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
 }

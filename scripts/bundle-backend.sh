@@ -9,7 +9,56 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
+# Lockfile generation is PINNED to a specific npm.
+#
+# package-lock.json content is npm-version-dependent: npm 11 writes a
+# "libc": ["glibc"|"musl"] field on platform-specific native packages that
+# npm 10 does not understand and strips back out. Regenerating with a
+# different npm than the one that last wrote the file therefore produces a
+# spurious 200-line diff — which is exactly what failed CI's deploy/ parity
+# gate, on a bundle whose SOURCE was byte-identical.
+#
+# Pinning here (rather than assuming the caller's Node) is what makes the
+# scripts genuinely deterministic: the output is the same on a maintainer's
+# machine, on a fresh CI runner, and in the Docker build, whatever Node
+# happens to be on PATH.
+#
+# 10.x is the correct target, not the newest: deploy/backend/Dockerfile
+# builds on node:22-slim, the root package.json requires node >=22, and CI
+# pins node 22 — all of which ship npm 10. The lockfile should describe what
+# those environments will actually install.
+NPM_PIN="npm@10.9.8"
+
 OUT=deploy/backend
+
+# Preserve the existing lockfile across the rm -rf below.
+#
+# ROOT CAUSE this fixes: `rm -rf "$OUT"` deletes package-lock.json, so the
+# `npm install` further down had nothing to install FROM and re-resolved
+# every range against the live registry. Every dependency here is a caret
+# range, and ranges resolve to whatever is newest AT THAT MOMENT — so the
+# same commit produced different lockfiles at different times, and the CI
+# parity gate failed on a bundle whose source had not changed at all.
+#
+# Observed instance: @fastify/rate-limit depends on ip-address ^10.2.0.
+# The committed lockfile pinned 10.5.1; 10.7.0 was published later, so CI's
+# regeneration produced exactly 3 changed lines (version/resolved/integrity)
+# against an unmodified source tree.
+#
+# Restoring the lockfile before `npm install` makes npm honour the already
+# resolved versions instead of re-resolving, which is what makes this script
+# idempotent — and idempotence is precisely what the parity gate asserts.
+#
+# Dependency updates therefore become a DELIBERATE act (delete the lockfile,
+# or run npm update, and commit the result) rather than something that
+# happens silently to whoever regenerates the bundle next. That is the same
+# discipline any committed lockfile implies, and it is the point.
+LOCK_BACKUP=""
+if [ -f "$OUT/package-lock.json" ]; then
+  LOCK_BACKUP="$(mktemp)"
+  cp "$OUT/package-lock.json" "$LOCK_BACKUP"
+fi
+
 rm -rf "$OUT"
 mkdir -p "$OUT/src"
 
@@ -34,7 +83,10 @@ cat > "$OUT/package.json" <<'EOF'
   "private": true,
   "scripts": {
     "build": "tsc -p tsconfig.json",
-    "start": "node dist/server.js"
+    "start": "node dist/server.js",
+    "typecheck:worker": "tsc --noEmit -p tsconfig.worker.json",
+    "cf:dev": "wrangler dev",
+    "cf:deploy": "wrangler deploy"
   },
   "dependencies": {
     "@fastify/cors": "^11.3.0",
@@ -47,10 +99,12 @@ cat > "$OUT/package.json" <<'EOF'
     "mammoth": "^1.12.1",
     "pdf-parse": "^2.4.5",
     "pptxgenjs": "^4.0.1",
+    "unpdf": "^1.8.1",
     "zod": "^3.23.8"
   },
   "devDependencies": {
     "@cloudflare/containers": "^0.3.7",
+    "@cloudflare/workers-types": "^5.20260821.1",
     "@types/node": "^22.10.1",
     "typescript": "^5.7.2",
     "wrangler": "^4.125.0"
@@ -75,7 +129,28 @@ cat > "$OUT/tsconfig.json" <<'EOF'
     "rootDir": "src",
     "types": ["node"]
   },
-  "include": ["src"]
+  "include": ["src"],
+  "exclude": ["src/worker"]
+}
+EOF
+
+cat > "$OUT/tsconfig.worker.json" <<'EOF'
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2022"],
+    "module": "ES2022",
+    "moduleResolution": "Bundler",
+    "esModuleInterop": true,
+    "forceConsistentCasingInFileNames": true,
+    "strict": true,
+    "skipLibCheck": true,
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "noEmit": true,
+    "types": ["@cloudflare/workers-types"]
+  },
+  "include": ["src/worker"]
 }
 EOF
 
@@ -120,15 +195,78 @@ OPENROUTER_APP_NAME=SPLEX
 CORTEX_CLASSIFIER_MODEL_ID=
 CREDITS_PER_USD=25000
 INTELLIGENCE_SERVICE_URL=
+INTELLIGENCE_SERVICE_TOKEN=
 LOG_LEVEL=info
 EOF
 
-# Cloudflare Containers plumbing — kept entirely outside src/ (a separate
-# Workers-runtime entrypoint, not compiled by tsc/tsconfig.json above,
-# which targets Node for the actual Fastify dist/server.js image). This
-# Worker is a thin router only: it never touches Fastify, SSE, or
-# OpenRouter logic — those stay exactly as they are inside the container
-# image built from this same folder's Dockerfile.
+# Cloudflare Workers FREE deployment target (src/worker/) — a real
+# fetch(request, env, ctx) entrypoint, no Containers, no Durable Objects,
+# no paid plan required. This is the CURRENT deployment target; the
+# cloudflare/ Containers config emitted below this block is an earlier,
+# now-superseded option (kept, not deleted, per this project's "never
+# silently drop existing work" convention — see the migration report for
+# which one to actually use).
+cat > "$OUT/wrangler.jsonc" <<'EOF'
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "splex-backend-worker",
+  "main": "src/worker/index.ts",
+  "compatibility_date": "2026-08-21",
+  // Required for Buffer (mammoth/pdf-parse/pptxgenjs/media Buffer
+  // handling) and node:crypto-shaped globals — everything else in
+  // src/worker/ uses only Web-standard APIs (fetch, Request, Response,
+  // ReadableStream, crypto.randomUUID()).
+  "compatibility_flags": ["nodejs_compat"],
+  // No [[containers]], no durable_objects, no paid-plan-only bindings —
+  // deliberately: this config must deploy on Workers Free as-is.
+  "observability": {
+    "enabled": true
+  },
+  // Non-secret production config for worker/env.ts's schema. Every field
+  // here is required-with-no-default or has a default that's wrong for
+  // production (see that file) — omitting any of them is exactly what
+  // produced the live "500 Server misconfigured" (buildWorkerCtx() throws
+  // WorkerConfigError, worker/index.ts's fetch() handler catches it and
+  // returns 500 before any route ever runs). SUPABASE_SERVICE_ROLE_KEY and
+  // OPENROUTER_API_KEY are NOT here — those stay `wrangler secret put`
+  // only, never a plaintext var, never committed. PORT is intentionally
+  // absent — meaningless on Workers (no TCP listen), and worker/env.ts's
+  // schema never requires it. INTELLIGENCE_SERVICE_URL is intentionally
+  // absent too: it's optional in worker/env.ts specifically because
+  // Workers can't reach a local/loopback address in production, and every
+  // call site already treats "unset" as "skip OCR/embedding, degrade
+  // gracefully" — setting it to localhost here would be actively wrong,
+  // not just incomplete.
+  "vars": {
+    "FRONTEND_ORIGIN": "https://splex-ai.vercel.app",
+    "SUPABASE_URL": "https://yxhallicacslnwwmxnhd.supabase.co",
+    "OPENROUTER_BASE_URL": "https://openrouter.ai/api/v1",
+    "OPENROUTER_SITE_URL": "https://splex-ai.vercel.app",
+    "OPENROUTER_APP_NAME": "SPLEX",
+    "CORTEX_CLASSIFIER_MODEL_ID": "qwen/qwen-2.5-72b-instruct",
+    "CREDITS_PER_USD": "20000",
+    "LOG_LEVEL": "info"
+  }
+}
+EOF
+
+cat > "$OUT/.dev.vars.example" <<'EOF'
+FRONTEND_ORIGIN=http://localhost:3000
+SUPABASE_URL=
+SUPABASE_SERVICE_ROLE_KEY=
+OPENROUTER_API_KEY=
+OPENROUTER_BASE_URL=https://openrouter.ai/api/v1
+OPENROUTER_SITE_URL=http://localhost:3000
+OPENROUTER_APP_NAME=SPLEX
+CORTEX_CLASSIFIER_MODEL_ID=
+CREDITS_PER_USD=20000
+INTELLIGENCE_SERVICE_URL=
+INTELLIGENCE_SERVICE_TOKEN=
+LOG_LEVEL=info
+EOF
+
+# --- Superseded option below: Cloudflare Containers (kept, not deleted) ---
+# Requires Workers Paid + Containers — do not use for the Free-tier goal.
 mkdir -p "$OUT/cloudflare"
 
 cat > "$OUT/cloudflare/wrangler.jsonc" <<'EOF'
@@ -145,16 +283,14 @@ cat > "$OUT/cloudflare/wrangler.jsonc" <<'EOF'
     {
       "class_name": "SplexBackendContainer",
       "image": "../Dockerfile",
-      "max_instances": 5,
-      // Non-secret only — SUPABASE_SERVICE_ROLE_KEY and OPENROUTER_API_KEY
-      // are set via `wrangler secret put` (see DEPLOYMENT.md), never here.
-      "env": {
-        "PORT": "4000",
-        "OPENROUTER_BASE_URL": "https://openrouter.ai/api/v1",
-        "OPENROUTER_APP_NAME": "SPLEX",
-        "CREDITS_PER_USD": "25000",
-        "LOG_LEVEL": "info"
-      }
+      "max_instances": 5
+      // No "env" here: current wrangler (verified against 4.127.1) rejects
+      // "containers[].env" as an unexpected field — it is a no-op, not the
+      // non-secret config it looks like. This option is superseded by the
+      // Workers-native target above and not the active deploy path, so it
+      // is left uncorrected rather than reworked to inject config via
+      // envVars (see services/intelligence/cloudflare/container-entry.ts
+      // for the pattern that does work, if this option is ever revived).
     }
   ],
   "durable_objects": {
@@ -201,9 +337,42 @@ export default {
 };
 EOF
 
-# Regenerate the lockfile every time so it never silently falls out of
-# sync with (or gets wiped by) a fresh bundle — package-lock-only skips
-# actually installing node_modules, so this stays fast.
-( cd "$OUT" && npm install --package-lock-only --silent )
+# Install for real (not --package-lock-only) — this regenerates the
+# lockfile AND populates node_modules, and both are required.
+#
+# The lockfile alone was not enough. `wrangler deploy` bundles src/worker
+# with esbuild, which resolves every bare import off the DISK at bundle
+# time; there is no separate install step in that path the way there is
+# for Docker (whose Dockerfile runs its own `npm install` inside the
+# image). With a lockfile but no node_modules, Wrangler failed with
+# "Could not resolve" for pptxgenjs, @supabase/supabase-js, zod, mammoth
+# and unpdf — the packages src/worker actually reaches. Nothing upstream
+# could rescue it either: pnpm's default isolated layout means the repo
+# root's node_modules holds only .pnpm internals with no top-level package
+# directories, so Node's walk-up resolution from deploy/backend finds
+# nothing.
+#
+# This must live in the script rather than being a manual pre-deploy step,
+# because `rm -rf "$OUT"` at the top of this file deletes node_modules on
+# every regeneration — so any install done by hand is destroyed the next
+# time anyone refreshes the bundle, silently re-breaking the Worker deploy.
+#
+# Dependencies resolve from the bundle's OWN package.json, never the
+# workspace, which is what keeps this folder genuinely standalone.
+# devDependencies are installed too, deliberately: wrangler.jsonc's
+# "$schema" points at node_modules/wrangler/config-schema.json, and having
+# wrangler local pins the CLI version instead of letting `npx` fetch an
+# arbitrary one. deploy/backend/node_modules is gitignored (.gitignore's
+# "node_modules/" matches at any depth), so this never enters the repo.
+
+# Put the preserved lockfile back so npm installs the ALREADY RESOLVED
+# versions rather than re-resolving ranges against the live registry.
+# See the LOCK_BACKUP comment near the top of this script.
+if [ -n "$LOCK_BACKUP" ]; then
+  cp "$LOCK_BACKUP" "$OUT/package-lock.json"
+  rm -f "$LOCK_BACKUP"
+fi
+
+( cd "$OUT" && npx --yes "$NPM_PIN" install --silent )
 
 echo "Bundle written to $OUT"

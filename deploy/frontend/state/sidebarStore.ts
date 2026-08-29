@@ -14,6 +14,10 @@ interface SidebarState {
   conversations: Conversation[];
   setConversations: (conversations: Conversation[]) => void;
   upsertConversation: (conversation: Conversation) => void;
+  // Drops a conversation from the list without a refetch, so the row
+  // disappears the moment the delete succeeds rather than after the
+  // sidebar's next load.
+  removeConversation: (id: string) => void;
   // Bumped by useChatStream whenever a message finishes (a real credit
   // charge just landed server-side) — useEntitlements watches this and
   // refetches immediately, instead of the sidebar's credits bar only
@@ -42,6 +46,8 @@ export const useSidebarStore = create<SidebarState>((set) => ({
           : [conversation, ...state.conversations],
       };
     }),
+  removeConversation: (id) =>
+    set((state) => ({ conversations: state.conversations.filter((c) => c.id !== id) })),
   creditsVersion: 0,
   bumpCredits: () => set((state) => ({ creditsVersion: state.creditsVersion + 1 })),
 }));

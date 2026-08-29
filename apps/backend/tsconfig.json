@@ -7,5 +7,10 @@
     "moduleResolution": "NodeNext",
     "types": ["node"]
   },
-  "include": ["src"]
+  "include": ["src"],
+  // Workers-runtime code (ExecutionContext, wrangler's own ambient
+  // globals) lives entirely under src/worker and is type-checked
+  // separately via tsconfig.worker.json — mixing that with @types/node's
+  // ambient fetch/Request/Response here would conflict rather than merge.
+  "exclude": ["src/worker"]
 }

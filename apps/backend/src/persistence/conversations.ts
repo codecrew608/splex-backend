@@ -56,11 +56,18 @@ export async function resolveConversation(
 
     resolvedProjectId = project.id as string;
   } else {
-    // Default, unchanged behavior: every plain "New chat" gets its own
-    // dedicated 1:1 project.
+    // Every plain "New chat" still gets its own dedicated 1:1 project,
+    // because conversations.project_id is NOT NULL — a chat cannot exist
+    // without one. is_implicit:true is what keeps that schema requirement
+    // from leaking into the product: without it these containers were
+    // indistinguishable from real user-created projects, so every chat
+    // ever sent showed up in the Projects list (a new chat didn't go INTO
+    // a project, it became one) and counted against the projects quota,
+    // which eventually locked the user out of creating a real project at
+    // all. See migration 0023.
     const { data: project, error: projectError } = await fastify.supabaseAdmin
       .from("projects")
-      .insert({ user_id: userId, title: titleFromMessage(firstMessage), type: "chat" })
+      .insert({ user_id: userId, title: titleFromMessage(firstMessage), type: "chat", is_implicit: true })
       .select("id")
       .single();
 

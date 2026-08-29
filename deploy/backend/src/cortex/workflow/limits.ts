@@ -23,7 +23,9 @@ export async function getWorkflowLimits(fastify: FastifyInstance, planTier: Plan
     return FALLBACK_LIMITS;
   }
 
-  const byType = Object.fromEntries(data.map((row) => [row.counter_type as string, row.limit_amount as number | null]));
+  const byType = Object.fromEntries(
+    data.map((row: { counter_type: string; limit_amount: number | null }) => [row.counter_type, row.limit_amount]),
+  );
   return {
     maxSteps: byType.workflow_steps ?? FALLBACK_LIMITS.maxSteps,
     maxCostCredits: byType.workflow_cost ?? FALLBACK_LIMITS.maxCostCredits,

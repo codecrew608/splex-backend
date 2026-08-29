@@ -1,0 +1,16 @@
+{
+  "name": "splex-intelligence-cloudflare",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy"
+  },
+  "devDependencies": {
+    "@cloudflare/containers": "^0.3.7",
+    "@cloudflare/workers-types": "^5.20260821.1",
+    "typescript": "^5.7.2",
+    "wrangler": "^4.125.0"
+  }
+}

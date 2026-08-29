@@ -16,7 +16,12 @@ interface CodeElementProps {
 
 export function MarkdownRenderer({ content }: MarkdownRendererProps) {
   return (
-    <div className="max-w-none text-[15px] leading-[1.68] text-foreground [text-wrap:pretty]">
+    // min-w-0 + break-words: a flex/grid child defaults to min-width:auto,
+    // so a single long unbreakable token in a reply (a URL, a stack trace
+    // path, a base64 blob) would widen this column past the viewport and
+    // give the whole page a horizontal scrollbar — very visible on a
+    // phone, where there's no slack to absorb it.
+    <div className="min-w-0 max-w-none break-words text-[15px] leading-[1.68] text-foreground [text-wrap:pretty]">
       <ReactMarkdown
         remarkPlugins={[remarkGfm]}
         components={{
@@ -77,14 +82,20 @@ export function MarkdownRenderer({ content }: MarkdownRendererProps) {
           ol({ children }) {
             return <ol className="my-2 list-decimal space-y-1.5 pl-5">{children}</ol>;
           },
+          // font-sans overrides globals.css's base h1–h4 rule (which now
+          // sets the display face for page-level headings) — a heading
+          // inside an AI reply is still chat message text, and the design
+          // system reserves the display face for chrome, not paragraph-
+          // length content: switching typefaces mid-response would read
+          // as a glitch, not a heading.
           h1({ children }) {
-            return <h1 className="mt-1 text-[15px] font-semibold tracking-[-0.01em]">{children}</h1>;
+            return <h1 className="mt-1 font-sans text-[15px] font-semibold tracking-[-0.01em]">{children}</h1>;
           },
           h2({ children }) {
-            return <h2 className="mt-1 text-[15px] font-semibold tracking-[-0.01em]">{children}</h2>;
+            return <h2 className="mt-1 font-sans text-[15px] font-semibold tracking-[-0.01em]">{children}</h2>;
           },
           h3({ children }) {
-            return <h3 className="mt-1 text-[15px] font-semibold tracking-[-0.01em]">{children}</h3>;
+            return <h3 className="mt-1 font-sans text-[15px] font-semibold tracking-[-0.01em]">{children}</h3>;
           },
           p({ children }) {
             return <p className="mb-3 last:mb-0">{children}</p>;

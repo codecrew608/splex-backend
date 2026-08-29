@@ -4,7 +4,15 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { createClient } from "@/lib/supabase/client";
 import { streamChat } from "@/lib/chatStream";
 import { fetchMediaStatus } from "@/lib/mediaStatus";
-import type { ChatMessage, CortexDecisionPayload, CortexStatusStage, Citation, ResearchStage } from "@/shared-types";
+import type {
+  ChatMessage,
+  CortexDecisionPayload,
+  CortexStatusStage,
+  Citation,
+  ResearchStage,
+  CortexVersion,
+  CortexRoutingInfo,
+} from "@/shared-types";
 import { useSidebarStore } from "@/state/sidebarStore";
 
 interface PendingMedia {
@@ -34,17 +42,31 @@ export interface LocalChatMessage extends ChatMessage {
   // Absent (not []) unless a search genuinely grounded this answer — see
   // DoneEventData.citations' doc comment.
   citations?: Citation[];
+  // Cortex Routing disclosure data for an ORDINARY (non-workflow) turn —
+  // snapshotted from done.routing exactly like citations above. Null for
+  // a workflow-completed message, which uses `cortexVersion` +
+  // `workflowSteps` instead (see cortexVersion below).
+  routing?: CortexRoutingInfo | null;
+  // Set only for a workflow-completed message, snapshotted from the live
+  // WorkflowView's own cortexVersion at the moment this message's `done`
+  // event arrives — same snapshot pattern already used for workflowSteps.
+  cortexVersion?: CortexVersion | null;
 }
 
 export interface WorkflowStepView {
   title: string;
   categoryLabel: string;
   status: "pending" | "running" | "completed" | "failed";
+  // Only known once a step actually completes (see backend
+  // workflow_step_status's own doc comment) — null/undefined while
+  // pending or running.
+  modelDisplayName?: string | null;
 }
 
 export interface WorkflowView {
   steps: WorkflowStepView[];
   clarificationQuestion: string | null;
+  cortexVersion?: CortexVersion | null;
 }
 
 function emptyMessage(id: string, conversationId: string, role: "user" | "assistant", content: string): LocalChatMessage {
@@ -107,7 +129,20 @@ export function useChatStream(
       const {
         data: { session },
       } = await supabase.auth.getSession();
-      if (!session) return;
+      if (!session) {
+        // Previously a bare `return`: the composer cleared, the message
+        // vanished, and nothing at all appeared — indistinguishable from
+        // the app being broken. Surface it as an assistant message so the
+        // user learns the one thing that actually fixes it.
+        setMessages((prev) => [
+          ...prev,
+          {
+            ...emptyMessage(crypto.randomUUID(), conversationId ?? "", "assistant", ""),
+            content: "Your session has expired. Please sign in again.",
+          },
+        ]);
+        return;
+      }
 
       setCortexDecision(null);
       updateWorkflow(null);
@@ -179,14 +214,27 @@ export function useChatStream(
               prev.map((m) => (m.id === assistantLocalId ? { ...m, content: m.content || message, streaming: false } : m)),
             );
           },
-          onDone: ({ messageId, userMessageId, awaitingClarification, pendingMediaId, citations }) => {
+          onDone: ({ messageId, userMessageId, awaitingClarification, pendingMediaId, citations, routing }) => {
             setMessages((prev) =>
               prev.map((m) => {
                 if (m.id === assistantLocalId) {
-                  // Snapshot the live workflow's steps onto this message so
-                  // its own disclosure keeps showing them after the next
-                  // message starts and clears the top-level `workflow` state.
-                  return { ...m, id: messageId ?? m.id, streaming: false, workflowSteps: workflowRef.current?.steps ?? null, citations };
+                  // Snapshot the live workflow's steps (+ its engine
+                  // version) onto this message so its own disclosure keeps
+                  // showing them after the next message starts and clears
+                  // the top-level `workflow` state. `routing` is the
+                  // ordinary-turn equivalent, sourced straight from
+                  // done.routing instead of a live-panel snapshot since
+                  // there's no live single-shot routing panel to snapshot
+                  // from.
+                  return {
+                    ...m,
+                    id: messageId ?? m.id,
+                    streaming: false,
+                    workflowSteps: workflowRef.current?.steps ?? null,
+                    cortexVersion: workflowRef.current?.cortexVersion ?? null,
+                    citations,
+                    routing: routing ?? null,
+                  };
                 }
                 // Swap the user message's client-generated placeholder id
                 // for its real DB id — without this, "Edit" on that message
@@ -207,13 +255,14 @@ export function useChatStream(
               setPendingMedia((prev) => [...prev, { mediaId: pendingMediaId, messageId: messageId ?? assistantLocalId }]);
             }
           },
-          onWorkflowPlan: ({ steps }) => {
+          onWorkflowPlan: ({ steps, cortexVersion }) => {
             updateWorkflow({
-              steps: steps.map((s) => ({ title: s.title, categoryLabel: s.categoryLabel, status: "pending" })),
+              steps: steps.map((s) => ({ title: s.title, categoryLabel: s.categoryLabel, status: "pending", modelDisplayName: null })),
               clarificationQuestion: null,
+              cortexVersion,
             });
           },
-          onWorkflowStepStatus: ({ stepIndex, status: stepStatus, title }) => {
+          onWorkflowStepStatus: ({ stepIndex, status: stepStatus, title, modelDisplayName }) => {
             // Defense in depth: the backend always sends workflow_plan
             // before any workflow_step_status now, but silently dropping
             // a status update just because the plan hasn't arrived yet
@@ -225,10 +274,15 @@ export function useChatStream(
             updateWorkflow((prev) => {
               const steps = prev ? [...prev.steps] : [];
               while (steps.length <= stepIndex) {
-                steps.push({ title, categoryLabel: "", status: "pending" });
+                steps.push({ title, categoryLabel: "", status: "pending", modelDisplayName: null });
               }
-              steps[stepIndex] = { ...steps[stepIndex], title, status: stepStatus };
-              return { steps, clarificationQuestion: prev?.clarificationQuestion ?? null };
+              steps[stepIndex] = {
+                ...steps[stepIndex],
+                title,
+                status: stepStatus,
+                modelDisplayName: modelDisplayName ?? steps[stepIndex].modelDisplayName ?? null,
+              };
+              return { steps, clarificationQuestion: prev?.clarificationQuestion ?? null, cortexVersion: prev?.cortexVersion ?? null };
             });
             // Each completed step charges credits server-side as it
             // finishes, not just once at the very end of the workflow —
@@ -285,7 +339,21 @@ export function useChatStream(
         const {
           data: { session },
         } = await supabase.auth.getSession();
-        if (!session) return;
+        if (!session) {
+          // Was a bare `return`: polling just stopped and the message sat
+          // on "Generating your video..." forever, with the job actually
+          // still running server-side. Say what happened instead — the
+          // video isn't lost, it just needs a reload once signed back in.
+          setMessages((prev) =>
+            prev.map((m) =>
+              m.id === entry.messageId
+                ? { ...m, content: "Your session expired while this was generating. Sign in again and reload to see the result." }
+                : m,
+            ),
+          );
+          setPendingMedia((prev) => prev.filter((p) => p.mediaId !== entry.mediaId));
+          return;
+        }
 
         const result = await fetchMediaStatus(entry.mediaId, session.access_token);
         if (cancelled || !result) continue; // transient failure — try again next tick

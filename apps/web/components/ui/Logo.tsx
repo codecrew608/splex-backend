@@ -30,7 +30,7 @@ export function Logo({ size = 26, wordmarkClassName, className }: LogoProps) {
   return (
     <span className={`inline-flex items-center gap-[11px] text-foreground ${className ?? ""}`}>
       <LogoMark size={size} />
-      <span className={`text-[13.5px] font-semibold tracking-[0.16em] text-foreground ${wordmarkClassName ?? ""}`}>SPLEX</span>
+      <span className={`font-display text-[13.5px] font-semibold tracking-[0.16em] text-foreground ${wordmarkClassName ?? ""}`}>SPLEX</span>
     </span>
   );
 }

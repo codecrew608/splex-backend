@@ -1,5 +1,5 @@
 import type { FastifyInstance } from "fastify";
-import { embedTexts } from "./client.js";
+import { embedTexts, isIntelligenceConfigured, IntelligenceNotConfiguredError } from "./client.js";
 
 const MATCH_COUNT = 6;
 // BGE-small cosine similarity on short chunks: genuinely relevant matches
@@ -27,6 +27,13 @@ export async function retrieveFileContext(
   queryText: string,
   excludeFileIds: string[] = [],
 ): Promise<string | null> {
+  // Retrieval needs embeddings, which need the sidecar. Without it every
+  // call built the URL "undefined/embed", threw, and was logged as
+  // "file context retrieval failed" — which reads like a runtime fault when
+  // the truth is the capability is not deployed in this environment.
+  // Checked first so the DB round-trip below is skipped too.
+  if (!isIntelligenceConfigured(fastify)) return null;
+
   try {
     // Cheap existence check before paying for an embedding call. Every
     // chat turn used to call out to the intelligence sidecar (network +
@@ -74,7 +81,17 @@ export async function retrieveFileContext(
 
     return matches.map((m) => `[From "${m.filename}"]\n${m.chunk_text}`).join("\n\n");
   } catch (err) {
-    fastify.log.warn({ err }, "file context retrieval failed — skipping, non-fatal");
+    // A configured-but-failing sidecar is a REAL fault and logged as an
+    // error; an unconfigured one already returned above. Never collapse the
+    // two into one bland "non-fatal" line again.
+    if (err instanceof IntelligenceNotConfiguredError) {
+      fastify.log.warn({ capability: "rag_retrieval" }, "file context skipped — intelligence service not configured");
+      return null;
+    }
+    fastify.log.error(
+      { errorName: err instanceof Error ? err.name : typeof err, errorMessage: err instanceof Error ? err.message : String(err) },
+      "file context retrieval failed against a configured service",
+    );
     return null;
   }
 }

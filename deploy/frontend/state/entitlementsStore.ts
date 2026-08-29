@@ -64,6 +64,19 @@ export function ensureEntitlementsPolling(): void {
 
   const load = useEntitlementsStore.getState().load;
   load();
-  setInterval(load, REFRESH_INTERVAL_MS);
+  // Skip the tick while the tab is hidden. The poller runs for the lifetime
+  // of the page, so a backgrounded tab would otherwise keep hitting
+  // /entitlements every 60s indefinitely for a user who cannot see the
+  // result. The focus listener below already refreshes the moment they come
+  // back, so nothing is stale when it matters.
+  setInterval(() => {
+    // Skip a tick that cannot succeed: a hidden tab has nobody to show the
+    // result to, and an offline browser would only flip the store into its
+    // error state and blank the credits display until the next tick.
+    if (document.visibilityState === "visible" && navigator.onLine !== false) load();
+  }, REFRESH_INTERVAL_MS);
   window.addEventListener("focus", load);
+  // Refresh the moment connectivity returns rather than waiting out the
+  // remainder of the interval showing a stale "—".
+  window.addEventListener("online", load);
 }

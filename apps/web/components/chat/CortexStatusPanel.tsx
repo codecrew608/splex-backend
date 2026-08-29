@@ -1,5 +1,10 @@
 "use client";
 
+// SUPERSEDED — replaced by components/chat/CortexRoutingFlow.tsx, which
+// renders the same live routing stages as an animated request->Cortex->
+// model->answer flow. No remaining references. Kept deliberately (not
+// deleted) pending a call on whether to remove it; do not wire it back in.
+
 import type { CortexDecisionPayload, CortexStatusStage } from "@splex/shared-types";
 
 interface CortexStatusPanelProps {

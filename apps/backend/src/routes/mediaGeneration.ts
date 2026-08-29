@@ -1,22 +1,31 @@
 import type { FastifyInstance } from "fastify";
 import type { AuthedUser } from "../types/index.js";
 import type { CortexDecision } from "../cortex/index.js";
-import { selectModelCandidates } from "../cortex/index.js";
-import { SplexSSEWriter } from "../sse/writer.js";
+import { selectModelCandidates, resolveCortexVersion } from "../cortex/index.js";
+import type { SSEWriter } from "../sse/writer.js";
 import {
   checkMediaQuota,
   checkConcurrentMediaLimit,
   recordMediaGeneration,
+  updateGeneratedMediaStatus,
   type MediaKind,
   type MediaQuota,
 } from "../credits/mediaQuota.js";
 import { computeMediaCreditsCharged } from "../credits/mediaCost.js";
 import { resolveCreditGateEstimate } from "../credits/costBand.js";
-import { checkCredits } from "../credits/checkCredits.js";
+import {
+  checkAndReserveCredits,
+  settleDailyReservation,
+  resolveCreditRejectionMessage,
+  reserveMediaCredits,
+  settleMediaReservation,
+  releaseStaleMediaReservations,
+} from "../credits/checkCredits.js";
 import { consumeCredits } from "../credits/consumeCredits.js";
 import { insertMessage } from "../persistence/messages.js";
 import { insertCortexDecision } from "../persistence/cortexDecisions.js";
-import { recordModelOutcome, classifyFailure } from "../cortex/modelHealth.js";
+import { recordModelOutcome, recordModelFailure } from "../cortex/modelHealth.js";
+import { isBalanceExceededError, describeError } from "../openrouter/client.js";
 import type { ModelRegistryRow } from "../types/index.js";
 
 export interface SyncMediaGenerationResult {
@@ -30,7 +39,7 @@ export interface SyncMediaGenerationResult {
 // without casting — every kind still satisfies the base contract.
 export interface SyncMediaGenerationParams<R extends SyncMediaGenerationResult = SyncMediaGenerationResult> {
   fastify: FastifyInstance;
-  sse: SplexSSEWriter;
+  sse: SSEWriter;
   user: AuthedUser;
   conversationId: string;
   userMessageId?: string;
@@ -68,106 +77,135 @@ export async function handleSyncMediaGeneration<R extends SyncMediaGenerationRes
   }
 
   const gateEstimate = await resolveCreditGateEstimate(fastify, decision.complexity, user.planTier);
-  const creditsAllowed = await checkCredits(fastify, user.id, gateEstimate);
-  if (!creditsAllowed) {
-    sse.error({ message: "You're out of SPLEX credits." });
+  // Atomically reserves gateEstimate against the DAILY pool as part of this
+  // same call (reserve_daily_credits, migration 0022) — see
+  // checkAndReserveCredits' doc comment in checkCredits.ts. Every exit path
+  // below MUST settle this reservation exactly once — see the try/finally.
+  const gate = await checkAndReserveCredits(fastify, user.id, gateEstimate);
+  if (!gate.allowed) {
+    sse.error({ message: await resolveCreditRejectionMessage(fastify, user.id, gateEstimate) });
     sse.done({ blocked: true, conversationId, userMessageId });
     sse.end();
     return;
   }
 
-  const candidates = await selectModelCandidates(fastify, kind, user.planTier, 2, decision.complexity);
-  if (candidates.length === 0) {
-    sse.error({ message: params.unavailableMessage });
-    sse.done({ blocked: true, conversationId, userMessageId });
-    sse.end();
-    return;
-  }
-
-  sse.cortexDecision({
-    intent: decision.intentId,
-    complexity: decision.complexity,
-    capabilities: decision.capabilities,
-    categoryLabel: decision.categoryLabel,
-    reason: decision.reason,
-  });
-
-  let model: ModelRegistryRow = candidates[0];
-  let result: R | undefined;
-  for (let i = 0; i < candidates.length; i++) {
-    model = candidates[i];
-    const startedAt = Date.now();
-    try {
-      result = await params.generate(fastify, user.id, model, prompt);
-      recordModelOutcome(fastify, model.id, "success", Date.now() - startedAt, result.costUsd);
-      break;
-    } catch (err) {
-      recordModelOutcome(fastify, model.id, classifyFailure(err), Date.now() - startedAt);
-      fastify.log.warn({ err, model: model.openrouter_model_id, kind }, "media generation failed, trying next candidate");
+  // Set to the real charged amount only once generation genuinely
+  // succeeds; stays 0 on every other exit, fully releasing the reservation.
+  let dailyActualCost = 0;
+  try {
+    const cortexVersion = resolveCortexVersion(user.planTier);
+    const candidates = await selectModelCandidates(fastify, kind, user.planTier, cortexVersion, decision.complexity);
+    if (candidates.length === 0) {
+      sse.error({ message: params.unavailableMessage });
+      sse.done({ blocked: true, conversationId, userMessageId });
+      sse.end();
+      return;
     }
-  }
 
-  if (!result) {
+    sse.cortexDecision({
+      intent: decision.intentId,
+      complexity: decision.complexity,
+      capabilities: decision.capabilities,
+      categoryLabel: decision.categoryLabel,
+      reason: decision.reason,
+    });
+
+    let model: ModelRegistryRow = candidates[0];
+    let result: R | undefined;
+    // Same reasoning as chat.ts's own fallback loop: every candidate shares
+    // one OpenRouter account, so if the last failure was that account's
+    // balance being unable to cover the request, no other candidate would
+    // have fared differently — surface that honestly instead of the generic
+    // caller-supplied failedMessage.
+    let lastError: unknown;
+    for (let i = 0; i < candidates.length; i++) {
+      model = candidates[i];
+      const startedAt = Date.now();
+      try {
+        result = await params.generate(fastify, user.id, model, prompt);
+        recordModelOutcome(fastify, model.id, "success", Date.now() - startedAt, result.costUsd);
+        break;
+      } catch (err) {
+        lastError = err;
+        recordModelFailure(fastify, model.id, err, Date.now() - startedAt);
+        fastify.log.warn({ ...describeError(err), model: model.openrouter_model_id, kind }, "media generation failed, trying next candidate");
+      }
+    }
+
+    if (!result) {
+      await recordMediaGeneration(fastify, {
+        userId: user.id,
+        messageId: null,
+        kind,
+        status: "failed",
+        prompt,
+        errorMessage: "generation failed on every candidate",
+      });
+      sse.error({
+        message: isBalanceExceededError(lastError)
+          ? "This AI service is temporarily unavailable. Please try again shortly."
+          : params.failedMessage,
+      });
+      sse.done({ blocked: true, conversationId, userMessageId });
+      sse.end();
+      return;
+    }
+
+    const markdown = params.buildMarkdown(result, prompt);
+    sse.token({ delta: markdown });
+
+    const creditsCharged = computeMediaCreditsCharged(fastify, result.costUsd);
+    dailyActualCost = creditsCharged;
+    const assistantMessageId = await insertMessage(fastify, {
+      conversationId,
+      role: "assistant",
+      content: markdown,
+      intent: decision.intentId,
+      complexity: decision.complexity,
+      creditsCharged,
+      routedModel: model.openrouter_model_id,
+    });
+
     await recordMediaGeneration(fastify, {
       userId: user.id,
-      messageId: null,
+      messageId: assistantMessageId,
       kind,
-      status: "failed",
+      status: "completed",
+      storagePath: result.storagePath,
       prompt,
-      errorMessage: "generation failed on every candidate",
+      costUsd: result.costUsd,
+      creditsCharged,
     });
-    sse.error({ message: params.failedMessage });
-    sse.done({ blocked: true, conversationId, userMessageId });
+
+    await insertCortexDecision(fastify, {
+      messageId: assistantMessageId,
+      intent: decision.intentId,
+      complexity: decision.complexity,
+      capabilities: decision.capabilities,
+      category: decision.category,
+      reason: decision.reason,
+      modelSelected: model.openrouter_model_id,
+    });
+
+    await consumeCredits(fastify, {
+      userId: user.id,
+      creditCost: creditsCharged,
+      intent: decision.intentId,
+      complexity: decision.complexity,
+      openrouterModelId: model.openrouter_model_id,
+      realCostEstimate: result.costUsd,
+      // Daily is settled by settleDailyReservation() in the finally below —
+      // charging it here too double-counts (see skipDaily's doc comment in
+      // consumeCredits.ts; this shipped and produced an exact 2x daily
+      // overcharge in production).
+      skipDaily: true,
+    });
+
+    sse.done({ messageId: assistantMessageId, conversationId, creditsCharged, userMessageId });
     sse.end();
-    return;
+  } finally {
+    await settleDailyReservation(fastify, user.id, gate.dailyReserved, dailyActualCost);
   }
-
-  const markdown = params.buildMarkdown(result, prompt);
-  sse.token({ delta: markdown });
-
-  const creditsCharged = computeMediaCreditsCharged(fastify, result.costUsd);
-  const assistantMessageId = await insertMessage(fastify, {
-    conversationId,
-    role: "assistant",
-    content: markdown,
-    intent: decision.intentId,
-    complexity: decision.complexity,
-    creditsCharged,
-    routedModel: model.openrouter_model_id,
-  });
-
-  await recordMediaGeneration(fastify, {
-    userId: user.id,
-    messageId: assistantMessageId,
-    kind,
-    status: "completed",
-    storagePath: result.storagePath,
-    prompt,
-    costUsd: result.costUsd,
-    creditsCharged,
-  });
-
-  await insertCortexDecision(fastify, {
-    messageId: assistantMessageId,
-    intent: decision.intentId,
-    complexity: decision.complexity,
-    capabilities: decision.capabilities,
-    category: decision.category,
-    reason: decision.reason,
-    modelSelected: model.openrouter_model_id,
-  });
-
-  await consumeCredits(fastify, {
-    userId: user.id,
-    creditCost: creditsCharged,
-    intent: decision.intentId,
-    complexity: decision.complexity,
-    openrouterModelId: model.openrouter_model_id,
-    realCostEstimate: result.costUsd,
-  });
-
-  sse.done({ messageId: assistantMessageId, conversationId, creditsCharged, userMessageId });
-  sse.end();
 }
 
 export interface AsyncMediaJob {
@@ -177,7 +215,7 @@ export interface AsyncMediaJob {
 
 export interface AsyncMediaGenerationParams {
   fastify: FastifyInstance;
-  sse: SplexSSEWriter;
+  sse: SSEWriter;
   user: AuthedUser;
   conversationId: string;
   userMessageId?: string;
@@ -219,17 +257,58 @@ export async function handleAsyncMediaGeneration(params: AsyncMediaGenerationPar
     return;
   }
 
+  // Opportunistic sweep of reservations pinned by jobs nobody ever polled
+  // to completion. Runs here because this is the one place guaranteed to be
+  // hit before a new video reservation is taken, so a user cannot be blocked
+  // by their own abandoned job. Fire-and-forget — a sweep failure must never
+  // affect this request.
+  void releaseStaleMediaReservations(fastify);
+
   const gateEstimate = await resolveCreditGateEstimate(fastify, decision.complexity, user.planTier);
-  const creditsAllowed = await checkCredits(fastify, user.id, gateEstimate);
-  if (!creditsAllowed) {
-    sse.error({ message: "You're out of SPLEX credits." });
+
+  // The row is created BEFORE the credit reservation and before submission,
+  // which is a deliberate ordering change. The reservation has to be
+  // attached to something durable the moment it exists: reserving first and
+  // recording afterwards would leave an unreleasable reservation if anything
+  // failed in between. It also tightens the concurrency race — two
+  // simultaneous submits now both leave a queued row rather than both
+  // sailing past a check that counts rows neither of them had created yet.
+  const mediaId = await recordMediaGeneration(fastify, {
+    userId: user.id,
+    messageId: null,
+    kind,
+    status: "queued",
+    prompt,
+  });
+
+  if (!mediaId) {
+    sse.error({ message: params.submitFailedMessage });
     sse.done({ blocked: true, conversationId, userMessageId });
     sse.end();
     return;
   }
 
-  const candidates = await selectModelCandidates(fastify, kind, user.planTier, 2, decision.complexity);
+  // Atomic reserve-and-stamp. Unlike the read-only check_credits() this
+  // replaces, two concurrent submits now serialize on Postgres's own row
+  // lock and the second is rejected if the pool cannot cover both.
+  const reserved = await reserveMediaCredits(fastify, mediaId, gateEstimate);
+  if (!reserved) {
+    await updateGeneratedMediaStatus(fastify, mediaId, {
+      status: "failed",
+      errorMessage: "insufficient credits at submission",
+    });
+    sse.error({ message: await resolveCreditRejectionMessage(fastify, user.id, gateEstimate) });
+    sse.done({ blocked: true, conversationId, userMessageId });
+    sse.end();
+    return;
+  }
+
+  const cortexVersion = resolveCortexVersion(user.planTier);
+  const candidates = await selectModelCandidates(fastify, kind, user.planTier, cortexVersion, decision.complexity);
   if (candidates.length === 0) {
+    // Reservation is live from here on, so every exit below must release it.
+    await settleMediaReservation(fastify, mediaId, 0);
+    await updateGeneratedMediaStatus(fastify, mediaId, { status: "failed", errorMessage: "no live model for this capability" });
     sse.error({ message: params.unavailableMessage });
     sse.done({ blocked: true, conversationId, userMessageId });
     sse.end();
@@ -246,6 +325,7 @@ export async function handleAsyncMediaGeneration(params: AsyncMediaGenerationPar
 
   let model: ModelRegistryRow = candidates[0];
   let job: AsyncMediaJob | undefined;
+  let lastError: unknown;
   for (let i = 0; i < candidates.length; i++) {
     model = candidates[i];
     const startedAt = Date.now();
@@ -257,8 +337,9 @@ export async function handleAsyncMediaGeneration(params: AsyncMediaGenerationPar
       recordModelOutcome(fastify, model.id, "success", Date.now() - startedAt);
       break;
     } catch (err) {
-      recordModelOutcome(fastify, model.id, classifyFailure(err), Date.now() - startedAt);
-      fastify.log.warn({ err, model: model.openrouter_model_id, kind }, "async media submit failed, trying next candidate");
+      lastError = err;
+      recordModelFailure(fastify, model.id, err, Date.now() - startedAt);
+      fastify.log.warn({ ...describeError(err), model: model.openrouter_model_id, kind }, "async media submit failed, trying next candidate");
     }
   }
 
@@ -270,15 +351,19 @@ export async function handleAsyncMediaGeneration(params: AsyncMediaGenerationPar
     // path. Doesn't change quota math either way (status='failed' rows are
     // already excluded from quota counts) — this is purely closing an
     // observability gap.
-    await recordMediaGeneration(fastify, {
-      userId: user.id,
-      messageId: null,
-      kind,
+    // Releases the reservation and marks the row we already created, rather
+    // than inserting a SECOND failed row as the previous code did (the
+    // reservation is attached to the existing one).
+    await settleMediaReservation(fastify, mediaId, 0);
+    await updateGeneratedMediaStatus(fastify, mediaId, {
       status: "failed",
-      prompt,
       errorMessage: "submission failed on every candidate",
     });
-    sse.error({ message: params.submitFailedMessage });
+    sse.error({
+      message: isBalanceExceededError(lastError)
+        ? "This AI service is temporarily unavailable. Please try again shortly."
+        : params.submitFailedMessage,
+    });
     sse.done({ blocked: true, conversationId, userMessageId });
     sse.end();
     return;
@@ -295,12 +380,11 @@ export async function handleAsyncMediaGeneration(params: AsyncMediaGenerationPar
     routedModel: model.openrouter_model_id,
   });
 
-  const mediaId = await recordMediaGeneration(fastify, {
-    userId: user.id,
-    messageId: assistantMessageId,
-    kind,
+  // The row already exists (created before the reservation above) — attach
+  // the message, polling URL and chosen model to it now that they exist.
+  await updateGeneratedMediaStatus(fastify, mediaId, {
     status: "queued",
-    prompt,
+    messageId: assistantMessageId,
     providerJobId: job.pollingUrl,
     openrouterModelId: model.openrouter_model_id,
   });

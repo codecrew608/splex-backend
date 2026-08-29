@@ -1,3 +1,4 @@
+import type { PlanTier } from "@splex/shared-types";
 import type { FastifyInstance } from "fastify";
 import type { ComplexityLevel } from "@splex/shared-types";
 import { classifyIntent } from "./classify.js";
@@ -13,8 +14,8 @@ export interface CortexDecision {
   reason: string;
 }
 
-export async function runCortexClassification(fastify: FastifyInstance, message: string): Promise<CortexDecision> {
-  const classification = await classifyIntent(fastify, message);
+export async function runCortexClassification(fastify: FastifyInstance, message: string, planTier: PlanTier): Promise<CortexDecision> {
+  const classification = await classifyIntent(fastify, message, planTier);
   const complexity = estimateComplexity(message);
 
   return {
@@ -31,3 +32,6 @@ export { selectModel, selectModelCandidates } from "./modelSelect.js";
 export { categoryToLabel } from "./labels.js";
 export { SPLEX_SYSTEM_PROMPT, buildSystemPrompt } from "./systemPrompt.js";
 export { buildProjectContext } from "./userContext.js";
+export { resolveCortexVersion } from "./version.js";
+export type { CortexVersion } from "./version.js";
+export { friendlyModelName, explainModelSelection } from "./modelDisplay.js";

@@ -1,0 +1,99 @@
+name: CI
+
+# Gates every push and PR. Before this, the test suite gated nothing — it
+# only ran when someone remembered to.
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+    branches: ["**"]
+
+# A newer push to the same branch makes an in-flight run obsolete.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # No `version:` — pnpm/action-setup reads packageManager from
+      # package.json, so CI and every developer use the identical pnpm
+      # rather than "whatever 11.x resolves to today".
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          # Reads .nvmrc, so the Node version lives in exactly one place.
+          # It must stay 22.x: package-lock.json content is npm-version
+          # dependent (npm 11 writes a "libc" field npm 10 strips), and the
+          # deploy bundles' lockfiles are generated with a pinned npm 10 to
+          # match node:22-slim. See scripts/bundle-*.sh.
+          node-version-file: .nvmrc
+          cache: pnpm
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      # --- correctness -----------------------------------------------------
+      - name: Typecheck (backend)
+        run: pnpm --filter @splex/backend typecheck
+
+      - name: Typecheck (Cloudflare Worker)
+        # A separate tsconfig targeting a different runtime — the Node
+        # typecheck above does not cover src/worker at all.
+        run: pnpm --filter @splex/backend typecheck:worker
+
+      - name: Typecheck (frontend)
+        run: pnpm --filter @splex/web typecheck
+
+      - name: Tests
+        run: pnpm --filter @splex/backend test
+
+      # --- builds ----------------------------------------------------------
+      - name: Build backend
+        run: pnpm --filter @splex/backend build
+
+      - name: Build frontend
+        run: pnpm --filter @splex/web build
+        env:
+          # next build evaluates env at build time. These are the PUBLIC
+          # anon-key variables only — never a service-role key or any secret.
+          # Placeholders are fine: nothing here contacts Supabase during a
+          # build, and lib/supabase/env.ts is written to fail closed rather
+          # than throw when they are absent or invalid.
+          NEXT_PUBLIC_SUPABASE_URL: https://placeholder.supabase.co
+          NEXT_PUBLIC_SUPABASE_ANON_KEY: placeholder-anon-key
+          NEXT_PUBLIC_BACKEND_URL: https://placeholder.workers.dev
+
+      # --- the anti-divergence gate ---------------------------------------
+      #
+      # THIS is what makes "apps/* is the source, deploy/* is generated"
+      # actually true instead of a convention people remember.
+      #
+      # Vercel builds deploy/frontend and Wrangler deploys deploy/backend, so
+      # a commit that edits apps/web without regenerating the bundle ships
+      # STALE code to production while the diff looks correct. Regenerating
+      # here and failing on any difference makes that impossible to merge.
+      - name: Regenerate deployment bundles
+        run: |
+          bash scripts/bundle-backend.sh
+          bash scripts/bundle-frontend.sh
+
+      - name: Fail if deploy/ is out of sync with apps/
+        run: |
+          if ! git diff --quiet -- deploy/; then
+            echo "::error::deploy/ is out of sync with apps/."
+            echo "The deployment bundles are generated artifacts. Run both bundle"
+            echo "scripts and commit the result:"
+            echo "  bash scripts/bundle-backend.sh && bash scripts/bundle-frontend.sh"
+            echo ""
+            echo "Files that differ:"
+            git --no-pager diff --stat -- deploy/
+            exit 1
+          fi
+          echo "deploy/ matches apps/ — bundles are in sync."

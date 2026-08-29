@@ -1,5 +1,5 @@
 import type { Metadata } from "next";
-import { Inter, JetBrains_Mono } from "next/font/google";
+import { Inter, JetBrains_Mono, Space_Grotesk } from "next/font/google";
 import Script from "next/script";
 import "./globals.css";
 
@@ -17,6 +17,17 @@ const jetbrainsMono = JetBrains_Mono({
   display: "swap",
   weight: ["400", "500", "600"],
 });
+// Display face — the graphite/amber system's third type role, reserved
+// for headings, nav section labels, and empty states (globals.css'
+// --font-display). Fixed weights only (500/600/700): unlike Inter, it's
+// never used at body-text sizes where a variable range's in-between
+// weights would matter.
+const spaceGrotesk = Space_Grotesk({
+  subsets: ["latin"],
+  variable: "--font-space-grotesk",
+  display: "swap",
+  weight: ["500", "600", "700"],
+});
 
 export const metadata: Metadata = {
   title: "SPLEX",
@@ -30,15 +41,21 @@ const THEME_INIT_SCRIPT = `
 try {
   var t = localStorage.getItem('splex-theme');
   if (t !== 'light' && t !== 'dark') {
-    t = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+    t = 'light';
   }
   document.documentElement.setAttribute('data-theme', t);
-} catch (e) {}
+} catch (e) {
+  document.documentElement.setAttribute('data-theme', 'light');
+}
 `;
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="en" className={`${inter.variable} ${jetbrainsMono.variable}`} suppressHydrationWarning>
+    <html
+      lang="en"
+      className={`${inter.variable} ${jetbrainsMono.variable} ${spaceGrotesk.variable}`}
+      suppressHydrationWarning
+    >
       <head>
         <Script id="theme-init" strategy="beforeInteractive">
           {THEME_INIT_SCRIPT}

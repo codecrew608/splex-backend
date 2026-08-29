@@ -104,6 +104,14 @@ export async function updateGeneratedMediaStatus(
     costUsd?: number | null;
     creditsCharged?: number | null;
     errorMessage?: string | null;
+    // Set once the job has actually been submitted and its assistant
+    // message exists. The row is now created BEFORE submission (so the
+    // credit reservation always has something to hang off — see migration
+    // 0025), which means these three arrive on a later update rather than
+    // at insert time.
+    messageId?: string | null;
+    providerJobId?: string | null;
+    openrouterModelId?: string | null;
   },
 ): Promise<void> {
   const { error } = await fastify.supabaseAdmin
@@ -114,6 +122,9 @@ export async function updateGeneratedMediaStatus(
       cost_usd: updates.costUsd ?? undefined,
       credits_charged: updates.creditsCharged ?? undefined,
       error_message: updates.errorMessage ?? undefined,
+      message_id: updates.messageId ?? undefined,
+      provider_job_id: updates.providerJobId ?? undefined,
+      openrouter_model_id: updates.openrouterModelId ?? undefined,
       completed_at: updates.status === "completed" || updates.status === "failed" ? new Date().toISOString() : undefined,
     })
     .eq("id", mediaId);

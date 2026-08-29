@@ -1,8 +1,15 @@
 import type { ComplexityLevel } from "../shared-types.js";
 import type { ModelRegistryRow, ModelHealthRow } from "../types/index.js";
+import type { CortexVersion } from "./version.js";
 
 // Task shapes that want materially different trade-offs. Derived from
-// (category, complexity) — see resolveRoutingProfile.
+// (category, complexity) — see resolveRoutingProfile. v1 (Free) never
+// resolves into one of these — it always scores with V1_FLAT_WEIGHTS
+// below, which is the actual architectural split between the two engine
+// versions: v1.5 doesn't just see a bigger model pool, its SCORING
+// FUNCTION genuinely behaves differently (task-shape-aware weighting,
+// category-specific capability fit, live health blending, provider-
+// diversified fallback — none of which v1 does).
 export type RoutingProfile = "cheap_fast" | "coding" | "deep_quality" | "media";
 
 export interface ScoredModel {
@@ -42,6 +49,17 @@ const PROFILE_WEIGHTS: Record<RoutingProfile, ProfileWeights> = {
 };
 
 const MEDIA_CATEGORIES = new Set(["image", "audio", "video", "ppt"]);
+
+// v1 (Free)'s ENTIRE routing profile: one flat, task-shape-blind weighting
+// — no coding/deep_quality/media differentiation at all. This is what
+// "Basic complexity analysis, Standard model scoring" actually means
+// architecturally: v1 never calls resolveRoutingProfile, so the same
+// weights apply whether the request is a one-line greeting or a math
+// problem. Intentionally close to cheap_fast's own tuning (a defensible
+// "cheap and reasonable" default for a free tier) but kept as an
+// independent constant so v1's behavior can't silently drift if
+// cheap_fast's own tuning is ever adjusted for v1.5.
+const V1_FLAT_WEIGHTS: ProfileWeights = { quality: 0.6, capabilityFit: 0.4, reliability: 0.9, cost: 1.8, latency: 1.0 };
 
 export function resolveRoutingProfile(category: string, complexity: ComplexityLevel): RoutingProfile {
   if (MEDIA_CATEGORIES.has(category)) return "media";
@@ -120,20 +138,31 @@ function latencyPenaltyFor(model: ModelRegistryRow, health: ModelHealthRow | und
 // Deliberately deterministic and dependency-free: no LLM call, no network
 // — the spec explicitly calls for deterministic logic on cheap decisions,
 // and this runs on every single request.
+//
+// cortexVersion is where v1 and v1.5 actually diverge in BEHAVIOR, not
+// just input size:
+//   v1   — flat V1_FLAT_WEIGHTS regardless of category/complexity, no live
+//          health blending (health data is simply never looked up for a
+//          v1 candidate — reliability/latency fall back to configured
+//          scores only), capability fit collapses to plain quality_score
+//          (no coding_score/reasoning_score signal).
+//   v1.5 — full resolveRoutingProfile task-shape weighting, live health
+//          blending, category-specific capability fit.
 export function scoreModels(
   models: ModelRegistryRow[],
   health: Map<string, ModelHealthRow>,
   category: string,
   complexity: ComplexityLevel,
+  cortexVersion: CortexVersion,
 ): ScoredModel[] {
-  const profile = resolveRoutingProfile(category, complexity);
-  const w = PROFILE_WEIGHTS[profile];
+  const isV1 = cortexVersion === "v1";
+  const w = isV1 ? V1_FLAT_WEIGHTS : PROFILE_WEIGHTS[resolveRoutingProfile(category, complexity)];
 
   return models
     .map((model) => {
-      const h = health.get(model.id);
+      const h = isV1 ? undefined : health.get(model.id);
       const quality = model.quality_score ?? model.capability_score;
-      const capabilityFit = capabilityFitFor(model, category);
+      const capabilityFit = isV1 ? quality : capabilityFitFor(model, category);
       const reliability = reliabilityFor(model, h);
       const costPenalty = costPenaltyFor(model);
       const latencyPenalty = latencyPenaltyFor(model, h);
@@ -180,4 +209,14 @@ export function diversifyByProvider(scored: ScoredModel[], limit: number): Score
   }
 
   return picked;
+}
+
+// The other half of the v1/v1.5 behavioral split (alongside scoreModels
+// above): v1's "Basic fallback" is a plain top-N cut of the ranked list.
+// v1.5's "Better fallback selection when the primary model fails" is
+// provider-diversified — see diversifyByProvider's own doc comment for why
+// that materially improves retry odds over a same-provider second pick.
+export function pickCandidates(scored: ScoredModel[], cortexVersion: CortexVersion, limit: number): ScoredModel[] {
+  if (cortexVersion === "v1") return scored.slice(0, limit);
+  return diversifyByProvider(scored, limit);
 }

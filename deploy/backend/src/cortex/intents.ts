@@ -24,6 +24,17 @@ export const INTENTS: IntentDefinition[] = [
       /\bwrite (a|an|some) (function|script|program|class|component|api|endpoint)\b/i,
       /\bimplement\b/i,
       /\bbuild (a|an) (function|app|api|component|script)\b/i,
+      // `\bimplement\b` above only matches the bare verb — "write a Python
+      // implementation" / "build an implementation of this algorithm" use
+      // the noun form, which it never catches (confirmed live: a genuine
+      // heavy-coding prompt fell all the way through to the LLM fallback
+      // classifier for exactly this reason). Anchored to a coding-shaped
+      // verb within a short span of "implementation" specifically so it
+      // doesn't fire on an unrelated noun use ("the implementation of the
+      // new policy") — those have no write/build/create/design verb
+      // anywhere near "implementation" and correctly fall through to the
+      // fallback classifier instead, same as before this change.
+      /\b(write|build|create|design)\b[\s\S]{0,25}\bimplementation\b/i,
       /```[a-z]*\n/,
     ],
     weakKeywords: [/\bcode\b/i, /\bfunction\b/i, /\bscript\b/i],

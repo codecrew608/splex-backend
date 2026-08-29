@@ -89,7 +89,7 @@ export default async function UpgradePage() {
   }
 
   return (
-    <div className="mx-auto h-screen max-w-3xl overflow-y-auto px-6 py-10">
+    <div className="mx-auto h-dvh max-w-3xl overflow-y-auto px-4 pb-10 pt-14 sm:px-6 sm:pt-10">
       <div className="text-center">
         <h1 className="text-4xl font-extrabold tracking-tight text-foreground">Choose your plan</h1>
         <p className="mt-2 text-sm text-muted-foreground">SPLEX Credits, not tokens — Cortex handles the rest.</p>

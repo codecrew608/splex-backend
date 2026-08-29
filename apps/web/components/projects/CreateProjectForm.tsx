@@ -1,5 +1,11 @@
 "use client";
 
+// SUPERSEDED — replaced by components/projects/NewProjectForm.tsx, which
+// is rendered by the dedicated /projects/new page and additionally
+// captures a description. This inline name-only form has no remaining
+// references. Kept deliberately (not deleted) pending a call on whether
+// to remove it; do not wire it back in.
+
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { Plus } from "lucide-react";
