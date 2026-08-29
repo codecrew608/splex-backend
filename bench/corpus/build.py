@@ -16,7 +16,8 @@ from pathlib import Path
 
 from .schema import Question, validate, exact_key, skeleton_key, token_set, jaccard, CorpusError
 from .generators import (mathematics, physics, coding, reasoning, capability,
-                         knowledge, extended_math, physics_extended)
+                         knowledge, extended_math, physics_extended,
+                         world_knowledge, structured)
 from .generators.coding_reference import REFERENCE_SOLUTIONS
 
 OUT = Path(__file__).parent / "corpus.jsonl"
@@ -26,7 +27,7 @@ NEAR_DUPLICATE_THRESHOLD = 0.92
 def collect() -> list[Question]:
     qs: list[Question] = []
     for mod in (mathematics, physics, coding, reasoning, capability, knowledge,
-                extended_math, physics_extended):
+                extended_math, physics_extended, world_knowledge, structured):
         qs.extend(mod.all_questions())
     return qs
 
@@ -34,6 +35,33 @@ def collect() -> list[Question]:
 def check_unique_ids(qs: list[Question]) -> list[str]:
     dupes = [qid for qid, n in Counter(q.question_id for q in qs).items() if n > 1]
     return [f"duplicate question_id: {d}" for d in dupes]
+
+
+def _build_families(qs: list[Question]) -> dict[str, str]:
+    """Union-find over declared minimal-pair links.
+
+    Returns question_id -> family root. Two questions in the same family were
+    deliberately authored as variations of each other, and the author had to
+    say so explicitly — the detector still fires for anything undeclared.
+    """
+    parent: dict[str, str] = {q.question_id: q.question_id for q in qs}
+
+    def find(x: str) -> str:
+        while parent.get(x, x) != x:
+            parent[x] = parent.get(parent[x], parent[x])
+            x = parent[x]
+        return x
+
+    for q in qs:
+        if q.minimal_pair_of and q.minimal_pair_of in parent:
+            ra, rb = find(q.question_id), find(q.minimal_pair_of)
+            if ra != rb:
+                parent[ra] = rb
+    return {qid: find(qid) for qid in parent}
+
+
+def _same_family(a: str, b: str, family: dict[str, str]) -> bool:
+    return a in family and b in family and family[a] == family[b]
 
 
 def find_duplicates(qs: list[Question]) -> tuple[list[str], int]:
@@ -45,6 +73,7 @@ def find_duplicates(qs: list[Question]) -> tuple[list[str], int]:
     audit them, rather than silently dropped.
     """
     problems: list[str] = []
+    family = _build_families(qs)
     seen_exact: dict[str, str] = {}
     for q in qs:
         k = exact_key(q.prompt)
@@ -69,9 +98,15 @@ def find_duplicates(qs: list[Question]) -> tuple[list[str], int]:
                 if sim < NEAR_DUPLICATE_THRESHOLD:
                     continue
                 # A declared minimal pair is the experiment, not an accident:
-                # two prompts differing by one decisive word probe opposite
-                # behaviours. Declaring it (either direction) exempts the pair.
-                if a.minimal_pair_of == b.question_id or b.minimal_pair_of == a.question_id:
+                # prompts differing by one decisive word — or, for the
+                # long-context items, by the POSITION of a planted fact —
+                # probe different behaviours while sharing a token set.
+                #
+                # Declarations are TRANSITIVE: a three-item family (fact at
+                # start / middle / absent) cannot be expressed by a single
+                # pairwise link, so membership of the same declared family
+                # exempts the pair.
+                if _same_family(a.question_id, b.question_id, family):
                     continue
                 problems.append(
                     f"NEAR duplicate ({sim:.2f}) in {bucket}: "
