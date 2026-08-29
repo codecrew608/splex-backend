@@ -371,10 +371,26 @@ export async function completeOnce(opts: {
 // retry-with-a-different-model safe here: there's never partial output on
 // the wire yet. 429 is OpenRouter's shared-:free-pool rate limit (the
 // dominant real-world case); 5xx covers a transient upstream outage.
+// A 403 from OpenRouter is model-specific access denial, not a transport
+// fault: observed live as "<model> is only available on agentic harnesses"
+// for thinkingmachines/inkling*:free. It says nothing about the NEXT
+// candidate, so — exactly like the 404 case below — the fallback chain must
+// keep going rather than killing a request that had working alternatives.
+//
+// Deliberately NOT folded into isModelUnavailableError: that predicate also
+// drives auto-deactivation, and blanket-deactivating on 403 would let a
+// temporarily bad API key strip the registry of every model at once. This
+// only affects whether we try the next candidate.
+export function isModelAccessDeniedError(err: unknown): boolean {
+  if (!(err instanceof Error)) return false;
+  return /OpenRouter (request|classifier request) failed \(403\)/.test(err.message);
+}
+
 export function isRetryableOpenRouterError(err: unknown): boolean {
   if (!(err instanceof Error)) return false;
   return (
     /OpenRouter (request|classifier request) failed \((429|5\d\d)\)/.test(err.message) ||
+    isModelAccessDeniedError(err) ||
     // A model that no longer exists is permanently dead for THAT model but
     // says nothing about the next candidate, so the fallback chain must
     // keep going. Without this a single stale registry row aborted the

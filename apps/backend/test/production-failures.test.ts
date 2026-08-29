@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { OpenRouterError, describeError, isRetryableOpenRouterError } from "../src/openrouter/client.js";
+import { OpenRouterError, describeError, isRetryableOpenRouterError, isModelUnavailableError } from "../src/openrouter/client.js";
 import { IntelligenceNotConfiguredError, isIntelligenceConfigured } from "../src/intelligence/client.js";
 
 const SRC = join(import.meta.dirname, "..", "src");
@@ -215,5 +215,37 @@ describe("PROVIDER COST: no Free request can reach a paid model", () => {
     expect(src).toContain('.eq("variant", variant)');
     expect(src).toContain('planTier === "free"');
     expect(src).toContain('s.model.variant === "free"'); // redundant cost-safety guard
+  });
+});
+
+describe("LIVE 2026-08-29: free-model availability probe findings", () => {
+  it("a 403 continues the fallback chain instead of killing the request", () => {
+    // Observed live: thinkingmachines/inkling:free returns 403
+    // "only available on agentic harnesses". Before this, 403 was not in the
+    // retryable set, so hitting one aborted a request that had perfectly
+    // good free candidates behind it.
+    const e = new OpenRouterError("stream", 403, "inkling:free is only available on agentic harnesses", "thinkingmachines/inkling:free");
+    expect(isRetryableOpenRouterError(e)).toBe(true);
+  });
+
+  it("403 does NOT mark the model unavailable — that would drive auto-deactivation", () => {
+    // isModelUnavailableError feeds deactivateUnavailableModel. Blanket
+    // deactivation on 403 would let one bad API key strip the whole registry.
+    const e = new OpenRouterError("stream", 403, "forbidden", "some/model:free");
+    expect(isModelUnavailableError(e)).toBe(false);
+  });
+
+  it("429 stays retryable and stays non-deactivating", () => {
+    // Upstream shared-pool saturation is transient; deactivating on it would
+    // permanently shrink the free pool over time.
+    const e = new OpenRouterError("stream", 429, "Provider returned error", "z-ai/glm-5.2:free");
+    expect(isRetryableOpenRouterError(e)).toBe(true);
+    expect(isModelUnavailableError(e)).toBe(false);
+  });
+
+  it("404 remains both retryable and deactivating (unchanged)", () => {
+    const e = new OpenRouterError("stream", 404, "No endpoints found", "dead/model");
+    expect(isRetryableOpenRouterError(e)).toBe(true);
+    expect(isModelUnavailableError(e)).toBe(true);
   });
 });
