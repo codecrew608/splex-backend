@@ -93,10 +93,42 @@ describe("BUG: Free users triggered PAID provider calls", () => {
     }
   });
 
-  it("falls back loudly, not silently, if no free model exists", () => {
+  it("returns NULL rather than the paid model when no free model exists", () => {
     const src = read("cortex/classifierModel.ts");
     expect(src).toContain("fastify.log.error");
-    expect(src).toMatch(/falling back to the configured \(paid\) model/);
+    // The old behaviour returned fastify.config.CORTEX_CLASSIFIER_MODEL_ID
+    // — a PAID model — on the error path. A transient model_registry
+    // failure was therefore enough to put a Free request on paid
+    // inference. "Free never reaches paid" has to hold on error paths too.
+    expect(src).toContain("return null;");
+    expect(src).toMatch(/Promise<string \| null>/);
+    // The paid model may still be returned — but ONLY on the non-free
+    // branch, and exactly once. Any second occurrence would mean a Free
+    // code path can reach it again.
+    const paidReturns = src.match(/return fastify\.config\.CORTEX_CLASSIFIER_MODEL_ID;/g) ?? [];
+    expect(paidReturns).toHaveLength(1);
+    const guardAt = src.indexOf('if (planTier !== "free")');
+    const paidAt = src.indexOf("return fastify.config.CORTEX_CLASSIFIER_MODEL_ID;");
+    expect(guardAt).toBeGreaterThan(-1);
+    expect(paidAt).toBeGreaterThan(guardAt);
+    // and it must sit immediately inside that guard, not later in the body
+    expect(paidAt - guardAt).toBeLessThan(80);
+  });
+
+  it("every caller SKIPS its call when no free model is available, rather than spending", () => {
+    // classify: degrades to the general intent (its catch already did this)
+    expect(read("cortex/classify.ts")).toContain('throw new Error("no free classifier model available")');
+    // workflow planning: degrades to ordinary single-shot chat
+    expect(read("cortex/workflow/plan.ts")).toContain('return { outcome: "fallback" };');
+    expect(read("cortex/workflow/plan.ts")).toContain("if (!plannerModel)");
+    // memory extraction: best-effort upkeep, simply skipped
+    expect(read("memory/extractMemory.ts")).toContain("if (!memoryModel) return;");
+    // and none of them pass the resolver's result straight into completeOnce
+    for (const f of ["cortex/classify.ts", "cortex/workflow/plan.ts", "memory/extractMemory.ts"]) {
+      expect(read(f), `${f} must not inline the resolver into the call`).not.toContain(
+        "model: await resolveClassifierModel(fastify, planTier)",
+      );
+    }
   });
 });
 

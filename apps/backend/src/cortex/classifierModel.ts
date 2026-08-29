@@ -28,7 +28,7 @@ import type { PlanTier } from "@splex/shared-types";
 // Paid tiers keep the configured model: classification quality matters
 // more there, the spend is already covered by the subscription, and it is
 // the behaviour those users are paying for.
-export async function resolveClassifierModel(fastify: FastifyInstance, planTier: PlanTier): Promise<string> {
+export async function resolveClassifierModel(fastify: FastifyInstance, planTier: PlanTier): Promise<string | null> {
   if (planTier !== "free") {
     return fastify.config.CORTEX_CLASSIFIER_MODEL_ID;
   }
@@ -47,14 +47,23 @@ export async function resolveClassifierModel(fastify: FastifyInstance, planTier:
     .maybeSingle();
 
   if (error || !data?.openrouter_model_id) {
-    // Fail LOUD rather than silently reaching for the paid model: a Free
-    // request quietly costing money is exactly the failure this module
-    // exists to prevent, and it would be invisible without this log.
+    // Return NULL — never the configured (paid) model.
+    //
+    // Falling back to the paid model here was a real, if narrow, paid-leak
+    // path for Free users: a transient model_registry error was enough to
+    // put a Free request on paid inference. It logged loudly, but it still
+    // spent. "Free tier never reaches a paid model" has to hold on the
+    // error paths too, or it isn't an invariant.
+    //
+    // Skipping classification entirely is a genuinely cheap fallback: the
+    // caller already degrades to the general intent when classification is
+    // unavailable (see classify.ts), which is the same outcome a failed
+    // classifier call produces — minus the spend.
     fastify.log.error(
       { error, planTier },
-      "no active free-variant general model for internal classification — falling back to the configured (paid) model",
+      "no active free-variant general model for internal classification — skipping LLM classification rather than spending on the paid model",
     );
-    return fastify.config.CORTEX_CLASSIFIER_MODEL_ID;
+    return null;
   }
 
   return data.openrouter_model_id as string;

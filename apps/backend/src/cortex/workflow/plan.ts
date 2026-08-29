@@ -43,14 +43,22 @@ export async function planWorkflow(
 ): Promise<PlanResult> {
   const userContent = contextBlock ? `${contextBlock}\n\nUser request:\n${message}` : `User request:\n${message}`;
 
+  // Tier-aware. Free users can run workflows (3 steps on the free plan),
+  // so planning must not reach the configured PAID model. null means no
+  // free model is available: fall back to ordinary single-shot chat rather
+  // than spending — a workflow is an enhancement, never worth a paid call
+  // the user's tier doesn't cover.
+  const plannerModel = await resolveClassifierModel(fastify, planTier);
+  if (!plannerModel) {
+    fastify.log.warn({ planTier }, "no free planner model available, falling back to single-shot chat");
+    return { outcome: "fallback" };
+  }
+
   let raw: string;
   try {
     const result = await completeOnce({
       fastify,
-      // Tier-aware. Free users can run workflows (3 steps on the free
-      // plan), so planning must not reach the configured PAID model — the
-      // same leak fixed in classify.ts and extractMemory.ts.
-      model: await resolveClassifierModel(fastify, planTier),
+      model: plannerModel,
       messages: [
         { role: "system", content: buildPlannerSystemPrompt(maxSteps) },
         { role: "user", content: userContent },

@@ -45,10 +45,16 @@ If uncertain, use intentId "general_qa", category "general".`;
 
 async function classifyWithFallbackModel(fastify: FastifyInstance, message: string, planTier: PlanTier): Promise<ClassificationResult> {
   try {
+    // Tier-aware: a Free request must never reach a paid model. null means
+    // no free classifier is available, so skip the call entirely rather
+    // than spending — the catch below already produces exactly the right
+    // degraded result for that case.
+    const classifierModel = await resolveClassifierModel(fastify, planTier);
+    if (!classifierModel) throw new Error("no free classifier model available");
+
     const { content: raw } = await completeOnce({
       fastify,
-      // Tier-aware: a Free request must never reach a paid model.
-      model: await resolveClassifierModel(fastify, planTier),
+      model: classifierModel,
       messages: [
         { role: "system", content: CLASSIFIER_SYSTEM_PROMPT },
         { role: "user", content: message },

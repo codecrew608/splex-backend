@@ -72,11 +72,17 @@ export async function extractAndUpdateMemory(
 
     const existingSummary = memoryRow?.summary_text ?? "";
 
+    // Tier-aware — memory upkeep for a Free user must not bill the paid
+    // account (see resolveClassifierModel). null means no free model is
+    // available; memory extraction is best-effort background upkeep, so
+    // skipping it costs the user nothing visible, whereas paying for it
+    // would be an unauthorised charge on a Free account.
+    const memoryModel = await resolveClassifierModel(fastify, planTier);
+    if (!memoryModel) return;
+
     const { content: raw } = await completeOnce({
       fastify,
-      // Tier-aware — memory upkeep for a Free user must not bill the
-      // paid account (see resolveClassifierModel).
-      model: await resolveClassifierModel(fastify, planTier),
+      model: memoryModel,
       messages: [
         { role: "system", content: EXTRACT_SYSTEM_PROMPT },
         {
