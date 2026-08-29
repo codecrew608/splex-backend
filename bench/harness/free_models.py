@@ -13,6 +13,13 @@ The inventory below is a SNAPSHOT of production `model_registry`, taken
     where variant='free' and is_active and free_tier_allowed
     order by category, priority;
 
+UPDATED 2026-08-29 after migration 0031, which deactivated
+thinkingmachines/inkling:free (vision) and inkling-small:free (documents).
+Both returned a permanent HTTP 403 "only available on agentic harnesses" in
+the live availability probe, so they could never serve a SPLEX request.
+Verified post-migration against the live database: exactly those two rows
+flipped to is_active=false, no other row changed.
+
 It is checked in so the corpus and its expectations are reproducible. It is
 NOT the authority at run time — `verify_inventory_matches_live()` re-reads
 the database before any execution and refuses to run if the two disagree,
@@ -42,7 +49,6 @@ FREE_MODELS: list[FreeModel] = [
 
     FreeModel("minimax/minimax-m3:free", "minimax", "documents", 10, 76, 1_048_576, "text"),
     FreeModel("google/gemma-4-31b-it:free", "google", "documents", 20, 75, 262_144, "text"),
-    FreeModel("thinkingmachines/inkling-small:free", "thinkingmachines", "documents", 30, 72, 1_048_576, "text"),
 
     FreeModel("google/gemma-4-31b-it:free", "google", "general", 10, 75, 262_144, "text"),
     FreeModel("z-ai/glm-5.2:free", "z-ai", "general", 20, 78, 256_000, "text"),
@@ -58,7 +64,6 @@ FREE_MODELS: list[FreeModel] = [
 
     FreeModel("google/gemma-4-31b-it:free", "google", "vision", 10, 75, 262_144, "text"),
     FreeModel("minimax/minimax-m3:free", "minimax", "vision", 20, 76, 1_048_576, "text"),
-    FreeModel("thinkingmachines/inkling:free", "thinkingmachines", "vision", 30, 74, 1_048_576, "text"),
 
     FreeModel("google/gemma-4-31b-it:free", None, "web_search", 10, 75, 262_144, "text"),
     FreeModel("z-ai/glm-5.2:free", "z-ai", "web_search", 20, 74, 256_000, "text"),

@@ -132,8 +132,10 @@ Ordering that actually matters:
 
 ## 6. Migrations
 
-Applied in order from `db/migrations/`. Everything through **0029** is live in
-production as of 2026-08-28. **0030 is pending.**
+Applied in order from `db/migrations/`. Everything through **0031** is live in
+production as of 2026-08-29, verified directly against the database rather
+than assumed (0031 flipped exactly two `thinkingmachines/*` rows to
+`is_active=false`; no other row changed).
 
 `db/reconciliation/` holds one-off data corrections. These are **not**
 migrations: they are run manually, once, by a human, and are deliberately kept
@@ -240,6 +242,42 @@ across users is nonetheless the wrong trade here:
 Revisit only if search volume makes the spend material, and then prefer a
 short-TTL, **per-user** cache with an explicit freshness carve-out for
 time-sensitive intents.
+
+### Free candidate window (2 vs 3) — left as-is, deliberately
+
+Cortex v1 (Free) returns **2** ranked model candidates; v1.5 (paid) returns
+**3**. With `general`'s first two free models both upstream-rate-limited on
+2026-08-29 and its third (`minimax/minimax-m2.7:free`) answering normally,
+Free `general` requests failed while a working free model sat one slot out of
+reach. That is a real, measured reliability cost.
+
+It is nonetheless **not changed here**, because the evidence says it is a
+deliberate tier boundary rather than an oversight:
+
+- `resolveCortexVersion()` maps plan tier to engine version and is documented
+  as "the ONLY place plan tier maps to engine version".
+- Candidate count is one of *several* coordinated v1/v1.5 differences —
+  v1 also uses flat weights, no live health blending, and no category-specific
+  capability fit. Raising only the count would leave a half-migrated tier.
+- The code calls them "Basic fallback" (2) and "More fallback candidates" (3),
+  which reads as plan copy.
+
+Against that, the same file argues the other way: the ranked list exists so a
+caller "can retry with the next candidate if the first hits a transient
+upstream failure — **most relevant on the free tier**, where OpenRouter's
+shared `:free` pool for a given model can get rate-limited independently of
+SPLEX's own traffic (observed live, repeatedly)". So the mechanism is
+documented as mattering *most* exactly where it is most restricted.
+
+That tension is a product decision about what Free is worth, not a defect with
+an objectively correct fix, so it is surfaced rather than resolved unilaterally.
+
+**If you decide to change it**, note the measured scope: raising v1 to 3 fixes
+`general` **only**. `writing` (3 candidates) and `web_search` (2) had *every*
+free candidate returning 429 in the same probe, so a wider window changes
+nothing for them. The alternative lever — enabling health-aware ordering for
+v1 so persistently-429ing models sink — would fix `general` without changing
+how many candidates Free gets, but it moves a different v1.5 feature into v1.
 
 ### Local JWT verification
 
