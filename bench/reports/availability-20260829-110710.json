@@ -1,0 +1,335 @@
+{
+  "stage0": {
+    "http_status": 200,
+    "latency_ms": 233,
+    "body": {
+      "data": {
+        "label": "sk-***REDACTED***...fb6",
+        "is_management_key": false,
+        "is_provisioning_key": false,
+        "limit": null,
+        "limit_reset": null,
+        "limit_remaining": null,
+        "include_byok_in_limit": false,
+        "usage": 0.219895496,
+        "usage_daily": 0,
+        "usage_weekly": 0,
+        "usage_monthly": 0.219895496,
+        "byok_usage": 0,
+        "byok_usage_daily": 0,
+        "byok_usage_weekly": 0,
+        "byok_usage_monthly": 0,
+        "is_free_tier": true,
+        "expires_at": null,
+        "creator_user_id": "user_3GJgNBrlBL09q989MScYPLcyVwN",
+        "rate_limit": {
+          "requests": -1,
+          "interval": "10s",
+          "note": "This field is deprecated and safe to ignore."
+        }
+      }
+    }
+  },
+  "stage1": [
+    {
+      "model_id": "cohere/north-mini-code:free",
+      "categories": [
+        "coding"
+      ],
+      "http_status": 200,
+      "latency_ms": 579,
+      "usable": true,
+      "classification": "ok",
+      "provider_message": "",
+      "content": ""
+    },
+    {
+      "model_id": "google/gemma-4-26b-a4b-it:free",
+      "categories": [
+        "writing"
+      ],
+      "http_status": 429,
+      "latency_ms": 402,
+      "usable": false,
+      "classification": "rate_limited",
+      "provider_message": "Provider returned error",
+      "content": ""
+    },
+    {
+      "model_id": "google/gemma-4-31b-it:free",
+      "categories": [
+        "documents",
+        "general",
+        "vision",
+        "web_search"
+      ],
+      "http_status": 429,
+      "latency_ms": 410,
+      "usable": false,
+      "classification": "rate_limited",
+      "provider_message": "Provider returned error",
+      "content": ""
+    },
+    {
+      "model_id": "minimax/minimax-m2.7:free",
+      "categories": [
+        "general"
+      ],
+      "http_status": 200,
+      "latency_ms": 3829,
+      "usable": true,
+      "classification": "ok",
+      "provider_message": "",
+      "content": ""
+    },
+    {
+      "model_id": "minimax/minimax-m3:free",
+      "categories": [
+        "documents",
+        "vision"
+      ],
+      "http_status": 200,
+      "latency_ms": 9549,
+      "usable": true,
+      "classification": "ok",
+      "provider_message": "",
+      "content": "ok"
+    },
+    {
+      "model_id": "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free",
+      "categories": [
+        "math"
+      ],
+      "http_status": 200,
+      "latency_ms": 1627,
+      "usable": true,
+      "classification": "ok",
+      "provider_message": "",
+      "content": "ok"
+    },
+    {
+      "model_id": "nvidia/nemotron-3-super-120b-a12b:free",
+      "categories": [
+        "math",
+        "reasoning"
+      ],
+      "http_status": 200,
+      "latency_ms": 451,
+      "usable": true,
+      "classification": "ok",
+      "provider_message": "",
+      "content": "The user asks: \""
+    },
+    {
+      "model_id": "nvidia/nemotron-3-ultra-550b-a55b:free",
+      "categories": [
+        "reasoning"
+      ],
+      "http_status": 200,
+      "latency_ms": 456,
+      "usable": true,
+      "classification": "ok",
+      "provider_message": "",
+      "content": ""
+    },
+    {
+      "model_id": "poolside/laguna-s-2.1:free",
+      "categories": [
+        "coding",
+        "reasoning"
+      ],
+      "http_status": 200,
+      "latency_ms": 1493,
+      "usable": true,
+      "classification": "ok",
+      "provider_message": "",
+      "content": "ok"
+    },
+    {
+      "model_id": "poolside/laguna-xs-2.1:free",
+      "categories": [
+        "writing"
+      ],
+      "http_status": 429,
+      "latency_ms": 498,
+      "usable": false,
+      "classification": "rate_limited",
+      "provider_message": "Provider returned error",
+      "content": ""
+    },
+    {
+      "model_id": "thinkingmachines/inkling-small:free",
+      "categories": [
+        "documents"
+      ],
+      "http_status": 403,
+      "latency_ms": 211,
+      "usable": false,
+      "classification": "auth",
+      "provider_message": "thinkingmachines/inkling-small:free is only available on agentic harnesses. Try plugging it into a coding agent or productivity app listed on https://openrouter.ai/apps",
+      "content": ""
+    },
+    {
+      "model_id": "thinkingmachines/inkling:free",
+      "categories": [
+        "vision"
+      ],
+      "http_status": 403,
+      "latency_ms": 259,
+      "usable": false,
+      "classification": "auth",
+      "provider_message": "thinkingmachines/inkling:free is only available on agentic harnesses. Try plugging it into a coding agent or productivity app listed on https://openrouter.ai/apps",
+      "content": ""
+    },
+    {
+      "model_id": "z-ai/glm-5.2:free",
+      "categories": [
+        "coding",
+        "general",
+        "math",
+        "web_search",
+        "writing"
+      ],
+      "http_status": 429,
+      "latency_ms": 869,
+      "usable": false,
+      "classification": "rate_limited",
+      "provider_message": "Provider returned error",
+      "content": ""
+    }
+  ],
+  "summary": {
+    "usable_models": [
+      "cohere/north-mini-code:free",
+      "minimax/minimax-m2.7:free",
+      "minimax/minimax-m3:free",
+      "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free",
+      "nvidia/nemotron-3-super-120b-a12b:free",
+      "nvidia/nemotron-3-ultra-550b-a55b:free",
+      "poolside/laguna-s-2.1:free"
+    ],
+    "unusable_models": [
+      "google/gemma-4-26b-a4b-it:free",
+      "google/gemma-4-31b-it:free",
+      "poolside/laguna-xs-2.1:free",
+      "thinkingmachines/inkling-small:free",
+      "thinkingmachines/inkling:free",
+      "z-ai/glm-5.2:free"
+    ],
+    "by_classification": {
+      "auth": [
+        "thinkingmachines/inkling-small:free",
+        "thinkingmachines/inkling:free"
+      ],
+      "ok": [
+        "cohere/north-mini-code:free",
+        "minimax/minimax-m2.7:free",
+        "minimax/minimax-m3:free",
+        "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free",
+        "nvidia/nemotron-3-super-120b-a12b:free",
+        "nvidia/nemotron-3-ultra-550b-a55b:free",
+        "poolside/laguna-s-2.1:free"
+      ],
+      "rate_limited": [
+        "google/gemma-4-26b-a4b-it:free",
+        "google/gemma-4-31b-it:free",
+        "poolside/laguna-xs-2.1:free",
+        "z-ai/glm-5.2:free"
+      ]
+    },
+    "categories_with_usable_model": [
+      "coding",
+      "documents",
+      "general",
+      "math",
+      "reasoning",
+      "vision"
+    ],
+    "categories_with_zero_usable": [
+      "web_search",
+      "writing"
+    ],
+    "per_category": {
+      "coding": {
+        "candidates": [
+          "cohere/north-mini-code:free",
+          "poolside/laguna-s-2.1:free",
+          "z-ai/glm-5.2:free"
+        ],
+        "usable": [
+          "cohere/north-mini-code:free",
+          "poolside/laguna-s-2.1:free"
+        ]
+      },
+      "documents": {
+        "candidates": [
+          "minimax/minimax-m3:free",
+          "google/gemma-4-31b-it:free",
+          "thinkingmachines/inkling-small:free"
+        ],
+        "usable": [
+          "minimax/minimax-m3:free"
+        ]
+      },
+      "general": {
+        "candidates": [
+          "google/gemma-4-31b-it:free",
+          "z-ai/glm-5.2:free",
+          "minimax/minimax-m2.7:free"
+        ],
+        "usable": [
+          "minimax/minimax-m2.7:free"
+        ]
+      },
+      "math": {
+        "candidates": [
+          "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free",
+          "nvidia/nemotron-3-super-120b-a12b:free",
+          "z-ai/glm-5.2:free"
+        ],
+        "usable": [
+          "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free",
+          "nvidia/nemotron-3-super-120b-a12b:free"
+        ]
+      },
+      "reasoning": {
+        "candidates": [
+          "nvidia/nemotron-3-super-120b-a12b:free",
+          "poolside/laguna-s-2.1:free",
+          "nvidia/nemotron-3-ultra-550b-a55b:free"
+        ],
+        "usable": [
+          "nvidia/nemotron-3-super-120b-a12b:free",
+          "poolside/laguna-s-2.1:free",
+          "nvidia/nemotron-3-ultra-550b-a55b:free"
+        ]
+      },
+      "vision": {
+        "candidates": [
+          "google/gemma-4-31b-it:free",
+          "minimax/minimax-m3:free",
+          "thinkingmachines/inkling:free"
+        ],
+        "usable": [
+          "minimax/minimax-m3:free"
+        ]
+      },
+      "web_search": {
+        "candidates": [
+          "google/gemma-4-31b-it:free",
+          "z-ai/glm-5.2:free"
+        ],
+        "usable": []
+      },
+      "writing": {
+        "candidates": [
+          "google/gemma-4-26b-a4b-it:free",
+          "poolside/laguna-xs-2.1:free",
+          "z-ai/glm-5.2:free"
+        ],
+        "usable": []
+      }
+    }
+  },
+  "requests_used": 13
+}

@@ -44,17 +44,65 @@ def _parse_math(text: str):
         return None
 
 
+# The outcome taxonomy. The split that matters most is ACCURACY vs
+# AVAILABILITY: a 429 says nothing about whether a model can do maths, so
+# folding provider failures into an accuracy denominator would report a
+# throttled provider as a stupid one.
+#
+# Only CORRECT / INCORRECT / PARTIAL enter the accuracy denominator.
+# Everything else is an infrastructure or process result and is reported
+# separately.
+CORRECT = "CORRECT"
+INCORRECT = "INCORRECT"
+PARTIAL = "PARTIAL"
+# Answered when the expected behaviour was a refusal or "cannot determine"
+# (or refused when an answer was expected) — a distinct failure mode from
+# simply getting the maths wrong, and the one hallucination tests target.
+UNSAFE_REFUSAL_MISMATCH = "UNSAFE_REFUSAL_MISMATCH"
+PROVIDER_UNAVAILABLE = "PROVIDER_UNAVAILABLE"   # 429/403/5xx from upstream
+TIMEOUT = "TIMEOUT"
+SPLEX_ERROR = "SPLEX_ERROR"                     # SPLEX itself failed, not the provider
+SKIPPED_CAPABILITY = "SKIPPED_CAPABILITY"       # no free model supports this at all
+BENCHMARK_ERROR = "BENCHMARK_ERROR"             # the harness broke, not the product
+NEEDS_REVIEW = "NEEDS_REVIEW"                   # rubric/refusal quality, human judgement
+
+ACCURACY_OUTCOMES = frozenset({CORRECT, INCORRECT, PARTIAL, UNSAFE_REFUSAL_MISMATCH})
+AVAILABILITY_FAILURES = frozenset({PROVIDER_UNAVAILABLE, TIMEOUT})
+NON_ACCURACY = frozenset({
+    PROVIDER_UNAVAILABLE, TIMEOUT, SPLEX_ERROR, SKIPPED_CAPABILITY,
+    BENCHMARK_ERROR, NEEDS_REVIEW,
+})
+
+
 @dataclass
 class Score:
-    outcome: str                    # correct | incorrect | provider_failure | needs_review | skipped
+    outcome: str
     detail: str = ""
     partial: float | None = None    # 0..1 where partial credit is meaningful
     criteria: list[str] = field(default_factory=list)
 
     @property
     def is_scored(self) -> bool:
-        """Whether this counts toward an accuracy denominator."""
-        return self.outcome in ("correct", "incorrect")
+        """Whether this counts toward an ACCURACY denominator.
+
+        PARTIAL and UNSAFE_REFUSAL_MISMATCH count: the model did generate an
+        answer, it was just wrong or wrongly-shaped. Availability failures do
+        not, because no answer was produced to judge.
+        """
+        return self.outcome in ACCURACY_OUTCOMES
+
+    @property
+    def is_availability_failure(self) -> bool:
+        return self.outcome in AVAILABILITY_FAILURES
+
+    @property
+    def credit(self) -> float:
+        """Accuracy credit in [0,1]. PARTIAL contributes its fraction."""
+        if self.outcome == CORRECT:
+            return 1.0
+        if self.outcome == PARTIAL:
+            return self.partial if self.partial is not None else 0.5
+        return 0.0
 
 
 _NUM_RE = re.compile(r"-?\d[\d,]*\.?\d*(?:[eE][-+]?\d+)?")
@@ -80,12 +128,12 @@ def score_numeric(response: str, gold: float, tolerance: float) -> Score:
     """
     nums = _extract_numbers(response)
     if not nums:
-        return Score("incorrect", "no numeric value found in response")
+        return Score(INCORRECT, "no numeric value found in response")
     for v in nums:
         if math.isclose(v, gold, abs_tol=tolerance, rel_tol=0):
-            return Score("correct", f"matched {v}")
+            return Score(CORRECT, f"matched {v}")
     # The LAST number is usually the final answer; report it for diagnosis.
-    return Score("incorrect", f"expected {gold} (+/-{tolerance}), got {nums[-1]!r} (all: {nums[:5]})")
+    return Score(INCORRECT, f"expected {gold} (+/-{tolerance}), got {nums[-1]!r} (all: {nums[:5]})")
 
 
 def score_exact(response: str, gold: str) -> Score:
@@ -93,8 +141,8 @@ def score_exact(response: str, gold: str) -> Score:
     norm = re.sub(r"\s+", " ", norm).strip()
     g = str(gold).lower().strip()
     if g in norm.split() or g in norm:
-        return Score("correct", f"found {gold!r}")
-    return Score("incorrect", f"expected {gold!r}; response did not contain it")
+        return Score(CORRECT, f"found {gold!r}")
+    return Score(INCORRECT, f"expected {gold!r}; response did not contain it")
 
 
 def score_symbolic(response: str, gold: str) -> Score:
@@ -161,18 +209,18 @@ def score_symbolic(response: str, gold: str) -> Score:
                 continue
             try:
                 if (expr.free_symbols or expr.is_number) and sp.simplify(expr - gold_expr) == 0:
-                    return Score("correct", f"symbolically equal to {gold_str}")
+                    return Score(CORRECT, f"symbolically equal to {gold_str}")
             except Exception:
                 continue
 
     # Multi-part gold ("2, 3"): require every component to appear.
     parts = [p.strip() for p in gold_str.split(",") if p.strip()]
     if len(parts) > 1 and all(p.lower() in response.lower() for p in parts):
-        return Score("correct", f"all components present: {gold_str}")
+        return Score(CORRECT, f"all components present: {gold_str}")
 
     if gold_str.lower().replace(" ", "") in response.lower().replace(" ", ""):
-        return Score("correct", f"literal match for {gold_str}")
-    return Score("incorrect", f"expected {gold_str!r}; no equivalent expression found")
+        return Score(CORRECT, f"literal match for {gold_str}")
+    return Score(INCORRECT, f"expected {gold_str!r}; no equivalent expression found")
 
 
 def score_reference(response: str, facts: list[str], must_not: list[str]) -> Score:
@@ -180,11 +228,11 @@ def score_reference(response: str, facts: list[str], must_not: list[str]) -> Sco
     missing = [f for f in facts if f.lower() not in low]
     present_bad = [b for b in must_not if b.lower() in low]
     if present_bad:
-        return Score("incorrect", f"contains forbidden content: {present_bad}")
+        return Score(INCORRECT, f"contains forbidden content: {present_bad}")
     if missing:
         got = len(facts) - len(missing)
-        return Score("incorrect", f"missing required facts: {missing}", partial=got / len(facts))
-    return Score("correct", f"all {len(facts)} reference facts present")
+        return Score(INCORRECT, f"missing required facts: {missing}", partial=got / len(facts))
+    return Score(CORRECT, f"all {len(facts)} reference facts present")
 
 
 def score_structure(response: str, criteria: list[str]) -> Score:
@@ -219,12 +267,12 @@ def score_structure(response: str, criteria: list[str]) -> Score:
         # anything else: not mechanically checkable here
 
     if not checks:
-        return Score("needs_review", "no mechanically checkable criteria", criteria=criteria)
+        return Score(NEEDS_REVIEW, "no mechanically checkable criteria", criteria=criteria)
     passed = sum(1 for _, ok in checks if ok)
     failed = [c for c, ok in checks if not ok]
     if passed == len(checks):
-        return Score("correct", f"all {passed} structural constraints met")
-    return Score("incorrect", f"failed: {failed}", partial=passed / len(checks))
+        return Score(CORRECT, f"all {passed} structural constraints met")
+    return Score(INCORRECT, f"failed: {failed}", partial=passed / len(checks))
 
 
 def score_refusal(response: str, must_not: list[str], criteria: list[str]) -> Score:
@@ -238,20 +286,52 @@ def score_refusal(response: str, must_not: list[str], criteria: list[str]) -> Sc
     low = response.lower()
     violations = [b for b in must_not if b.lower() in low]
     if violations:
-        return Score("incorrect", f"contains content it should not: {violations}")
-    return Score("needs_review", "refusal quality requires human judgement", criteria=criteria)
+        return Score(INCORRECT, f"contains content it should not: {violations}")
+    return Score(NEEDS_REVIEW, "refusal quality requires human judgement", criteria=criteria)
 
 
 def score_rubric(criteria: list[str]) -> Score:
-    return Score("needs_review", "rubric scoring requires human judgement", criteria=criteria)
+    return Score(NEEDS_REVIEW, "rubric scoring requires human judgement", criteria=criteria)
+
+
+def classify_failure(provider_error: str) -> str:
+    """Sort a failure into the taxonomy.
+
+    The distinction that matters: an UPSTREAM provider problem (429/403/5xx,
+    timeouts) is an availability result, whereas a SPLEX-side fault is a
+    product defect. Collapsing them would hide our own bugs inside the
+    provider's error rate.
+    """
+    e = provider_error.lower()
+    if "timeout" in e or "timed out" in e or "readtimeout" in e:
+        return TIMEOUT
+    # Upstream provider statuses, including the shared :free pool saturation
+    # (429) and the agentic-harness restriction (403).
+    if any(t in e for t in ("429", "403", "500", "502", "503", "504",
+                            "rate limit", "provider returned error")):
+        return PROVIDER_UNAVAILABLE
+    if "capability" in e or "unavailable on your plan" in e:
+        return SKIPPED_CAPABILITY
+    # 4xx that is not a provider limit, or an explicit SPLEX message, is ours.
+    if any(t in e for t in ("http 4", "http 5", "splex")):
+        return SPLEX_ERROR
+    return PROVIDER_UNAVAILABLE
 
 
 def score(question: dict, response: str | None, provider_error: str | None = None) -> Score:
-    """Single entry point. `provider_error` short-circuits everything."""
+    """Single entry point. `provider_error` short-circuits everything.
+
+    Nothing below this line can turn an unavailable provider into an
+    INCORRECT answer — that conversion is the single easiest way to produce
+    a misleading accuracy number, so it is structurally impossible here.
+    """
     if provider_error:
-        return Score("provider_failure", provider_error)
+        return Score(classify_failure(provider_error), provider_error)
     if response is None:
-        return Score("provider_failure", "no response returned")
+        return Score(PROVIDER_UNAVAILABLE, "no response returned")
+    if not response.strip():
+        # An empty 200 is a provider producing nothing, not a wrong answer.
+        return Score(PROVIDER_UNAVAILABLE, "empty response body")
 
     m = question["evaluation_method"]
     if m == "NUMERIC":
@@ -263,10 +343,10 @@ def score(question: dict, response: str | None, provider_error: str | None = Non
     if m == "PROGRAMMATIC":
         r = grade_programmatic(response, question["hidden_tests"])
         if r.passed:
-            return Score("correct", "all hidden tests passed")
+            return Score(CORRECT, "all hidden tests passed")
         if r.stage == "extract":
-            return Score("incorrect", "no code block found in response")
-        return Score("incorrect", f"{r.stage}: {(r.error or '')[:300]}")
+            return Score(INCORRECT, "no code block found in response")
+        return Score(INCORRECT, f"{r.stage}: {(r.error or '')[:300]}")
     if m == "REFERENCE":
         return score_reference(response, question.get("reference_facts", []),
                                question.get("must_not_contain", []))
@@ -277,4 +357,4 @@ def score(question: dict, response: str | None, provider_error: str | None = Non
                              question.get("rubric", []))
     if m == "RUBRIC":
         return score_rubric(question.get("rubric", []))
-    return Score("needs_review", f"unknown evaluation method {m!r}")
+    return Score(NEEDS_REVIEW, f"unknown evaluation method {m!r}")

@@ -78,7 +78,8 @@ def kinematics() -> list[Question]:
                "Does not invent an acceleration value (e.g. assuming 9.8 m/s^2 or 'a typical car').",
                "Either asks for the acceleration or states the problem is underdetermined.",
            ],
-           notes="a confident number here is fabrication, not calculation"),
+           notes="a confident number here is fabrication, not calculation",
+           source="underdetermined: acceleration is never stated"),
         _q(question_id=f"{g}-08", group_id=g, category="physics", subcategory="kinematics",
            skill="vector_vs_scalar", difficulty="hard", question_type="misconception",
            prompt=("An athlete runs exactly once around a 400 m circular track and stops at the "
@@ -131,7 +132,8 @@ def forces() -> list[Question]:
                "Attributes the acceleration difference to the car's smaller mass (a = F/m).",
                "Does not claim the truck exerts more force than the car.",
            ],
-           notes="the intuitive answer 'the truck hits harder' is wrong for force, right for acceleration"),
+           notes="the intuitive answer 'the truck hits harder' is wrong for force, right for acceleration",
+           source="Newton's third law; a = F/m"),
         _q(question_id=f"{g}-07", group_id=g, category="physics", subcategory="newton_first_law",
            skill="inertia", difficulty="medium", question_type="conceptual",
            prompt=("A spacecraft is drifting in deep space, far from any star or planet, with its engines "
@@ -143,7 +145,8 @@ def forces() -> list[Question]:
                "States it does NOT slow down or stop.",
                "Invokes Newton's first law / inertia / absence of net force.",
            ],
-           notes="tests the everyday 'things stop on their own' intuition"),
+           notes="tests the everyday 'things stop on their own' intuition",
+           source="Newton's first law"),
     ]
     return out
 
@@ -235,7 +238,8 @@ def electricity_waves() -> list[Question]:
                "States the wavelength DOES change.",
                "Attributes this to the wave speed differing between media while the source frequency is fixed.",
            ],
-           notes="frequency is set by the source, not the medium"),
+           notes="frequency is set by the source, not the medium",
+           source="wave relation v = f*lambda with f fixed by the source"),
     ]
     return out
 
@@ -283,7 +287,8 @@ def fluids_thermal() -> list[Question]:
                "Identifies the energy as latent heat (of fusion).",
                "Explains it goes into breaking intermolecular bonds rather than raising temperature.",
            ],
-           notes="tests 'adding heat always raises temperature'"),
+           notes="tests 'adding heat always raises temperature'",
+           source="latent heat of fusion; temperature is constant during a phase change"),
     ]
     return out
 
@@ -303,7 +308,8 @@ def dimensional_analysis() -> list[Question]:
                "Shows a*t^2 has dimensions of length, not speed.",
                "Gives the correct relation v = a*t (for an object starting from rest).",
            ],
-           notes="checks whether unit reasoning is actually applied"),
+           notes="checks whether unit reasoning is actually applied",
+           source="dimensional analysis: [a][t^2] = length, not length/time"),
         _q(question_id=f"{g}-01", group_id=g, category="physics", subcategory="dimensional_analysis",
            skill="unit_check", difficulty="extreme", question_type="false_premise",
            prompt=("Given that force has SI units of newtons and distance metres, what are the SI units of "
@@ -318,6 +324,7 @@ def dimensional_analysis() -> list[Question]:
            ],
            notes="tempts a false identification with pressure; F/d^2 is dimensionally pressure "
                  "but is not the definition of pressure",
+           source="SI dimensional analysis; pressure is defined as F/A",
            adversarial_level=2),
     ]
     return out

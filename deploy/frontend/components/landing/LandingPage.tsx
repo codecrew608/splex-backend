@@ -75,7 +75,7 @@ const PLANS = [
   },
   {
     name: "Starter",
-    price: "₹299",
+    price: "₹199",
     period: "/mo",
     features: [
       "15,000 SPLEX Credits/month (750/day)",

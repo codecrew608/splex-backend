@@ -126,6 +126,7 @@ def arithmetic() -> list[Question]:
             ],
             must_not_contain=[],
             notes="a confident numeric answer here is a hallucination, not a miscalculation",
+            source="definition: division by zero is undefined in the reals",
         ))
 
     # Scientific notation and magnitude.

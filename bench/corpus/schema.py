@@ -126,6 +126,13 @@ def validate(q: Question) -> None:
     if q.adversarial_level not in (0, 1, 2, 3):
         raise CorpusError(f"{q.question_id}: bad adversarial_level {q.adversarial_level}")
 
+    # Provenance is mandatory. A gold answer whose origin is unrecorded cannot
+    # be weighted by a reader — "computed by sympy" and "recalled by a model"
+    # deserve very different confidence, and without this field they look
+    # identical in the results.
+    if not (q.source and q.source.strip()):
+        raise CorpusError(f"{q.question_id}: missing source/justification for its answer key")
+
 
 # --- duplicate detection -----------------------------------------------------
 
