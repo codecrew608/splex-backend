@@ -206,7 +206,62 @@ SUPABASE_URL=... SUPABASE_SERVICE_ROLE_KEY=... node scripts/audit-model-registry
 | Intelligence sidecar (`INTELLIGENCE_SERVICE_URL`) | **Not deployed.** Image OCR and file-context RAG are inert; the code detects this and reports "not configured" rather than a fault. §10 covers the deploy steps and their exact preconditions. |
 | Staging environment | None. All verification is local + production. A second Worker (`splex-backend-worker-staging`) and Vercel preview would close this. |
 | Free image generation | Disabled (`plan_limits` = 0) because OpenRouter currently has **no** `:free` model that outputs images. A product decision, reversible by changing that row — no code change. |
-| Web search caching | None. Identical queries cost full price each time. Worth adding if search volume grows. |
+| Web search caching | **Deliberately not implemented** — see §11. |
+
+---
+
+## 11. Two deliberate non-implementations
+
+Both were investigated and rejected on merit, not skipped. Recording the
+reasoning so neither gets "fixed" later without re-deciding it.
+
+### Web-search result caching
+
+Identical searches do cost full provider price each time. Caching them
+across users is nonetheless the wrong trade here:
+
+- **Freshness is the product.** Web search is reached precisely when the
+  answer must be current (prices, news, "latest"). A cache TTL long enough
+  to pay for itself is long enough to serve stale answers on the one class
+  of question where staleness is the failure mode.
+- **Privacy.** A cross-user cache is keyed by query text, which means
+  storing one user's search terms and serving their results to another.
+  Search queries are among the most sensitive data this product handles.
+  A per-user cache avoids that but rarely hits — users seldom repeat a
+  search verbatim — so it buys almost nothing.
+- **Billing consistency.** Charges are derived from *real* provider cost
+  (`fetchGenerationCost`). A cache hit has no provider cost, so it would
+  either charge for spend that never happened or silently serve free work
+  — a billing inconsistency in exchange for a latency win.
+- **No cache substrate exists.** There is no Redis and no KV binding; it
+  would mean a new table plus TTL sweeps, i.e. permanent operational
+  surface for a speculative saving.
+
+Revisit only if search volume makes the spend material, and then prefer a
+short-TTL, **per-user** cache with an explicit freshness carve-out for
+time-sensitive intents.
+
+### Local JWT verification
+
+Auth currently makes two calls: `auth.getUser(token)` and a `users` row
+lookup for `plan_tier`. Verifying the JWT locally would remove the first.
+It is not safe here, for one specific reason: `auth.getUser()` validates
+the session's **server-side state**, so a signed-out or revoked session
+stops working immediately. Local signature verification only proves the
+token was once issued and hasn't expired — a stolen token from a
+signed-out session would keep working for the remainder of its lifetime.
+That is a real security regression traded for latency.
+
+The users-table lookup can't be dropped either: `plan_tier` is what every
+paywall decision reads and must come from the server.
+
+What *was* safe, and is now done (`src/auth/resolveUser.ts`): the two calls
+no longer run sequentially. The lookup is started speculatively from the
+token's unverified `sub` claim, in parallel with the authoritative
+verification, and its result is used **only** if the verified id matches.
+A forged `sub` costs one discarded `SELECT` and cannot influence identity
+or entitlements (asserted in `test/auth.test.ts`). Per-request auth latency
+drops from `t(getUser) + t(select)` to `max(...)` with no security change.
 
 ---
 

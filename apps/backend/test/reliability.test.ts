@@ -37,10 +37,14 @@ describe("Worker background work is never a bare floating promise", () => {
 });
 
 describe("deep research is bounded", () => {
-  it("has a whole-run deadline, not just per-call ceilings", () => {
+  it("has a whole-run deadline, not just per-call ceilings — and honours caller cancellation too", () => {
     const src = read("research/deepResearch.ts");
     expect(src).toContain("DEEP_RESEARCH_RUN_BUDGET_MS");
-    expect(src).toContain("const runDeadline = AbortSignal.timeout(DEEP_RESEARCH_RUN_BUDGET_MS)");
+    // Deliberately NOT a bare AbortSignal.timeout any more: that bounded
+    // the budget but ignored the client going away, so a closed tab kept
+    // issuing paid provider calls for the rest of the 8 minutes. See
+    // reliability-runtime.test.ts for the full cancellation coverage.
+    expect(src).toContain("const runDeadline = withDeadline(params.abortSignal, DEEP_RESEARCH_RUN_BUDGET_MS)");
   });
 
   it("passes that deadline to EVERY stage", () => {
@@ -104,6 +108,22 @@ describe("deployment bundle cannot silently diverge from source", () => {
 
 describe("frontend resilience", () => {
   const web = (p: string) => readFileSync(join(SRC, "..", "..", "web", p), "utf8");
+
+  it("an expired session is reported as such, not as a generic failure", () => {
+    // A 401 means retrying cannot possibly work; the generic
+    // "Something went wrong. Please try again." actively misleads.
+    const stream = web("lib/chatStream.ts");
+    expect(stream).toContain("response.status === 401");
+    expect(stream).toContain("Your session has expired. Please sign in again.");
+  });
+
+  it("a missing session never silently swallows the user's message", () => {
+    // Was a bare `if (!session) return;` — the composer cleared and
+    // absolutely nothing appeared, which reads as the app being broken.
+    const hook = web("hooks/useChatStream.ts");
+    expect(hook).not.toMatch(/if \(!session\) return;/);
+    expect(hook).toContain("Your session has expired. Please sign in again.");
+  });
 
   it("has both a route-level and a root-level error boundary", () => {
     expect(web("app/error.tsx")).toContain('"use client"');

@@ -127,7 +127,7 @@ const COMPLETE_TIMEOUT_MS = 60_000;
 // AbortSignal.any where available — supported on Workers and Node >=20,
 // which is every runtime this ships to — and degrades to the timeout alone
 // rather than throwing if some future runtime lacks it.
-function withDeadline(signal: AbortSignal | undefined, ms: number): AbortSignal {
+export function withDeadline(signal: AbortSignal | undefined, ms: number): AbortSignal {
   const timeout = AbortSignal.timeout(ms);
   if (!signal) return timeout;
   const anyFn = (AbortSignal as unknown as { any?: (s: AbortSignal[]) => AbortSignal }).any;

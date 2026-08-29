@@ -245,7 +245,13 @@ export async function runChat(
     }
 
     if (decision.category === "deep_research") {
-      await runDeepResearch({ fastify, sse, user, conversationId, userMessageId, query: classifierInputMessage, contextBlock });
+      await runDeepResearch({
+        fastify, sse, user, conversationId, userMessageId,
+        query: classifierInputMessage,
+        contextBlock,
+        // Stop burning paid provider calls the moment the client goes away.
+        abortSignal: abortController.signal,
+      });
       return;
     }
 

@@ -112,7 +112,7 @@ function rpcImpl(state: FakeState, name: string, p: Record<string, unknown>): un
   }
 }
 
-type Predicate = { kind: "eq" | "lt" | "gte"; col: string; val: unknown } | { kind: "in"; col: string; vals: unknown[] };
+type Predicate = { kind: "eq" | "lt" | "lte" | "gte"; col: string; val: unknown } | { kind: "in"; col: string; vals: unknown[] };
 
 function matches(row: Record<string, unknown>, predicates: Predicate[]): boolean {
   return predicates.every((p) => {
@@ -120,6 +120,7 @@ function matches(row: Record<string, unknown>, predicates: Predicate[]): boolean
     if (p.kind === "eq") return cell === p.val;
     if (p.kind === "gte") return (cell as string) >= (p.val as string);
     if (p.kind === "lt") return (cell as number) < (p.val as number);
+    if (p.kind === "lte") return (cell as number) <= (p.val as number);
     return (p.vals as unknown[]).includes(cell);
   });
 }
@@ -230,6 +231,10 @@ function makeWorkflowBuilder(table: "workflow_runs" | "workflow_steps" | "messag
     },
     lt: (col: string, val: unknown) => {
       predicates.push({ kind: "lt", col, val });
+      return api;
+    },
+    lte: (col: string, val: unknown) => {
+      predicates.push({ kind: "lte", col, val });
       return api;
     },
     gte: (col: string, val: unknown) => {

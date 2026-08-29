@@ -1,41 +1,28 @@
 import fp from "fastify-plugin";
 import type { FastifyInstance, FastifyRequest, FastifyReply } from "fastify";
-import type { PlanTier } from "@splex/shared-types";
+import { resolveAuthedUser, extractBearerToken } from "../auth/resolveUser.js";
 
 // Verifies the caller's Supabase JWT and resolves their plan tier. The
 // client-sent user id (if any is ever present in a body) is NEVER trusted —
 // every downstream query in this backend must read request.user.id, which
 // only this preHandler sets, and only after verification.
+//
+// The verification itself lives in auth/resolveUser.ts, shared verbatim
+// with the Worker entry point so the two can never drift apart on the most
+// security-critical decision the backend makes.
 export default fp(async function authPlugin(fastify: FastifyInstance) {
   fastify.decorate("authenticate", async (request: FastifyRequest, reply: FastifyReply) => {
-    const authHeader = request.headers.authorization;
-    const token = authHeader?.startsWith("Bearer ") ? authHeader.slice("Bearer ".length) : null;
-
+    const token = extractBearerToken(request.headers.authorization);
     if (!token) {
       return reply.code(401).send({ message: "Unauthorized." });
     }
 
-    const { data, error } = await fastify.supabaseAdmin.auth.getUser(token);
-    if (error || !data.user) {
+    const result = await resolveAuthedUser(fastify.supabaseAdmin, token);
+    if (!result.ok) {
       return reply.code(401).send({ message: "Unauthorized." });
     }
 
-    const { data: userRow, error: userRowError } = await fastify.supabaseAdmin
-      .from("users")
-      .select("plan_tier, org_id, email")
-      .eq("id", data.user.id)
-      .single();
-
-    if (userRowError || !userRow) {
-      return reply.code(401).send({ message: "Unauthorized." });
-    }
-
-    request.user = {
-      id: data.user.id,
-      email: userRow.email as string,
-      planTier: userRow.plan_tier as PlanTier,
-      orgId: (userRow.org_id as string | null) ?? null,
-    };
+    request.user = result.user;
   });
 });
 

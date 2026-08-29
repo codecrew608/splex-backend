@@ -129,7 +129,20 @@ export function useChatStream(
       const {
         data: { session },
       } = await supabase.auth.getSession();
-      if (!session) return;
+      if (!session) {
+        // Previously a bare `return`: the composer cleared, the message
+        // vanished, and nothing at all appeared — indistinguishable from
+        // the app being broken. Surface it as an assistant message so the
+        // user learns the one thing that actually fixes it.
+        setMessages((prev) => [
+          ...prev,
+          {
+            ...emptyMessage(crypto.randomUUID(), conversationId ?? "", "assistant", ""),
+            content: "Your session has expired. Please sign in again.",
+          },
+        ]);
+        return;
+      }
 
       setCortexDecision(null);
       updateWorkflow(null);
@@ -326,7 +339,21 @@ export function useChatStream(
         const {
           data: { session },
         } = await supabase.auth.getSession();
-        if (!session) return;
+        if (!session) {
+          // Was a bare `return`: polling just stopped and the message sat
+          // on "Generating your video..." forever, with the job actually
+          // still running server-side. Say what happened instead — the
+          // video isn't lost, it just needs a reload once signed back in.
+          setMessages((prev) =>
+            prev.map((m) =>
+              m.id === entry.messageId
+                ? { ...m, content: "Your session expired while this was generating. Sign in again and reload to see the result." }
+                : m,
+            ),
+          );
+          setPendingMedia((prev) => prev.filter((p) => p.mediaId !== entry.mediaId));
+          return;
+        }
 
         const result = await fetchMediaStatus(entry.mediaId, session.access_token);
         if (cancelled || !result) continue; // transient failure — try again next tick

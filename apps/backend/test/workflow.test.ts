@@ -267,18 +267,22 @@ describe("scenario 1: clarification pause -> resume", () => {
     expect(state.dailyUsed).toBe(STEP_COST * 2 + STEP_COST + STEP_COST);
     expect(state.monthlyUsed).toBe(STEP_COST * 2 + STEP_COST + STEP_COST);
 
-    // Worth knowing, not fixing: the FINAL MESSAGE's displayed
-    // credits_charged is priorCreditsSoFar (step0 only, 660) + step1's
-    // retry (660) + step2 (660) = 1980 -- it does NOT include step1's
-    // first, question-asking charge (660), because resumeWorkflow's prior-
-    // outputs fetch is `.lt("step_index", clarification_step_index)`,
-    // which excludes the step being retried itself. The pools are still
-    // charged correctly (asserted above); only the number shown next to
-    // this particular message under-represents the workflow's true total
-    // cost by the price of the clarifying round-trip. A real, pre-existing
-    // display gap, not something this test suite changes.
+    // The displayed charge equals the FULL cost attributable to this
+    // workflow: step0 (660) + step1's question-asking round-trip (660) +
+    // step1's retry (660) + step2 (660) = 2640, matching the pools exactly.
+    // Before the `lte` fix in resumeWorkflow this read 1980 — the
+    // clarifying round-trip was genuinely charged but silently omitted
+    // from what the user was shown.
     const message = [...state.messages.values()][0];
-    expect(message.credits_charged).toBe(STEP_COST + STEP_COST + STEP_COST);
+    expect(message.credits_charged).toBe(STEP_COST * 4);
+    // Display must equal what the pools actually moved, with nothing
+    // attributable to this run left out.
+    expect(message.credits_charged).toBe(state.dailyUsed);
+    expect(message.credits_charged).toBe(state.monthlyUsed);
+
+    // The retried step's own row accumulates too, rather than the retry
+    // silently overwriting what the clarifying attempt already cost.
+    expect(step1.credits_charged).toBe(STEP_COST * 2);
 
     // Backfill emits exactly one "completed" for step0 (the only step
     // before clarification_step_index), before any new execution event.
@@ -287,6 +291,98 @@ describe("scenario 1: clarification pause -> resume", () => {
       .map((e) => e.data as { stepIndex: number; status: string });
     expect(stepEvents[0]).toMatchObject({ stepIndex: 0, status: "completed" });
     expect(stepEvents).toHaveLength(5); // backfill(1) + step1 running/completed(2) + step2 running/completed(2)
+  });
+});
+
+describe("displayed charge integrity: what the user is shown equals what they were charged", () => {
+  it("a normal (never-paused) workflow displays exactly the sum of its steps", async () => {
+    const state = makeState({ planTier: "pro", dailyLimit: 5000, monthlyLimit: 15000 });
+    const fastify = makeFastify(state);
+    const sse = makeFakeSSE();
+    vi.mocked(planWorkflow).mockResolvedValueOnce({
+      outcome: "workflow",
+      steps: [
+        { title: "Step A", category: "writing", detailedPrompt: "..." },
+        { title: "Step B", category: "writing", detailedPrompt: "..." },
+      ],
+    });
+    vi.mocked(completeOnce).mockResolvedValueOnce(completeEnvelope("A output"));
+    vi.mocked(streamCompletion).mockResolvedValueOnce(streamResult("B final"));
+
+    await startWorkflow({
+      fastify, sse, user: USER, conversationId: "conv-1", userMessageId: "msg-1",
+      message: "two things", contextBlock: "", systemPromptText: "sys", abortSignal: abortSignal(),
+    });
+
+    const message = [...state.messages.values()][0];
+    expect(message.credits_charged).toBe(STEP_COST * 2);
+    expect(message.credits_charged).toBe(state.dailyUsed);
+    expect(message.credits_charged).toBe(state.monthlyUsed);
+  });
+
+  it("a FAILED workflow displays no charge at all — it inserts no assistant message", async () => {
+    const state = makeState({ planTier: "pro", dailyLimit: 5000, monthlyLimit: 15000 });
+    const fastify = makeFastify(state);
+    const sse = makeFakeSSE();
+    vi.mocked(planWorkflow).mockResolvedValueOnce({
+      outcome: "workflow",
+      steps: [
+        { title: "Step A", category: "writing", detailedPrompt: "..." },
+        { title: "Step B", category: "video", detailedPrompt: "..." },
+      ],
+    });
+    vi.mocked(selectModelCandidates).mockReset().mockResolvedValueOnce([PAID_MODEL]).mockResolvedValueOnce([]);
+    vi.mocked(completeOnce).mockResolvedValueOnce(completeEnvelope("A output"));
+
+    await startWorkflow({
+      fastify, sse, user: USER, conversationId: "conv-1", userMessageId: "msg-1",
+      message: "two things", contextBlock: "", systemPromptText: "sys", abortSignal: abortSignal(),
+    });
+
+    // Step A really did cost credits and the pools reflect that honestly —
+    // but no assistant message exists, so there is no displayed number that
+    // could misstate it. The failure surfaces as an SSE error instead.
+    expect(state.dailyUsed).toBe(STEP_COST);
+    expect(state.messages.size).toBe(0);
+    expect(sse.events.some((e) => e.type === "error")).toBe(true);
+    expect([...state.workflowRuns.values()][0].status).toBe("failed");
+  });
+
+  it("a CANCELLED workflow displays no charge — cancellation writes no message", async () => {
+    const state = makeState({ planTier: "pro", dailyLimit: 5000, monthlyLimit: 15000 });
+    const fastify = makeFastify(state);
+    const runId = makeWorkflowRun(state, { conversation_id: "conv-1", status: "running" });
+
+    await cancelActiveWorkflow(fastify, "conv-1");
+
+    expect(state.workflowRuns.get(runId)!.status).toBe("cancelled");
+    expect(state.messages.size).toBe(0);
+    expect(state.dailyUsed).toBe(0);
+    expect(state.monthlyUsed).toBe(0);
+  });
+
+  it("a workflow blocked before any step runs charges nothing and displays nothing", async () => {
+    // Structural per-plan workflow-cost ceiling rejects the plan upfront.
+    const state = makeState({ planTier: "free", dailyLimit: 150, monthlyLimit: 3000 });
+    const fastify = makeFastify(state);
+    const sse = makeFakeSSE();
+    vi.mocked(planWorkflow).mockResolvedValueOnce({
+      outcome: "workflow",
+      // Fallback limits are maxSteps:3 / maxCostCredits:5000 and the
+      // fallback per-step estimate is 50 -> 200 steps * 50 = 10000 > 5000.
+      steps: Array.from({ length: 200 }, (_, i) => ({ title: `S${i}`, category: "writing", detailedPrompt: "..." })),
+    });
+
+    await startWorkflow({
+      fastify, sse, user: { ...USER, planTier: "free" }, conversationId: "conv-1", userMessageId: "msg-1",
+      message: "enormous", contextBlock: "", systemPromptText: "sys", abortSignal: abortSignal(),
+    });
+
+    expect(state.dailyUsed).toBe(0);
+    expect(state.monthlyUsed).toBe(0);
+    expect(state.messages.size).toBe(0);
+    expect(state.workflowSteps.size).toBe(0);
+    expect(sse.events.some((e) => e.type === "error")).toBe(true);
   });
 });
 
@@ -542,12 +638,13 @@ describe("scenario 5: the atomic-claim race in resumeWorkflow", () => {
     expect(state.monthlyUsed).toBe(0);
   });
 
-  it("5b, order B (resume wins the claim first): a subsequent cancel cannot interrupt the already-in-flight execution", async () => {
-    // Documents current, plausibly-intentional behavior (no queue/cancel-
-    // token infra exists -- see orchestrator.ts's own comment that the
-    // whole step loop lives inside one HTTP request's lifetime). NOT
-    // something this test suite changes -- pinning it so a future change
-    // to it is a deliberate, visible diff instead of an accidental one.
+  it("5b, order B (resume claims first, cancel lands during planning): the run stops before dispatching any step", async () => {
+    // The resume wins the atomic claim, but then awaits planWorkflow --
+    // and the cancel lands in that window. runSteps' pre-step cancellation
+    // check then stops the run before the first step is ever dispatched,
+    // so nothing is generated and nothing is charged. The cancelled state
+    // also survives: no terminal write can overwrite it, because each one
+    // is conditional on the run still being 'running'.
     const state = makeState({ planTier: "pro", dailyLimit: 750, monthlyLimit: 15000 });
     const fastify = makeFastify(state);
     const runId = makeWorkflowRun(state, {
@@ -568,8 +665,46 @@ describe("scenario 5: the atomic-claim race in resumeWorkflow", () => {
     ]);
 
     expect(resumeResult.handled).toBe(true);
-    expect(state.workflowRuns.get(runId)!.status).toBe("completed"); // execution's final write overwrote "cancelled"
+    // The cancel is durable: no terminal write could overwrite it.
+    expect(state.workflowRuns.get(runId)!.status).toBe("cancelled");
+    // Nothing was generated, so nothing was charged.
+    expect(vi.mocked(streamCompletion)).not.toHaveBeenCalled();
+    expect(state.dailyUsed).toBe(0);
+    expect(state.monthlyUsed).toBe(0);
+    expect(state.messages.size).toBe(0);
+  });
+
+  it("5c: a cancel between steps stops the run before any further step is dispatched or charged", async () => {
+    const state = makeState({ planTier: "pro", dailyLimit: 5000, monthlyLimit: 15000 });
+    const fastify = makeFastify(state);
+    const sse = makeFakeSSE();
+    vi.mocked(planWorkflow).mockResolvedValueOnce({
+      outcome: "workflow",
+      steps: [
+        { title: "Step A", category: "writing", detailedPrompt: "..." },
+        { title: "Step B", category: "writing", detailedPrompt: "..." },
+        { title: "Step C", category: "writing", detailedPrompt: "..." },
+      ],
+    });
+    // Cancel the run from "another request" the instant step A finishes.
+    vi.mocked(completeOnce).mockImplementationOnce(async () => {
+      await cancelActiveWorkflow(fastify, "conv-1");
+      return completeEnvelope("A output");
+    });
+
+    await startWorkflow({
+      fastify, sse, user: USER, conversationId: "conv-1", userMessageId: "msg-1",
+      message: "three things", contextBlock: "", systemPromptText: "sys", abortSignal: abortSignal(),
+    });
+
+    // Step B never ran: only the single step-A generation was dispatched.
+    expect(vi.mocked(completeOnce)).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(streamCompletion)).not.toHaveBeenCalled();
+    // Only step A's credits were spent — cancellation stopped further cost.
     expect(state.dailyUsed).toBe(STEP_COST);
     expect(state.monthlyUsed).toBe(STEP_COST);
+    // No assistant message: the run never reached a final step.
+    expect(state.messages.size).toBe(0);
+    expect([...state.workflowRuns.values()][0].status).toBe("cancelled");
   });
 });

@@ -3,7 +3,7 @@ import type { AuthedUser } from "../types/index.js";
 import type { ModelRegistryRow } from "../types/index.js";
 import type { SSEWriter } from "../sse/writer.js";
 import { selectModelCandidates, resolveCortexVersion } from "../cortex/index.js";
-import { completeOnce, fetchGenerationCost, isBalanceExceededError } from "../openrouter/client.js";
+import { completeOnce, fetchGenerationCost, withDeadline, isBalanceExceededError } from "../openrouter/client.js";
 import { computeMediaCreditsCharged } from "../credits/mediaCost.js";
 import { consumeCredits } from "../credits/consumeCredits.js";
 import { insertMessage } from "../persistence/messages.js";
@@ -41,6 +41,12 @@ export interface RunDeepResearchParams {
   userMessageId?: string;
   query: string;
   contextBlock: string; // memory/file/project context, same as the rest of chat.ts — folded into the planning prompt only
+  // The request's own abort signal (client disconnected / navigated away).
+  // Without this a run kept issuing PAID provider calls for the remainder
+  // of its 8-minute budget after the user had already gone, charging for a
+  // report nobody would ever see. Optional so existing non-HTTP callers
+  // (none today) still compile, but chat.ts always supplies it.
+  abortSignal?: AbortSignal;
 }
 
 interface ResearchLimits {
@@ -186,8 +192,12 @@ const DEEP_RESEARCH_RUN_BUDGET_MS = 8 * 60_000;
 export async function runDeepResearch(params: RunDeepResearchParams): Promise<void> {
   const { fastify, sse, user, conversationId, userMessageId, query, contextBlock } = params;
 
-  // One deadline for the whole run, passed to every stage below.
-  const runDeadline = AbortSignal.timeout(DEEP_RESEARCH_RUN_BUDGET_MS);
+  // One deadline for the whole run, passed to every stage below — now
+  // combined with the caller's own signal, so the run ends as soon as
+  // EITHER the budget expires or the client goes away, whichever is first.
+  // Each individual stage is separately capped at 60s inside
+  // openrouter/client.ts; this bounds the total and honours cancellation.
+  const runDeadline = withDeadline(params.abortSignal, DEEP_RESEARCH_RUN_BUDGET_MS);
 
   const quota = await checkMediaQuota(fastify, user.id, user.planTier, "deep_research");
   if (!quota.allowed) {

@@ -174,6 +174,16 @@ async function executeStep(
   stepIndex: number,
   isFinal: boolean,
   priorOutputs: Array<{ title: string; output: string }>,
+  // Credits this step ALREADY cost on an earlier attempt — non-zero only
+  // for the step being retried after a clarification pause, which was
+  // genuinely charged for the round-trip in which it asked its question.
+  // Added to (never replacing) what this attempt costs, so the step row
+  // reflects the step's true cumulative cost rather than just its last
+  // attempt. The returned creditsCharged stays the NEW charge only —
+  // runSteps' caller already counts `carriedStepCredits` via
+  // priorCreditsSoFar, and double-counting there is exactly the bug this
+  // parameter exists to fix.
+  carriedStepCredits = 0,
 ): Promise<StepOutcome> {
   const { fastify, sse, user, workflowRunId, cortexVersion } = ctx;
 
@@ -275,7 +285,7 @@ async function executeStep(
       await markStep(fastify, workflowRunId, stepIndex, {
         status: "awaiting_clarification",
         routed_model: model.openrouter_model_id,
-        credits_charged: realCost.creditsCharged,
+        credits_charged: carriedStepCredits + realCost.creditsCharged,
         real_input_tokens: realCost.inputTokens,
         real_output_tokens: realCost.outputTokens,
       });
@@ -310,7 +320,7 @@ async function executeStep(
       await markStep(fastify, workflowRunId, stepIndex, {
         status: "failed",
         routed_model: model.openrouter_model_id,
-        credits_charged: realCost.creditsCharged,
+        credits_charged: carriedStepCredits + realCost.creditsCharged,
         real_input_tokens: realCost.inputTokens,
         real_output_tokens: realCost.outputTokens,
       });
@@ -322,7 +332,7 @@ async function executeStep(
       status: "completed",
       output,
       routed_model: model.openrouter_model_id,
-      credits_charged: realCost.creditsCharged,
+      credits_charged: carriedStepCredits + realCost.creditsCharged,
       real_input_tokens: realCost.inputTokens,
       real_output_tokens: realCost.outputTokens,
     });
@@ -398,7 +408,7 @@ async function executeStep(
     status: "completed",
     output: fullText,
     routed_model: model.openrouter_model_id,
-    credits_charged: realCost.creditsCharged,
+    credits_charged: carriedStepCredits + realCost.creditsCharged,
     real_input_tokens: realCost.inputTokens,
     real_output_tokens: realCost.outputTokens,
   });
@@ -419,6 +429,34 @@ async function executeStep(
 // from a single-shot response in history) plus its own cortex_decisions
 // row for CortexStatusPanel consistency. Earlier steps are internal —
 // tracked only in workflow_steps, never inserted into `messages`.
+//
+// CANCELLATION (see also cancelActiveWorkflow above). There is no queue or
+// cancellation-token infrastructure here — a workflow runs entirely inside
+// one HTTP request — so a cancel issued by a DIFFERENT request (an edit or
+// regenerate in another tab) cannot interrupt a model call already in
+// flight. What it CAN do, and now does, is stop the run at the next step
+// boundary and never let it overwrite the cancelled state:
+//
+//   1. every iteration re-reads the run's status before starting a step,
+//      so no FURTHER step is dispatched (and no further credits spent)
+//      once a cancel has landed; and
+//   2. every terminal write below is conditional on the run still being
+//      'running' — the same atomic compare-and-set the resume path uses —
+//      so a cancel that lands mid-step still wins the race, rather than
+//      being silently overwritten by a 'completed' write moments later.
+//
+// Steps that already ran are still charged: the work genuinely happened.
+// What cancellation guarantees is that nothing NEW is charged, and that
+// the run's final recorded state is the truth.
+async function isRunCancelled(fastify: FastifyInstance, workflowRunId: string): Promise<boolean> {
+  const { data } = await fastify.supabaseAdmin
+    .from("workflow_runs")
+    .select("status")
+    .eq("id", workflowRunId)
+    .maybeSingle();
+  return (data as { status?: string } | null)?.status === "cancelled";
+}
+
 async function runSteps(
   ctx: RunCtx,
   conversationId: string,
@@ -426,10 +464,15 @@ async function runSteps(
   startIndex: number,
   priorOutputsSoFar: Array<{ title: string; output: string }>,
   priorCreditsSoFar = 0,
+  // Credits already charged to steps[startIndex] specifically, before it
+  // paused to ask a clarifying question. Only that one step carries a
+  // prior charge; every later step in this loop starts from zero.
+  carriedStepCredits = 0,
 ): Promise<
   | { outcome: "completed"; creditsCharged: number }
   | { outcome: "clarify" }
   | { outcome: "failed"; reason: string }
+  | { outcome: "cancelled" }
 > {
   const { fastify, sse, workflowRunId } = ctx;
   const priorOutputs = [...priorOutputsSoFar];
@@ -437,8 +480,10 @@ async function runSteps(
 
   for (let i = startIndex; i < steps.length; i++) {
     const step = steps[i];
+    // Stop before spending anything further on a run someone cancelled.
+    if (await isRunCancelled(fastify, workflowRunId)) return { outcome: "cancelled" };
     const isFinal = i === steps.length - 1;
-    const result = await executeStep(ctx, step, i, isFinal, priorOutputs);
+    const result = await executeStep(ctx, step, i, isFinal, priorOutputs, i === startIndex ? carriedStepCredits : 0);
 
     if (result.kind === "needs_clarification") {
       await fastify.supabaseAdmin
@@ -449,7 +494,8 @@ async function runSteps(
           clarification_step_index: i,
           current_step_index: i,
         })
-        .eq("id", workflowRunId);
+        .eq("id", workflowRunId)
+        .eq("status", "running");
       sse.workflowClarification({ question: result.question });
       return { outcome: "clarify" };
     }
@@ -458,7 +504,8 @@ async function runSteps(
       await fastify.supabaseAdmin
         .from("workflow_runs")
         .update({ status: "failed", current_step_index: i })
-        .eq("id", workflowRunId);
+        .eq("id", workflowRunId)
+        .eq("status", "running");
       return { outcome: "failed", reason: result.reason };
     }
 
@@ -487,7 +534,8 @@ async function runSteps(
       await fastify.supabaseAdmin
         .from("workflow_runs")
         .update({ status: "completed", current_step_index: i })
-        .eq("id", workflowRunId);
+        .eq("id", workflowRunId)
+        .eq("status", "running");
     } else {
       await fastify.supabaseAdmin.from("workflow_runs").update({ current_step_index: i + 1 }).eq("id", workflowRunId);
     }
@@ -748,19 +796,36 @@ export async function resumeWorkflow(params: {
     detailedPrompt: s.detailedPrompt,
   }));
 
+  // `lte`, not `lt` — deliberately INCLUDING the paused step itself.
+  //
+  // Asking a clarifying question costs a real generation: the model was
+  // called, tokens were spent, and executeStep charged for them before
+  // returning `needs_clarification`. Fetching only `< stepIndex` (the
+  // previous behaviour) meant that charge existed in the ledger and in the
+  // user's pools but was invisible to the total this resume then reports —
+  // so a workflow that paused once displayed LESS than it actually cost.
+  // The outputs list below still uses `< stepIndex`, since the paused step
+  // by definition has no output yet to feed forward.
   const { data: priorRows } = await fastify.supabaseAdmin
     .from("workflow_steps")
-    .select("title, output, credits_charged, routed_model")
+    .select("step_index, title, output, credits_charged, routed_model")
     .eq("workflow_run_id", run.id)
-    .lt("step_index", stepIndex)
+    .lte("step_index", stepIndex)
     .order("step_index", { ascending: true });
 
-  const priorStepRows =
-    (priorRows as Array<{ title: string; output: string | null; credits_charged: number | null; routed_model: string | null }> | null) ?? [];
+  const allRowsThroughPaused =
+    (priorRows as Array<{ step_index: number; title: string; output: string | null; credits_charged: number | null; routed_model: string | null }> | null) ??
+    [];
+  const priorStepRows = allRowsThroughPaused.filter((r) => r.step_index < stepIndex);
   const priorOutputs = priorStepRows
     .filter((r) => r.output !== null)
     .map((r) => ({ title: r.title, output: r.output as string }));
-  const priorCreditsSoFar = priorStepRows.reduce((sum, r) => sum + (r.credits_charged ?? 0), 0);
+  // Everything already charged to this run, the paused step's own
+  // question-asking round-trip included.
+  const priorCreditsSoFar = allRowsThroughPaused.reduce((sum, r) => sum + (r.credits_charged ?? 0), 0);
+  // Split back out so the paused step's row accumulates rather than being
+  // overwritten by its retry — see executeStep's carriedStepCredits.
+  const carriedStepCredits = allRowsThroughPaused.find((r) => r.step_index === stepIndex)?.credits_charged ?? 0;
 
   steps[stepIndex] = {
     ...steps[stepIndex],
@@ -787,7 +852,7 @@ export async function resumeWorkflow(params: {
     });
   }
 
-  const result = await runSteps(ctx, conversationId, steps, stepIndex, priorOutputs, priorCreditsSoFar);
+  const result = await runSteps(ctx, conversationId, steps, stepIndex, priorOutputs, priorCreditsSoFar, carriedStepCredits);
   return finishRun(sse, conversationId, run.user_message_id, result);
 }
 
@@ -795,10 +860,24 @@ function finishRun(
   sse: SSEWriter,
   conversationId: string,
   userMessageId: string,
-  result: { outcome: "completed"; creditsCharged: number } | { outcome: "clarify" } | { outcome: "failed"; reason: string },
+  result:
+    | { outcome: "completed"; creditsCharged: number }
+    | { outcome: "clarify" }
+    | { outcome: "failed"; reason: string }
+    | { outcome: "cancelled" },
 ): StartWorkflowResult {
   if (result.outcome === "clarify") {
     sse.done({ conversationId, userMessageId, awaitingClarification: true });
+    sse.end();
+    return { handled: true };
+  }
+  if (result.outcome === "cancelled") {
+    // Deliberately NO sse.error: a cancel means the user edited or
+    // regenerated, so a newer request is already streaming them a fresh
+    // answer. Surfacing an error here would put a spurious failure toast
+    // on top of a perfectly good response. `partial` tells the client this
+    // stream stopped early without pretending it succeeded.
+    sse.done({ conversationId, userMessageId, partial: true });
     sse.end();
     return { handled: true };
   }

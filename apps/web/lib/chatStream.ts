@@ -59,7 +59,12 @@ export async function streamChat(
     const message =
       response.status === 429
         ? "You're sending messages too fast — please wait a moment and try again."
-        : "Something went wrong. Please try again.";
+        : response.status === 401
+          ? // An expired or revoked session. "Something went wrong" is
+            // actively unhelpful here: retrying cannot succeed, and the one
+            // action that fixes it is the one the generic message hides.
+            "Your session has expired. Please sign in again."
+          : "Something went wrong. Please try again.";
     handlers.onError({ message });
     return;
   }
