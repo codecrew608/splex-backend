@@ -59,7 +59,14 @@ describe("credit charging invariants (source-level)", () => {
   it("every reserving call site skips the daily charge", () => {
     // reserve + consume + settle all move the daily counter; running all
     // three double-charged it (production showed an exact 2.00 ratio).
-    for (const f of ["handlers/chat.ts", "cortex/workflow/orchestrator.ts", "routes/mediaGeneration.ts", "research/handler.ts", "handlers/media.ts"]) {
+    for (const f of [
+      "handlers/chat.ts",
+      "cortex/workflow/orchestrator.ts",
+      "routes/mediaGeneration.ts",
+      "research/handler.ts",
+      "handlers/media.ts",
+      "research/deepResearch.ts",
+    ]) {
       const src = read(f);
       const consumes = (src.match(/await consumeCredits\(/g) ?? []).length;
       const skips = (src.match(/skipDaily: true/g) ?? []).length;
@@ -67,10 +74,48 @@ describe("credit charging invariants (source-level)", () => {
     }
   });
 
-  it("deepResearch does NOT skip daily — it takes no daily reservation", () => {
+  it("deepResearch DOES take an atomic daily reservation, sized as a normal per-request estimate, and settles it exactly once", () => {
+    // FINDING (adversarial production-readiness audit, fixed same pass):
+    // deepResearch previously had NO atomic backstop at all — only a
+    // read-only monthlyOnly ceiling check (checkCredits) and a read-only
+    // capability-count check (checkMediaQuota), both plain SELECTs with no
+    // reservation. Concurrent requests could all read the same pre-charge
+    // snapshot and all be admitted, each running up to 5 real provider
+    // calls over up to an 8-minute budget with nothing enforcing the 3/day
+    // cap or the daily credit pool in real time — a genuine unbounded-ish
+    // provider-cost multiplier. Fixed by giving it the same
+    // checkAndReserveCredits/settleDailyReservation shape every other
+    // capability already uses.
     const src = read("research/deepResearch.ts");
-    expect(src).not.toContain("skipDaily");
+    // Still checks the large, monthly-sized worst-case ceiling (unchanged,
+    // guards a different thing: "can this account's whole month even
+    // afford one worst-case run").
     expect(src).toContain("monthlyOnly");
+    // AND now also atomically reserves a normal, daily-pool-sized estimate
+    // before any provider call, and trues it up exactly once at the end.
+    expect(src).toContain("checkAndReserveCredits(fastify, user.id, gateEstimate)");
+    expect(src).toContain("resolveCreditGateEstimate(fastify, RESEARCH_COMPLEXITY, user.planTier)");
+    expect((src.match(/settleDailyReservation\(fastify, user\.id, gate\.dailyReserved,/g) ?? []).length).toBe(2); // 0 on early bail-out, totalCreditsCharged in the finally
+  });
+
+  it("deepResearch creates its generated_media row BEFORE running any stage, closing the capability-count race", () => {
+    // Companion fix to the reservation above: checkMediaQuota's 3/day count
+    // only sees rows that already exist. Recording the row only at
+    // completion (the previous behavior) meant N concurrent runs could all
+    // see zero existing rows and all pass. Creating it status='processing'
+    // up front — before stage 1 — means concurrent runs now count against
+    // each other immediately, same fix as the video path's queued-row
+    // pattern (checkConcurrentMediaLimit's own doc comment).
+    const src = read("research/deepResearch.ts");
+    const reserveIdx = src.indexOf("checkAndReserveCredits(fastify, user.id, gateEstimate)");
+    const recordIdx = src.indexOf('recordMediaGeneration(fastify, { userId: user.id, messageId: null, kind: "deep_research", status: "processing"');
+    const stage1Idx = src.indexOf('sse.researchStage({ stage: "planning" });');
+    expect(reserveIdx).toBeGreaterThan(-1);
+    expect(recordIdx).toBeGreaterThan(reserveIdx);
+    expect(stage1Idx).toBeGreaterThan(recordIdx);
+    // The two completion sites and the failure site update that SAME row
+    // rather than inserting a fresh one at the end.
+    expect((src.match(/updateGeneratedMediaStatus\(fastify, mediaId,/g) ?? []).length).toBe(3);
   });
 
   it("async video releases its reservation on every failure path", () => {

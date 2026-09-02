@@ -7,6 +7,25 @@ import { estimateAudioRequestMinutes, MAX_AUDIO_MINUTES_PER_REQUEST, MAX_AUDIO_I
 const SRC = join(import.meta.dirname, "..", "src");
 const read = (p: string) => readFileSync(join(SRC, p), "utf8");
 
+// Fixture timestamps MUST be relative to the real clock, not a hardcoded
+// literal — checkDualPeriodQuota's day/month windows (startOfTodayIST /
+// startOfMonthIST in entitlements/index.ts) are computed from real "now"
+// at test-run time. A prior version of this file hardcoded "2026-08-29"
+// throughout; that was "today" the day it was written but silently went
+// stale the moment the real clock crossed into September, at which point
+// every gte("created_at", startOfTodayIST()) / startOfMonthIST() filter
+// excluded every fixture row and 6 tests covering this billing-critical
+// gate started failing for a reason that had nothing to do with the code
+// under test. TODAY is always strictly "today"; YESTERDAY is always
+// strictly before startOfTodayIST() (a day is at most 24h, so now-24h
+// always precedes today's start) — used for "this month but not today"
+// fixtures. It can itself fall in the PREVIOUS month on the 1st of a
+// month (an inherent ~1-day/month edge case, not a bug) — acceptable
+// since the alternative (a literal date) is permanently broken instead of
+// transiently imprecise one day a month.
+const TODAY = () => new Date().toISOString();
+const YESTERDAY = () => new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+
 // A predicate-aware in-memory table engine — unlike test/helpers/fakeFastify.ts's
 // generic stub (which always resolves null/[] and is shared by four other
 // suites that depend on that exact behavior), this one actually applies
@@ -71,7 +90,7 @@ describe("checkDualPeriodQuota — the new day+month capability ceiling gate", (
         { plan_tier: "pro", counter_type: "image_generations_monthly", limit_amount: 60 },
       ]),
       generated_media: [
-        { user_id: "u1", kind: "image", status: "completed", created_at: "2026-08-29" },
+        { user_id: "u1", kind: "image", status: "completed", created_at: TODAY() },
       ],
     });
     const q = await checkDualPeriodQuota(f, "u1", "pro", "image_generations", "image_generations_monthly",
@@ -83,7 +102,7 @@ describe("checkDualPeriodQuota — the new day+month capability ceiling gate", (
   });
 
   it("blocks on the DAILY cap even when comfortably under the monthly cap", async () => {
-    const rows = Array.from({ length: 5 }, () => ({ user_id: "u1", kind: "image", status: "completed", created_at: "2026-08-29" }));
+    const rows = Array.from({ length: 5 }, () => ({ user_id: "u1", kind: "image", status: "completed", created_at: TODAY() }));
     const f = fastify({
       plan_limits: planLimits([
         { plan_tier: "pro", counter_type: "image_generations", limit_amount: 5 },
@@ -100,7 +119,7 @@ describe("checkDualPeriodQuota — the new day+month capability ceiling gate", (
   });
 
   it("blocks on the MONTHLY cap even with zero usage today — a user cannot bypass the month by waiting for a fresh day", async () => {
-    const rows = Array.from({ length: 60 }, (_, i) => ({ user_id: "u1", kind: "image", status: "completed", created_at: `2026-08-${String((i % 27) + 1).padStart(2, "0")}` }));
+    const rows = Array.from({ length: 60 }, () => ({ user_id: "u1", kind: "image", status: "completed", created_at: YESTERDAY() }));
     const f = fastify({
       plan_limits: planLimits([
         { plan_tier: "pro", counter_type: "image_generations", limit_amount: 5 },
@@ -130,8 +149,8 @@ describe("checkDualPeriodQuota — the new day+month capability ceiling gate", (
         { plan_tier: "pro", counter_type: "image_generations_monthly", limit_amount: 60 },
       ]),
       generated_media: [
-        { user_id: "u1", kind: "image", status: "failed", created_at: "2026-08-29" },
-        { user_id: "u1", kind: "image", status: "failed", created_at: "2026-08-29" },
+        { user_id: "u1", kind: "image", status: "failed", created_at: TODAY() },
+        { user_id: "u1", kind: "image", status: "failed", created_at: TODAY() },
       ],
     });
     const q = await checkDualPeriodQuota(f, "u1", "pro", "image_generations", "image_generations_monthly",
@@ -150,8 +169,8 @@ describe("audio quota is duration-summed, not count-based", () => {
         { plan_tier: "pro", counter_type: "audio_minutes_monthly", limit_amount: 100 },
       ]),
       generated_media: [
-        { user_id: "u1", kind: "audio", status: "completed", created_at: "2026-08-29", duration_seconds: 10 },
-        { user_id: "u1", kind: "audio", status: "completed", created_at: "2026-08-29", duration_seconds: 300 },
+        { user_id: "u1", kind: "audio", status: "completed", created_at: TODAY(), duration_seconds: 10 },
+        { user_id: "u1", kind: "audio", status: "completed", created_at: TODAY(), duration_seconds: 300 },
       ],
     });
     const q = await checkDualPeriodQuota(f, "u1", "pro", "audio_minutes", "audio_minutes_monthly",
@@ -167,7 +186,7 @@ describe("audio quota is duration-summed, not count-based", () => {
         { plan_tier: "pro", counter_type: "audio_minutes", limit_amount: 10 },
         { plan_tier: "pro", counter_type: "audio_minutes_monthly", limit_amount: 100 },
       ]),
-      generated_media: [{ user_id: "u1", kind: "audio", status: "completed", created_at: "2026-08-29", duration_seconds: null }],
+      generated_media: [{ user_id: "u1", kind: "audio", status: "completed", created_at: TODAY(), duration_seconds: null }],
     });
     const q = await checkDualPeriodQuota(f, "u1", "pro", "audio_minutes", "audio_minutes_monthly",
       { kind: "generated_media_minutes", mediaKind: "audio", period: "day" },
@@ -204,9 +223,9 @@ describe("vision and workflow_runs usage is counted via the projects -> conversa
         { id: "m2", conversation_id: "c2" }, // belongs to u2
       ],
       cortex_decisions: [
-        { id: "d1", message_id: "m1", category: "vision", created_at: "2026-08-29" },
-        { id: "d2", message_id: "m1", category: "general", created_at: "2026-08-29" }, // not vision — excluded
-        { id: "d3", message_id: "m2", category: "vision", created_at: "2026-08-29" }, // u2's — must not count for u1
+        { id: "d1", message_id: "m1", category: "vision", created_at: TODAY() },
+        { id: "d2", message_id: "m1", category: "general", created_at: TODAY() }, // not vision — excluded
+        { id: "d3", message_id: "m2", category: "vision", created_at: TODAY() }, // u2's — must not count for u1
       ],
       plan_limits: planLimits([
         { plan_tier: "pro", counter_type: "vision_inputs", limit_amount: 20 },
@@ -223,8 +242,8 @@ describe("vision and workflow_runs usage is counted via the projects -> conversa
     const f = fastify({
       ...OWNER_TABLES,
       workflow_runs: [
-        { id: "w1", conversation_id: "c1", created_at: "2026-08-29" }, // u1's
-        { id: "w2", conversation_id: "c2", created_at: "2026-08-29" }, // u2's — must not count for u1
+        { id: "w1", conversation_id: "c1", created_at: TODAY() }, // u1's
+        { id: "w2", conversation_id: "c2", created_at: TODAY() }, // u2's — must not count for u1
       ],
       plan_limits: planLimits([
         { plan_tier: "pro", counter_type: "workflow_runs", limit_amount: 3 },

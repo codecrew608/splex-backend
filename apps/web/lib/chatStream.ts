@@ -119,9 +119,26 @@ export async function streamChat(
     },
   });
 
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    parser.feed(decoder.decode(value, { stream: true }));
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      parser.feed(decoder.decode(value, { stream: true }));
+    }
+  } catch (err) {
+    // FINDING (adversarial production-readiness audit): this loop had no
+    // catch at all. reader.read() rejects on a mid-stream failure — the
+    // connection drops, the server closes the response early — and,
+    // routinely, on the Stop button: aborting the fetch makes the very
+    // next read() reject with an AbortError. Either way the exception
+    // used to propagate straight out of streamChat(), and useChatStream's
+    // `await streamChat(...)` has no catch/finally of its own, so
+    // setIsStreaming(false) never ran — the message stayed showing "..."
+    // forever with no way to recover short of a reload. This is very
+    // likely the exact bug the reported "stuck at •••" symptom was.
+    // An explicit abort is not a failure — it must resolve quietly, not
+    // show an error bubble over content the user deliberately cut short.
+    if (signal?.aborted || (err instanceof DOMException && err.name === "AbortError")) return;
+    handlers.onError({ message: "The connection was interrupted. Please try again." });
   }
 }

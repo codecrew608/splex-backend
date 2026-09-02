@@ -5,11 +5,12 @@ import type { SSEWriter } from "../sse/writer.js";
 import { selectModelCandidates, resolveCortexVersion } from "../cortex/index.js";
 import { completeOnce, fetchGenerationCost, withDeadline, isBalanceExceededError } from "../openrouter/client.js";
 import { computeMediaCreditsCharged } from "../credits/mediaCost.js";
+import { resolveCreditGateEstimate } from "../credits/costBand.js";
 import { consumeCredits } from "../credits/consumeCredits.js";
 import { insertMessage } from "../persistence/messages.js";
 import { insertCortexDecision } from "../persistence/cortexDecisions.js";
-import { checkMediaQuota, recordMediaGeneration } from "../credits/mediaQuota.js";
-import { checkCredits, resolveCreditRejectionMessage } from "../credits/checkCredits.js";
+import { checkMediaQuota, recordMediaGeneration, updateGeneratedMediaStatus } from "../credits/mediaQuota.js";
+import { checkCredits, checkAndReserveCredits, settleDailyReservation, resolveCreditRejectionMessage } from "../credits/checkCredits.js";
 import { wrapUntrustedContent, isSafeExternalUrl, BLOCKED_FETCH_DOMAINS } from "./security.js";
 import type { Citation } from "./types.js";
 
@@ -134,6 +135,16 @@ async function runStage(
     complexity: RESEARCH_COMPLEXITY,
     openrouterModelId: model.openrouter_model_id,
     realCostEstimate: costUsd,
+    // The whole run reserves an upfront estimate against the daily pool
+    // once (see checkAndReserveCredits in runDeepResearch) and trues it up
+    // ONCE, in a finally block, from the run's real total — not
+    // stage-by-stage. Passing skipDaily here on every stage is what makes
+    // that true-up additive instead of double-counted: without it, each of
+    // the ~5 stages would ALSO unconditionally add to daily_credits via
+    // consume_daily_credits (which has no limit check at all — see its SQL
+    // definition), on top of the reservation, silently overcharging the
+    // daily pool by the stage total every single run.
+    skipDaily: true,
   });
 
   return { content, costCredits, costUsd };
@@ -242,6 +253,53 @@ export async function runDeepResearch(params: RunDeepResearchParams): Promise<vo
     sse.end();
     return;
   }
+
+  // Atomic per-request reservation against the DAILY pool. The two checks
+  // above (checkCredits monthlyOnly, checkMediaQuota) are both plain reads
+  // with no reservation, so N concurrent runs could each read the same
+  // pre-charge snapshot and all be admitted — the exact TOCTOU race
+  // checkAndReserveCredits/reserve_daily_credits exists to close for every
+  // other capability (image/ppt/audio/web_search all gate this way). Deep
+  // research was the one capability still missing it, having only the
+  // large, monthly-sized costCeilingCredits check above (deliberately NOT
+  // sized to fit the daily pool — see its own comment on the live-caught
+  // bug that shaped it). gateEstimate here is the same normal
+  // per-unit-of-work size every other capability reserves, not the
+  // worst-case ceiling, so this does not reproduce that bug.
+  // settleDailyReservation() in the finally below trues it up to the real
+  // total, which legitimately can exceed the estimate for a multi-stage
+  // run — same "estimate now, true up later" shape as everywhere else.
+  const gateEstimate = await resolveCreditGateEstimate(fastify, RESEARCH_COMPLEXITY, user.planTier);
+  const gate = await checkAndReserveCredits(fastify, user.id, gateEstimate);
+  if (!gate.allowed) {
+    sse.error({ message: await resolveCreditRejectionMessage(fastify, user.id, gateEstimate) });
+    sse.done({ blocked: true, conversationId, userMessageId });
+    sse.end();
+    return;
+  }
+
+  // Row created (status='processing') BEFORE any provider call, not after
+  // completion as this previously did — same fix as
+  // handleAsyncMediaGeneration's video path, for the same reason:
+  // checkMediaQuota's "3/day" count only sees rows that already exist, so
+  // creating the row now (rather than only at completion) closes the
+  // matching race on the CAPABILITY COUNT side — two concurrent runs now
+  // both count against the cap immediately, instead of both racing a check
+  // that saw zero rows because neither had finished yet.
+  const mediaIdOrNull = await recordMediaGeneration(fastify, { userId: user.id, messageId: null, kind: "deep_research", status: "processing", prompt: query });
+  if (!mediaIdOrNull) {
+    await settleDailyReservation(fastify, user.id, gate.dailyReserved, 0);
+    sse.error({ message: "Deep research is temporarily unavailable, please try again shortly." });
+    sse.done({ blocked: true, conversationId, userMessageId });
+    sse.end();
+    return;
+  }
+  // Rebound as a plain `string` (not `string | null`) so the closures
+  // below (writeFinalReport/finishEarly) and the catch block, all defined
+  // later in this function, don't need their own redundant null checks —
+  // mediaIdOrNull's guard above already proved it, TS just can't see that
+  // proof across a function-declaration boundary.
+  const mediaId: string = mediaIdOrNull;
 
   let totalCreditsCharged = 0;
   const seenUrls = new Set<string>();
@@ -450,12 +508,11 @@ export async function runDeepResearch(params: RunDeepResearchParams): Promise<vo
           routedModel: undefined,
         });
 
-        await recordMediaGeneration(fastify, {
-          userId: user.id,
-          messageId: assistantMessageId,
-          kind: "deep_research",
+        // Updates the row created up front (status='processing') rather
+        // than inserting a fresh one — see its creation comment above.
+        await updateGeneratedMediaStatus(fastify, mediaId, {
           status: "completed",
-          prompt: query,
+          messageId: assistantMessageId,
           creditsCharged: totalCreditsCharged,
         });
 
@@ -521,12 +578,9 @@ export async function runDeepResearch(params: RunDeepResearchParams): Promise<vo
         routedModel: model?.openrouter_model_id,
       });
 
-      await recordMediaGeneration(fastify, {
-        userId: user.id,
-        messageId: assistantMessageId,
-        kind: "deep_research",
+      await updateGeneratedMediaStatus(fastify, mediaId, {
         status: "completed",
-        prompt: query,
+        messageId: assistantMessageId,
         creditsCharged: totalCreditsCharged,
       });
 
@@ -560,15 +614,10 @@ export async function runDeepResearch(params: RunDeepResearchParams): Promise<vo
     // already been charged stage-by-stage above — this only records the
     // attempt for quota purposes (status='failed' -> excluded from the
     // daily count, matching every other capability's "a failure never
-    // consumes a quota slot" rule) and tells the user plainly.
-    await recordMediaGeneration(fastify, {
-      userId: user.id,
-      messageId: null,
-      kind: "deep_research",
-      status: "failed",
-      prompt: query,
-      errorMessage: "research pipeline failed",
-    });
+    // consumes a quota slot" rule) and tells the user plainly. Updates the
+    // row created up front (status='processing') rather than inserting a
+    // fresh one — see its creation comment above.
+    await updateGeneratedMediaStatus(fastify, mediaId, { status: "failed", errorMessage: "research pipeline failed" });
     sse.error({
       message: isBalanceExceededError(err)
         ? "This AI service is temporarily unavailable. Please try again shortly."
@@ -576,5 +625,14 @@ export async function runDeepResearch(params: RunDeepResearchParams): Promise<vo
     });
     sse.done({ blocked: true, conversationId, userMessageId });
     sse.end();
+  } finally {
+    // Trues up the daily reservation taken above from the small upfront
+    // estimate to the real total actually spent across every stage that
+    // ran (0 if the very first stage threw before charging anything) —
+    // runs on every exit path: normal completion, an early finishEarly()
+    // exit, or the catch above. See checkAndReserveCredits' own doc
+    // comment for why this exact shape (try/finally, not scattered at
+    // each return) is required.
+    await settleDailyReservation(fastify, user.id, gate.dailyReserved, totalCreditsCharged);
   }
 }

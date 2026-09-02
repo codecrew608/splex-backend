@@ -167,6 +167,16 @@ export function useChatStream(
       const controller = new AbortController();
       abortRef.current = controller;
 
+      // try/finally, not a bare await: this is the frontend's own
+      // "reservation" on the loading state — same reason the backend
+      // never settles a credit reservation outside a finally (see
+      // checkAndReserveCredits' own doc comment). streamChat() itself is
+      // now exception-safe (see its own comment), but this is cheap
+      // defense in depth against ANY future throw between here and the
+      // cleanup below — including one from inside a handler callback —
+      // ever again leaving isStreaming stuck true with no recovery short
+      // of a reload.
+      try {
       await streamChat(
         {
           conversationId,
@@ -298,16 +308,17 @@ export function useChatStream(
         },
         controller.signal,
       );
-
-      setIsStreaming(false);
-      setStatus(doneAwaitingClarification.current ? "awaiting_clarification" : "idle");
-      setStatusLabel("");
-      setResearchStage(null);
-      doneAwaitingClarification.current = false;
-      // A real credit charge just landed (or a workflow charged per step
-      // along the way) — tell the sidebar's credits bar to refetch now
-      // rather than wait for its own timer/focus tick.
-      bumpCredits();
+      } finally {
+        setIsStreaming(false);
+        setStatus(doneAwaitingClarification.current ? "awaiting_clarification" : "idle");
+        setStatusLabel("");
+        setResearchStage(null);
+        doneAwaitingClarification.current = false;
+        // A real credit charge just landed (or a workflow charged per step
+        // along the way) — tell the usage panel to refetch now rather
+        // than wait for its own timer/focus tick.
+        bumpCredits();
+      }
     },
     [conversationId, initialProjectId, upsertConversation, bumpCredits],
   );
