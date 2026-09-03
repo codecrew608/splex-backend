@@ -103,7 +103,6 @@ cat > "$OUT/package.json" <<'EOF'
     "zod": "^3.23.8"
   },
   "devDependencies": {
-    "@cloudflare/containers": "^0.3.7",
     "@cloudflare/workers-types": "^5.20260821.1",
     "@types/node": "^22.10.1",
     "typescript": "^5.7.2",
@@ -201,11 +200,29 @@ EOF
 
 # Cloudflare Workers FREE deployment target (src/worker/) — a real
 # fetch(request, env, ctx) entrypoint, no Containers, no Durable Objects,
-# no paid plan required. This is the CURRENT deployment target; the
-# cloudflare/ Containers config emitted below this block is an earlier,
-# now-superseded option (kept, not deleted, per this project's "never
-# silently drop existing work" convention — see the migration report for
-# which one to actually use).
+# no paid plan required. This is the ONLY deployment target this script
+# emits.
+#
+# An earlier Containers-based option (SplexBackendContainer fronting the
+# Dockerized Fastify server via a Durable Object) used to be generated
+# alongside this one, at $OUT/cloudflare/. It was deliberately removed
+# (2026-09-03 Free-plan migration audit), not just left "superseded" as a
+# comment claimed for a while — a second wrangler.jsonc sitting right next
+# to this one, differing only in a subdirectory, is exactly the kind of
+# thing that gets `wrangler deploy`'d from the wrong directory by mistake.
+# That is precisely what happened: someone ran wrangler from
+# deploy/backend/cloudflare/ (evidence: a stray .wrangler/tmp cache found
+# there), hit "Containers require Workers Paid", and reasonably assumed
+# the whole backend needed migrating — when the real, Free-plan-compatible
+# migration below had already existed since commit c6b9ae7. Removing the
+# dead option outright is what actually satisfies "do not leave a fake
+# container binding that is never used", not keeping it around with a
+# comment nobody reads before typing `wrangler deploy`.
+#
+# services/intelligence/cloudflare/ is unrelated and untouched: a genuinely
+# separate, optional sidecar (OCR/embeddings) that every call site already
+# treats as "unset -> degrade gracefully" — its own Containers requirement
+# doesn't block the main backend from being 100% Free-plan.
 cat > "$OUT/wrangler.jsonc" <<'EOF'
 {
   "$schema": "node_modules/wrangler/config-schema.json",
@@ -263,78 +280,6 @@ CREDITS_PER_USD=120000
 INTELLIGENCE_SERVICE_URL=
 INTELLIGENCE_SERVICE_TOKEN=
 LOG_LEVEL=info
-EOF
-
-# --- Superseded option below: Cloudflare Containers (kept, not deleted) ---
-# Requires Workers Paid + Containers — do not use for the Free-tier goal.
-mkdir -p "$OUT/cloudflare"
-
-cat > "$OUT/cloudflare/wrangler.jsonc" <<'EOF'
-{
-  "$schema": "node_modules/wrangler/config-schema.json",
-  "name": "splex-backend",
-  "main": "container-entry.ts",
-  "compatibility_date": "2026-08-21",
-  "compatibility_flags": ["nodejs_compat"],
-  // Builds the image from the Dockerfile one level up (this project's
-  // deploy/backend root) — the exact same Dockerfile already build-tested
-  // locally, never a second/parallel Dockerfile to keep in sync.
-  "containers": [
-    {
-      "class_name": "SplexBackendContainer",
-      "image": "../Dockerfile",
-      "max_instances": 5
-      // No "env" here: current wrangler (verified against 4.127.1) rejects
-      // "containers[].env" as an unexpected field — it is a no-op, not the
-      // non-secret config it looks like. This option is superseded by the
-      // Workers-native target above and not the active deploy path, so it
-      // is left uncorrected rather than reworked to inject config via
-      // envVars (see services/intelligence/cloudflare/container-entry.ts
-      // for the pattern that does work, if this option is ever revived).
-    }
-  ],
-  "durable_objects": {
-    "bindings": [
-      { "name": "SPLEX_BACKEND", "class_name": "SplexBackendContainer" }
-    ]
-  },
-  "migrations": [
-    { "tag": "v1", "new_sqlite_classes": ["SplexBackendContainer"] }
-  ],
-  "observability": {
-    "enabled": true
-  }
-}
-EOF
-
-cat > "$OUT/cloudflare/container-entry.ts" <<'EOF'
-import { Container, getContainer } from "@cloudflare/containers";
-
-// Fronts the Dockerized Fastify server (this folder's Dockerfile, built
-// unchanged) behind a Durable Object. Deliberately does nothing else —
-// no auth, no routing logic, no request rewriting — Fastify's own CORS,
-// auth, and rate-limit plugins run exactly as they do today, inside the
-// container. container.fetch() proxies the request/response verbatim,
-// including chunked/streamed bodies, which is what SSE (fastify-sse-v2)
-// needs to keep working unmodified.
-export class SplexBackendContainer extends Container {
-  defaultPort = 4000;
-  // SSE connections (chat streaming, Deep Research) are long-lived —
-  // don't let Cloudflare recycle the instance mid-stream on ordinary
-  // idle-timeout defaults.
-  sleepAfter = "10m";
-}
-
-interface Env {
-  SPLEX_BACKEND: DurableObjectNamespace<SplexBackendContainer>;
-}
-
-export default {
-  async fetch(request: Request, env: Env): Promise<Response> {
-    const container = getContainer(env.SPLEX_BACKEND);
-    return container.fetch(request);
-  },
-};
 EOF
 
 # Install for real (not --package-lock-only) — this regenerates the
