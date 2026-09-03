@@ -30,6 +30,18 @@ const MEDIA_POLL_INTERVAL_MS = 6_000;
 // doesn't poll forever in a background tab.
 const MEDIA_POLL_MAX_ATTEMPTS = 120;
 
+// Reconciliation poll for an assistant row this tab did NOT itself start
+// streaming — loaded fresh from the server (chat rehydration) still
+// showing status:'streaming'. Most commonly: the generation genuinely
+// finished a moment after the page's server-side fetch ran, or is still
+// running in another tab/session; rarely, a row an unexpected server-side
+// failure never got to finalize. Shorter and far more bounded than the
+// media poll above — this is confirming a normal completion that's
+// already very likely done, not watching a job that takes minutes by
+// design.
+const RECONCILE_POLL_INTERVAL_MS = 3_000;
+const RECONCILE_POLL_MAX_ATTEMPTS = 40; // ~2 minutes
+
 export interface LocalChatMessage extends ChatMessage {
   streaming?: boolean;
   // Attached to the specific assistant message that produced it, not kept
@@ -395,6 +407,60 @@ export function useChatStream(
       cancelled = true;
     };
   }, [pendingMedia, bumpCredits]);
+
+  // Chat rehydration (see useChatStream's own module doc + the durable-
+  // persistence backend fix): initialMessages came from a fresh server
+  // fetch (ConversationPage is a Server Component — every mount of this
+  // hook re-runs it), so any assistant row still showing status:'streaming'
+  // at THAT moment is either about to finish any second (most likely: a
+  // generation that completed a beat after the fetch ran, or is still
+  // genuinely in flight in another tab), or — rarely — a row a server-side
+  // failure never got to finalize. Poll it directly rather than leaving
+  // the bouncing-dots placeholder up with nothing ever resolving it.
+  // Deliberately keyed on mount only ([] deps): a message that starts
+  // streaming live in THIS tab already updates via the normal onToken/
+  // onDone path above and never needs this.
+  useEffect(() => {
+    const pendingIds = initialMessages.filter((m) => m.role === "assistant" && m.status === "streaming").map((m) => m.id);
+    if (pendingIds.length === 0) return;
+    let cancelled = false;
+    const supabase = createClient();
+
+    async function pollOne(messageId: string) {
+      for (let attempt = 0; attempt < RECONCILE_POLL_MAX_ATTEMPTS && !cancelled; attempt++) {
+        await new Promise((resolve) => setTimeout(resolve, RECONCILE_POLL_INTERVAL_MS));
+        if (cancelled) return;
+
+        const { data, error } = await supabase.from("messages").select("content, status").eq("id", messageId).maybeSingle();
+        if (error || !data) continue; // transient failure — try again next tick
+        if (data.status === "streaming") continue; // still genuinely in progress
+
+        setMessages((prev) =>
+          prev.map((m) => (m.id === messageId ? { ...m, content: data.content as string, status: data.status, streaming: false } : m)),
+        );
+        return;
+      }
+      // Exhausted every attempt without the row ever resolving — tell the
+      // user plainly rather than leaving the dots animating forever with
+      // no way to know whether to wait, worry, or retry.
+      if (!cancelled) {
+        setMessages((prev) =>
+          prev.map((m) =>
+            m.id === messageId
+              ? { ...m, content: "This is taking longer than expected. It may have failed without finishing — try regenerating.", status: "failed", streaming: false }
+              : m,
+          ),
+        );
+      }
+    }
+
+    pendingIds.forEach((id) => void pollOne(id));
+
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   return {
     conversationId,

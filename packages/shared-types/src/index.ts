@@ -203,6 +203,17 @@ export type SplexSSEEvent =
   | { event: "workflow_clarification"; data: WorkflowClarificationEventData }
   | { event: "research_stage"; data: ResearchStageEventData };
 
+// Mirrors messages.status (db/migrations/0035_*.sql). 'streaming': the
+// server inserted this row before generation finished and, as far as this
+// fetch can tell, hasn't finalized it yet — could mean a generation is
+// still genuinely in flight, or that it finished microseconds after this
+// row was read. The frontend treats both the same way: show it as
+// in-progress, and let the normal live-SSE path (if this tab is the one
+// running it) or a subsequent reload (if it isn't) catch up to the real
+// state. 'failed': content already holds a short, honest explanation —
+// never render a separate "no answer" placeholder over it.
+export type MessageStatus = "complete" | "streaming" | "failed";
+
 export interface ChatMessage {
   id: string;
   conversationId: string;
@@ -211,6 +222,11 @@ export interface ChatMessage {
   intent: string | null;
   complexity: ComplexityLevel | null;
   createdAt: string;
+  // Optional (not every historical caller of ChatMessage-shaped data sets
+  // it — e.g. a locally-constructed placeholder mid-stream); a missing
+  // value is treated as 'complete' everywhere it's read, matching the
+  // column's own default for every row that predates this field.
+  status?: MessageStatus;
 }
 
 export interface Conversation {

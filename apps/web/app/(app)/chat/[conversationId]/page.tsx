@@ -31,7 +31,7 @@ export default async function ConversationPage({ params }: PageProps) {
   // the browser's RSC payload for a UI element that never displayed it.
   const { data: messageRows } = await supabase
     .from("messages")
-    .select("id, conversation_id, role, content, intent, complexity, created_at")
+    .select("id, conversation_id, role, content, intent, complexity, created_at, status")
     .eq("conversation_id", conversationId)
     .order("created_at", { ascending: true });
 
@@ -43,6 +43,11 @@ export default async function ConversationPage({ params }: PageProps) {
     intent: row.intent,
     complexity: row.complexity,
     createdAt: row.created_at,
+    // A 'streaming' row surviving all the way to this fresh server fetch
+    // means whatever tab was generating it is gone (this IS the durable
+    // recovery path) — see ChatThread's own handling of this status for
+    // what the user sees.
+    status: row.status,
   }));
 
   // Reload-recovery for a mid-workflow conversation. Same shape as the

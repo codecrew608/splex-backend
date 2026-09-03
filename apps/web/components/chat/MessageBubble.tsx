@@ -75,7 +75,15 @@ export function MessageBubble({ message, showRegenerate, onRegenerate, onEditSub
     setEditing(false);
   }
 
-  const canShowActions = !message.streaming && Boolean(message.content);
+  // A message freshly loaded from the server (not this tab's own live
+  // stream) can still have status:'streaming' with empty content — either
+  // a generation genuinely still running elsewhere (another tab, or this
+  // one before ChatThread's reconciliation poll catches up), or, rarely,
+  // a row an unexpected server-side failure never finalized. Either way,
+  // "still working" is the honest thing to show, same as the live
+  // message.streaming flag — never a blank area with nothing in it.
+  const isPending = message.streaming || message.status === "streaming";
+  const canShowActions = !isPending && Boolean(message.content);
 
   if (isUser) {
     return (
@@ -148,7 +156,7 @@ export function MessageBubble({ message, showRegenerate, onRegenerate, onEditSub
       <div className="min-w-0 w-full">
         {message.content ? (
           <MarkdownRenderer content={message.content} />
-        ) : message.streaming ? (
+        ) : isPending ? (
           <span className="inline-flex gap-1.5 py-1">
             <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-accent [animation-delay:-0.3s]" />
             <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-accent [animation-delay:-0.15s]" />
