@@ -32,7 +32,26 @@ export const useEntitlementsStore = create<EntitlementsState>((set) => ({
       const {
         data: { session },
       } = await supabase.auth.getSession();
-      if (!session) return;
+      if (!session) {
+        // FIX: previously a bare `return` here left `loading: true`
+        // forever if THIS was the very first call — plausible on a fresh
+        // page load, where getSession() can (rarely, but really) resolve
+        // before Supabase has finished restoring the session from
+        // storage. UsagePanel renders nothing while loading is true, and
+        // otherwise the next real attempt was up to a full 60s away (the
+        // poll interval) or dependent on the user blurring/refocusing the
+        // window — reading exactly like "the usage display doesn't work"
+        // on a fresh page load. Clear loading so the panel can render its
+        // empty state instead of staying wedged, and retry once, soon,
+        // rather than waiting out the full interval — covers exactly the
+        // "session hydrates a beat after this ran" case without adding a
+        // second permanent polling loop.
+        set({ loading: false, error: false });
+        setTimeout(() => {
+          if (!useEntitlementsStore.getState().snapshot) useEntitlementsStore.getState().load();
+        }, 2_000);
+        return;
+      }
 
       const res = await fetch(`${BACKEND_URL}/entitlements`, {
         headers: { Authorization: `Bearer ${session.access_token}` },
