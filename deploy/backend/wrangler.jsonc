@@ -10,6 +10,21 @@
   "compatibility_flags": ["nodejs_compat"],
   // No [[containers]], no durable_objects, no paid-plan-only bindings —
   // deliberately: this config must deploy on Workers Free as-is.
+  //
+  // "migrations" below is NOT a Free-plan feature being reintroduced — it's
+  // the required teardown step for one that was, briefly, live by mistake.
+  // On 2026-09-03 a `wrangler deploy` was run against this exact script
+  // name from the (since-removed) Containers config, which registered a
+  // "SplexBackendContainer" Durable Object class under migration tag "v1"
+  // and pointed production traffic at a container that Workers Free can't
+  // provision (the live outage this fixed). Cloudflare refuses to accept a
+  // new version that silently stops exporting a class real Durable Objects
+  // still depend on (error code 10064) — the only accepted way to drop it
+  // is an explicit delete-class migration, tagged after the existing "v1".
+  // Left in permanently per Wrangler's own convention (migration history is
+  // additive, never edited/removed after the fact) — harmless to keep, and
+  // it's the only record that this ever happened.
+  "migrations": [{ "tag": "v2", "deleted_classes": ["SplexBackendContainer"] }],
   "observability": {
     "enabled": true
   },
