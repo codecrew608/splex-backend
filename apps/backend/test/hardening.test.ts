@@ -240,3 +240,42 @@ describe("durable assistant-message persistence (source-level)", () => {
     expect(src).toContain("if (params.routedModel !== undefined) update.routed_model = params.routedModel;");
   });
 });
+
+describe("attachment display (source-level)", () => {
+  // FINDING (production hardening pass): the user's OWN persisted message
+  // content used to be classifierInputMessage — the attachment text block
+  // (up to 20,000 chars of a document's extracted text) PLUS whatever they
+  // typed, as one string. Every reload, and every future turn's history
+  // replay, rendered/re-sent that whole block as if the user had typed it.
+  // Images were worse: never included in that block at all (by design —
+  // they go to the model separately), so an image attachment left no
+  // trace anywhere once the live SSE session ended. Fixed by persisting
+  // only what the user typed, linking attached files to the message row
+  // for display, and injecting the attachment text into the model's
+  // CURRENT-turn request in memory instead of into persisted content.
+  it("persists only what the user typed, not classifierInputMessage", () => {
+    const src = read("handlers/chat.ts");
+    expect(src).toContain('userMessageId = await insertMessage(fastify, { conversationId, role: "user", content: body.message as string });');
+    expect(src).not.toMatch(/insertMessage\(fastify, \{ conversationId, role: "user", content: classifierInputMessage/);
+  });
+
+  it("links attached files to the user message for display, after re-scoping ownership", () => {
+    const src = read("handlers/chat.ts");
+    const fetchIdx = src.indexOf("const attachedFiles = await fetchOwnedFiles(");
+    const linkIdx = src.indexOf("await linkFilesToMessage(fastify, attachedFiles.map((f) => f.id), userMessageId);");
+    expect(fetchIdx).toBeGreaterThan(-1);
+    expect(linkIdx).toBeGreaterThan(fetchIdx);
+  });
+
+  it("injects attachmentTextBlock into the CURRENT turn's completion request only, never into what's persisted", () => {
+    const src = read("handlers/chat.ts");
+    const completionIdx = src.indexOf("const completionMessages:");
+    const injectIdx = src.indexOf('lastMessage.content = `${attachmentTextBlock}${lastMessage.content}`;');
+    expect(injectIdx).toBeGreaterThan(completionIdx);
+  });
+
+  it("linkFilesToMessage only ever writes message_id, never content the client could use to forge attribution", () => {
+    const src = read("files/attachments.ts");
+    expect(src).toContain('.update({ message_id: messageId })');
+  });
+});

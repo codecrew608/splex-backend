@@ -35,6 +35,25 @@ export default async function ConversationPage({ params }: PageProps) {
     .eq("conversation_id", conversationId)
     .order("created_at", { ascending: true });
 
+  const messageIds = (messageRows ?? []).map((row) => row.id);
+  // Display metadata only (filename/mime_type) — never extracted_text or
+  // storage_path; RLS (files_owner_all) is the real gate here too, so this
+  // simply returns nothing for a file that somehow isn't this user's own.
+  // Empty `in()` list short-circuits rather than issuing a query that
+  // would otherwise just return everything the filter doesn't exclude.
+  const { data: attachmentRows } =
+    messageIds.length > 0
+      ? await supabase.from("files").select("id, message_id, filename, mime_type").in("message_id", messageIds)
+      : { data: [] as Array<{ id: string; message_id: string | null; filename: string; mime_type: string | null }> };
+
+  const attachmentsByMessage = new Map<string, { id: string; filename: string; mimeType: string | null }[]>();
+  for (const file of attachmentRows ?? []) {
+    if (!file.message_id) continue;
+    const list = attachmentsByMessage.get(file.message_id) ?? [];
+    list.push({ id: file.id, filename: file.filename, mimeType: file.mime_type });
+    attachmentsByMessage.set(file.message_id, list);
+  }
+
   const initialMessages: ChatMessage[] = (messageRows ?? []).map((row) => ({
     id: row.id,
     conversationId: row.conversation_id,
@@ -48,6 +67,7 @@ export default async function ConversationPage({ params }: PageProps) {
     // recovery path) — see ChatThread's own handling of this status for
     // what the user sees.
     status: row.status,
+    attachments: attachmentsByMessage.get(row.id),
   }));
 
   // Reload-recovery for a mid-workflow conversation. Same shape as the

@@ -14,6 +14,7 @@ import type {
   CortexRoutingInfo,
 } from "@/shared-types";
 import { useSidebarStore } from "@/state/sidebarStore";
+import type { SentAttachment } from "@/components/chat/Composer";
 
 interface PendingMedia {
   mediaId: string;
@@ -135,7 +136,7 @@ export function useChatStream(
   }
 
   const run = useCallback(
-    async (text: string, regenerateMessageId?: string, fileIds?: string[]) => {
+    async (text: string, regenerateMessageId?: string, attachments?: SentAttachment[]) => {
       const supabase = createClient();
       const {
         data: { session },
@@ -167,7 +168,13 @@ export function useChatStream(
         setMessages((prev) => prev.filter((m) => m.id !== regenerateMessageId));
       } else {
         userLocalId = crypto.randomUUID();
-        setMessages((prev) => [...prev, emptyMessage(userLocalId as string, conversationId ?? "", "user", text)]);
+        // Attached immediately from the composer's own staged state — no
+        // need to wait for onDone/a reload to show what was actually
+        // sent, matching how the message text itself renders immediately.
+        setMessages((prev) => [
+          ...prev,
+          { ...emptyMessage(userLocalId as string, conversationId ?? "", "user", text), attachments },
+        ]);
       }
 
       const assistantLocalId = crypto.randomUUID();
@@ -194,7 +201,7 @@ export function useChatStream(
           conversationId,
           message: regenerateMessageId ? undefined : text,
           regenerateMessageId,
-          fileIds: regenerateMessageId ? undefined : fileIds,
+          fileIds: regenerateMessageId ? undefined : attachments?.map((a) => a.id),
           // Only meaningful when this is the first message of a brand-new
           // conversation — resolveConversation ignores it otherwise.
           projectId: conversationId ? undefined : initialProjectId,
@@ -335,7 +342,7 @@ export function useChatStream(
     [conversationId, initialProjectId, upsertConversation, bumpCredits],
   );
 
-  const sendMessage = useCallback((text: string, fileIds?: string[]) => run(text, undefined, fileIds), [run]);
+  const sendMessage = useCallback((text: string, attachments?: SentAttachment[]) => run(text, undefined, attachments), [run]);
   const regenerate = useCallback((messageId: string) => run("", messageId), [run]);
   const stop = useCallback(() => abortRef.current?.abort(), []);
 

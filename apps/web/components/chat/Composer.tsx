@@ -21,10 +21,20 @@ export interface StagedAttachment {
 }
 
 interface ComposerProps {
-  onSend: (text: string, fileIds?: string[]) => void;
+  onSend: (text: string, attachments?: SentAttachment[]) => void;
   onStop?: () => void;
   isStreaming: boolean;
   disabled?: boolean;
+}
+
+// What the composer hands off on send — enough for useChatStream to both
+// build the API request (id) and render the attachment chip on the user's
+// own bubble immediately, without waiting on a server round-trip
+// (filename/mimeType, mirroring shared-types' MessageAttachment).
+export interface SentAttachment {
+  id: string;
+  filename: string;
+  mimeType: string | null;
 }
 
 // Minimal ambient typing for the Web Speech API — not in lib.dom.d.ts.
@@ -319,8 +329,10 @@ export function Composer({ onSend, onStop, isStreaming, disabled }: ComposerProp
       wantsListeningRef.current = false;
       recognitionRef.current?.stop();
     }
-    const readyFileIds = attachments.filter((a) => a.status === "ready").map((a) => a.id);
-    onSend(trimmed, readyFileIds.length > 0 ? readyFileIds : undefined);
+    const readyAttachments: SentAttachment[] = attachments
+      .filter((a) => a.status === "ready")
+      .map((a) => ({ id: a.id, filename: a.filename, mimeType: a.mimeType }));
+    onSend(trimmed, readyAttachments.length > 0 ? readyAttachments : undefined);
     setValue("");
     setAttachments([]);
     if (textareaRef.current) textareaRef.current.style.height = "auto";

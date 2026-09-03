@@ -48,3 +48,23 @@ export function buildAttachmentTextBlock(files: FileRow[]): string {
     })
     .join("");
 }
+
+// Records which message a file was attached to — display metadata only
+// (MessageBubble renders a chip per attachment on reload), never how the
+// model actually receives the content: that still goes through
+// buildAttachmentTextBlock/buildImageDataUri, injected into the CURRENT
+// turn's completion call in-memory (see runChat), same as before this
+// function existed. Column-level grants (migration 0028) already keep
+// authenticated clients from writing message_id themselves — this is the
+// only path that sets it, and only after fetchOwnedFiles has already
+// re-scoped the ids to the caller's own files.
+export async function linkFilesToMessage(fastify: FastifyInstance, fileIds: string[], messageId: string): Promise<void> {
+  if (fileIds.length === 0) return;
+  const { error } = await fastify.supabaseAdmin.from("files").update({ message_id: messageId }).in("id", fileIds);
+  if (error) {
+    // Best-effort — never block sending the message over a display-only
+    // metadata write. Worst case the attachment chip just doesn't show up
+    // on a later reload; the model still received the content this turn.
+    fastify.log.error({ error, messageId, fileIds }, "failed to link attachments to message");
+  }
+}

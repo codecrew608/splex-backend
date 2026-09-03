@@ -7,6 +7,7 @@ import { cn } from "@/lib/cn";
 import { MarkdownRenderer } from "./MarkdownRenderer";
 import { MessageCortexDisclosure } from "./MessageCortexDisclosure";
 import { CitationsList } from "./CitationsList";
+import { AttachmentChip } from "./AttachmentChip";
 
 interface MessageBubbleProps {
   message: LocalChatMessage;
@@ -88,6 +89,13 @@ export function MessageBubble({ message, showRegenerate, onRegenerate, onEditSub
   if (isUser) {
     return (
       <div className="group flex animate-fade-in-up flex-col items-end gap-[11px]">
+        {message.attachments && message.attachments.length > 0 && !editing && (
+          <div className="flex max-w-[86%] flex-wrap justify-end gap-2">
+            {message.attachments.map((a) => (
+              <AttachmentChip key={a.id} attachment={{ filename: a.filename, mimeType: a.mimeType }} />
+            ))}
+          </div>
+        )}
         <div className="max-w-[86%]">
           {editing ? (
             <div className="rounded-xl border border-border bg-surface p-3">

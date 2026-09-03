@@ -29,7 +29,7 @@ import { resolveCreditGateEstimate } from "../credits/costBand.js";
 import { computeRealCost } from "../credits/realCost.js";
 import { streamCompletion, isRetryableOpenRouterError, isBalanceExceededError, isModelUnavailableError, type ChatContentPart, describeError } from "../openrouter/client.js";
 import { resolveMaxTokens } from "../cortex/tokenBudget.js";
-import { fetchOwnedFiles, buildImageDataUri, buildAttachmentTextBlock } from "../files/attachments.js";
+import { fetchOwnedFiles, buildImageDataUri, buildAttachmentTextBlock, linkFilesToMessage } from "../files/attachments.js";
 import { retrieveFileContext } from "../intelligence/retrieve.js";
 import { shouldUseWorkflow } from "../cortex/workflow/trigger.js";
 import { getActiveWorkflow, cancelActiveWorkflow, startWorkflow, resumeWorkflow } from "../cortex/workflow/orchestrator.js";
@@ -127,6 +127,11 @@ export async function runChat(
     let history: HistoryMessage[];
     let hasImageAttachment = false;
     let imageFiles: Awaited<ReturnType<typeof fetchOwnedFiles>> = [];
+    // Injected into the CURRENT turn's completionMessages below, in
+    // memory, alongside the image-parts handling — never persisted. See
+    // its assignment below for why this is now separate from
+    // classifierInputMessage/the persisted message content.
+    let attachmentTextBlock = "";
 
     if (body.regenerateMessageId) {
       await deleteMessage(fastify, body.regenerateMessageId);
@@ -143,10 +148,31 @@ export async function runChat(
       const attachedFiles = await fetchOwnedFiles(fastify, user.id, body.fileIds ?? []);
       imageFiles = attachedFiles.filter((f) => f.mime_type?.startsWith("image/"));
       hasImageAttachment = imageFiles.length > 0;
-      const attachmentTextBlock = buildAttachmentTextBlock(attachedFiles);
+      attachmentTextBlock = buildAttachmentTextBlock(attachedFiles);
 
+      // FIX (file/image attachment display bug): classifierInputMessage
+      // (classification benefits from seeing the file's content — routes
+      // document-heavy questions the same regardless of whether the text
+      // happens to already be in history) still includes the attachment
+      // block, but what gets PERSISTED — and therefore what every future
+      // turn's history replay and the user's own chat bubble show — is
+      // just what they actually typed. Previously these were the same
+      // string, so a document attachment's full extracted text (up to
+      // 20,000 chars) rendered verbatim inside the user's own message
+      // bubble as if they'd typed it, forever, on every reload, and got
+      // re-sent as "history" on every subsequent turn. Images were worse:
+      // never mentioned in persisted content at all (buildAttachmentTextBlock
+      // excludes them by design — they go to the model via buildImageDataUri
+      // instead), so an image attachment left no trace whatsoever once the
+      // live SSE session ended.
       classifierInputMessage = `${attachmentTextBlock}${body.message as string}`;
-      userMessageId = await insertMessage(fastify, { conversationId, role: "user", content: classifierInputMessage });
+      userMessageId = await insertMessage(fastify, { conversationId, role: "user", content: body.message as string });
+      // Display-only metadata (MessageBubble renders a chip per linked
+      // file) — the model already gets the real content this turn via
+      // attachmentTextBlock/buildImageDataUri below, independent of this.
+      if (attachedFiles.length > 0) {
+        await linkFilesToMessage(fastify, attachedFiles.map((f) => f.id), userMessageId);
+      }
       history = await fetchRecentHistory(fastify, conversationId);
     }
 
@@ -411,6 +437,20 @@ export async function runChat(
       { role: "system", content: systemPromptText },
       ...history.map((m) => ({ role: m.role, content: m.content as string })),
     ];
+
+    // Document attachments' extracted text is added to THIS turn's
+    // request only, here, in memory — never persisted (see the
+    // insertMessage call above, which stores just what the user typed)
+    // and never replayed into a future turn's history the way it used to
+    // be. history's last entry is always the just-inserted user message
+    // for this (non-regenerate) branch, which is the only branch that
+    // ever sets attachmentTextBlock.
+    if (attachmentTextBlock && completionMessages.length > 0) {
+      const lastMessage = completionMessages[completionMessages.length - 1];
+      if (typeof lastMessage.content === "string") {
+        lastMessage.content = `${attachmentTextBlock}${lastMessage.content}`;
+      }
+    }
 
     if (hasImageAttachment) {
       const lastMessage = completionMessages[completionMessages.length - 1];

@@ -214,6 +214,18 @@ export type SplexSSEEvent =
 // never render a separate "no answer" placeholder over it.
 export type MessageStatus = "complete" | "streaming" | "failed";
 
+// Display metadata only — filename/type for rendering an attachment chip.
+// Never the extracted text or a storage URL: the model already received
+// the real content for the turn it was sent on (see buildAttachmentTextBlock/
+// buildImageDataUri in the backend), and a stored file's actual bytes are
+// fetched through its own signed-URL/ownership-checked endpoint, never
+// embedded in chat history.
+export interface MessageAttachment {
+  id: string;
+  filename: string;
+  mimeType: string | null;
+}
+
 export interface ChatMessage {
   id: string;
   conversationId: string;
@@ -227,6 +239,10 @@ export interface ChatMessage {
   // value is treated as 'complete' everywhere it's read, matching the
   // column's own default for every row that predates this field.
   status?: MessageStatus;
+  // Files/images attached to THIS message, if any — absent or empty for
+  // the overwhelming majority of messages. See MessageAttachment's own doc
+  // comment for exactly what this does and doesn't carry.
+  attachments?: MessageAttachment[];
 }
 
 export interface Conversation {

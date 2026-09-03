@@ -4,7 +4,16 @@ import { FileText, Image as ImageIcon, Loader2, TriangleAlert, X } from "lucide-
 import { cn } from "@/lib/cn";
 import type { StagedAttachment } from "./Composer";
 
-export function AttachmentChip({ attachment, onRemove }: { attachment: StagedAttachment; onRemove: () => void }) {
+// Also renders a persisted MessageAttachment (shared-types) — filename +
+// mimeType only, no status — for a message already sent/loaded from
+// history. onRemove absent means read-only: no X button, since there's
+// nothing a "remove" could mean for something already sent.
+interface AttachmentChipProps {
+  attachment: Pick<StagedAttachment, "filename" | "mimeType"> & { status?: StagedAttachment["status"] };
+  onRemove?: () => void;
+}
+
+export function AttachmentChip({ attachment, onRemove }: AttachmentChipProps) {
   const isImage = attachment.mimeType?.startsWith("image/");
   const isBusy = attachment.status === "uploading" || attachment.status === "processing";
   const isFailed = attachment.status === "failed";
@@ -28,14 +37,16 @@ export function AttachmentChip({ attachment, onRemove }: { attachment: StagedAtt
       <span className="max-w-[140px] truncate" title={attachment.filename}>
         {attachment.filename}
       </span>
-      <button
-        type="button"
-        onClick={onRemove}
-        className="flex h-4 w-4 shrink-0 items-center justify-center rounded-full text-muted-foreground hover:bg-border hover:text-foreground"
-        title="Remove"
-      >
-        <X size={11} />
-      </button>
+      {onRemove && (
+        <button
+          type="button"
+          onClick={onRemove}
+          className="flex h-4 w-4 shrink-0 items-center justify-center rounded-full text-muted-foreground hover:bg-border hover:text-foreground"
+          title="Remove"
+        >
+          <X size={11} />
+        </button>
+      )}
     </div>
   );
 }
