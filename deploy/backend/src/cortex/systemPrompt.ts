@@ -54,3 +54,65 @@ export function buildSystemPrompt(
 // Kept for any call site that hasn't been threaded through with a memory
 // summary yet — identical to buildSystemPrompt(null).
 export const SPLEX_SYSTEM_PROMPT = buildSystemPrompt(null);
+
+// Domain-specific verification, appended AFTER Cortex classification
+// resolves (see its call site in handlers/chat.ts) rather than baked into
+// buildSystemPrompt itself — that function runs in parallel WITH
+// classification, before decision.category is known (a deliberate
+// latency optimization: cost drops from context+classify to
+// max(context,classify) — see chat.ts's own comment), so this has to be
+// a second, later append rather than a parameter threaded through it.
+//
+// Targets the specific failure modes an independent benchmark actually
+// observed (not hypothetical ones): a correct final answer reached via an
+// internally inconsistent derivation (a physics problem that got the
+// right direction but flipped a sign in the pressure-gradient step along
+// the way), and two different concurrency execution models blended into
+// one trace (a correctly-identified TOCTOU race whose walkthrough
+// switched between "lost update" and "non-atomic read-modify-write"
+// framing mid-explanation). Both are consistency failures, not knowledge
+// failures — the model already knew enough to get the right answer, it
+// just didn't check its own working before presenting it. This asks for
+// that check, silently, rather than for more visible content: answers
+// should not get longer because of this block, only more reliably
+// correct given the length they'd already be.
+const VERIFICATION_PREAMBLE = `Before finalizing this response, silently verify your own work using whichever of the checks below actually apply — this is internal checking, not something to narrate. Do not show your derivation, intermediate steps, or the verification process itself unless the user specifically asked to see the work; give a normal, concise, complete answer of the length and shape you'd otherwise give. If a check below reveals an inconsistency, silently redo the affected step before answering rather than presenting the flawed version. Never mention that you performed a verification step.`;
+
+const REASONING_VERIFICATION = `${VERIFICATION_PREAMBLE}
+
+If this involves physics, mechanics, vectors, or forces: explicitly fix a coordinate system and sign convention before deriving anything: state which direction is positive for each axis you use, and hold that convention through every step. Identify every acceleration (including any effective/apparent gravity, e.g. in an accelerating reference frame) before writing force or pressure-gradient equations. After deriving a direction or sign, check it against the sign convention you fixed at the start — a derivation that flips convention partway through is exactly the kind of internally-inconsistent-but-coincidentally-correct-conclusion error to catch here. State the final direction/magnitude in plain terms the reader doesn't need the algebra to understand.
+
+If this involves a puzzle, simulation, or any scenario with a state that changes over a sequence of steps (a game, a data structure, a multi-step process): represent the state explicitly at each step rather than jumping to the end. Apply exactly one transition at a time, and confirm each intermediate state is actually reachable from the one before it before moving on — never invent or skip a transition to make the ending come out right. Check the final state you report actually is the state after the last transition, not a state that merely looks plausible.
+
+If this involves concurrency, race conditions, or parallel/multi-threaded execution: identify which specific concurrency hazard is actually present — a stale read producing a lost update, a non-atomic read-modify-write, or a database/transaction-level race (e.g. two transactions both passing a check before either commits) — and use ONLY that model's execution trace throughout the explanation. These are genuinely different mechanisms with different interleavings; do not blend them into one trace (e.g. describing a lost-update scenario but narrating it with transaction-isolation language, or vice versa) even when they'd produce a similar-looking bug. If more than one hazard is genuinely present, address each separately and say so rather than merging their traces into one.
+
+If this involves formal logic or evaluating a claim for internal consistency: check for contradictions in the premises or claim itself before reasoning forward from them — a proof or argument built on an internally contradictory premise can "validly" reach any conclusion, which is worth flagging rather than reasoning past.`;
+
+const MATH_VERIFICATION = `${VERIFICATION_PREAMBLE}
+
+Before calculating, check whether the premises or the question itself contain a contradiction (impossible constraints, a claim that assumes its own conclusion) — flag that instead of computing an answer to an inconsistent setup. For a calculation whose result matters (the final answer, or a value later steps depend on), redo it a second way if practical (a different method, or working backward from the result) rather than trusting the first pass — but don't do this for arithmetic simple enough that a second pass adds nothing (single-step calculations, a well-known identity); match the effort to how much a mistake here would actually cost.`;
+
+const CODING_VERIFICATION = `${VERIFICATION_PREAMBLE}
+
+Distinguish "this looks conceptually right" from "this actually runs correctly" — trace through the logic on at least one concrete input, including whichever edge cases genuinely matter for this code (empty input, a boundary value, the zero/negative/null case) rather than only the happy path. If the code is meant to preserve some invariant (sorted order, a balanced structure, a resource that must be released), check that your change actually preserves it rather than assuming it does because the surrounding logic looks unchanged.`;
+
+// Cortex's classifier already sorts every ordinary (non-media) message
+// into coding/reasoning/math/writing/documents/general (see
+// cortex/classify.ts's own category list) — reused here rather than
+// re-classifying by domain a second time. "reasoning" is the one bucket
+// covering physics, stateful puzzles, concurrency, and logic all at once
+// (the classifier doesn't split them further), so REASONING_VERIFICATION
+// covers all of those and lets the model apply whichever section actually
+// matches — most single messages will only match one.
+export function reasoningVerificationBlock(category: string): string {
+  switch (category) {
+    case "reasoning":
+      return `\n\n${REASONING_VERIFICATION}`;
+    case "math":
+      return `\n\n${MATH_VERIFICATION}`;
+    case "coding":
+      return `\n\n${CODING_VERIFICATION}`;
+    default:
+      return "";
+  }
+}

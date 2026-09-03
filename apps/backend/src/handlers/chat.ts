@@ -17,6 +17,7 @@ import {
   selectModelCandidates,
   categoryToLabel,
   buildSystemPrompt,
+  reasoningVerificationBlock,
   buildProjectContext,
   resolveCortexVersion,
   friendlyModelName,
@@ -211,7 +212,11 @@ export async function runChat(
     const memoryEnabled = profileRow?.memory_enabled !== false;
     const memoryFacts = memoryEnabled ? rawMemoryFacts : [];
     const memorySummary = memoryEnabled ? await buildMemorySummary(fastify, user.id, profileRow?.full_name ?? null, memoryFacts) : "";
-    const systemPromptText = buildSystemPrompt(memorySummary, fileContext, projectContext);
+    // let, not const: reasoningVerificationBlock is appended below, once
+    // decision.category is known — buildSystemPrompt itself runs here,
+    // in parallel WITH classification (see classificationPromise's own
+    // comment above), before that's available.
+    let systemPromptText = buildSystemPrompt(memorySummary, fileContext, projectContext);
     const contextBlock = [
       memorySummary ? `What you remember about this user:\n${memorySummary}` : "",
       fileContext ? `Relevant file excerpts:\n${fileContext}` : "",
@@ -271,6 +276,15 @@ export async function runChat(
         }
       }
     }
+
+    // Domain-specific verification (accuracy pass): appended now that
+    // decision.category is known, rather than threaded into
+    // buildSystemPrompt above — see reasoningVerificationBlock's own doc
+    // comment for why. A no-op string for every category that isn't
+    // reasoning/math/coding, and for every media/tool branch below that
+    // never reaches completionMessages at all.
+    systemPromptText += reasoningVerificationBlock(decision.category);
+
     sse.cortexStatus({ stage: "detecting_requirements", label: "Detecting requirements..." });
 
     if (decision.category === "image") {

@@ -385,3 +385,18 @@ describe("feedback system (source-level)", () => {
     expect(src).not.toMatch(/openrouter_model_id|routedModel|creditsCharged|costUsd/);
   });
 });
+
+describe("accuracy verification wiring (source-level)", () => {
+  it("the verification block is appended AFTER decision.category is known, not baked into the parallel-with-classification buildSystemPrompt call", () => {
+    const src = read("handlers/chat.ts");
+    const buildIdx = src.indexOf("let systemPromptText = buildSystemPrompt(");
+    const decisionIdx = src.indexOf("const decision = await classificationPromise;");
+    const appendIdx = src.indexOf("systemPromptText += reasoningVerificationBlock(decision.category);");
+    expect(buildIdx).toBeGreaterThan(-1);
+    expect(decisionIdx).toBeGreaterThan(buildIdx);
+    expect(appendIdx).toBeGreaterThan(decisionIdx);
+    // Reaches the same completionMessages the model actually sees.
+    const completionIdx = src.indexOf("const completionMessages:");
+    expect(completionIdx).toBeGreaterThan(appendIdx);
+  });
+});
