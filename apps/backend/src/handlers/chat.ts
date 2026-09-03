@@ -22,7 +22,7 @@ import {
   friendlyModelName,
   explainModelSelection,
 } from "../cortex/index.js";
-import { shouldExtractMemory, extractAndUpdateMemory } from "../memory/extractMemory.js";
+import { shouldExtractMemory, extractAndUpdateMemory, fetchMemoryFacts, buildMemorySummary } from "../memory/extractMemory.js";
 import { checkAndReserveCredits, settleDailyReservation, resolveCreditRejectionMessage } from "../credits/checkCredits.js";
 import { consumeCredits } from "../credits/consumeCredits.js";
 import { resolveCreditGateEstimate } from "../credits/costBand.js";
@@ -188,14 +188,32 @@ export async function runChat(
     // than rejecting), so this can't become an unhandled rejection.
     const classificationPromise = runCortexClassification(fastify, classifierInputMessage, user.planTier);
 
-    const [{ data: memoryRow }, fileContext, projectContext] = await Promise.all([
-      fastify.supabaseAdmin.from("user_memory").select("summary_text").eq("user_id", user.id).maybeSingle(),
+    const [rawMemoryFacts, { data: profileRow }, fileContext, projectContext] = await Promise.all([
+      fetchMemoryFacts(fastify, user.id),
+      // full_name only — never date_of_birth. DOB is personal information
+      // collected at signup for account purposes; there is no default
+      // task-driven reason for the assistant to know it, so unlike
+      // full_name it is never fetched into model context at all. If a
+      // user ever tells SPLEX their birthday in conversation, that flows
+      // through the normal memory-extraction path like any other stated
+      // fact — a deliberate choice, not an oversight (spec: "treat DOB
+      // carefully... do not surface it unnecessarily").
+      fastify.supabaseAdmin.from("users").select("full_name, memory_enabled").eq("id", user.id).maybeSingle(),
       retrieveFileContext(fastify, user.id, classifierInputMessage, body.fileIds ?? []),
       buildProjectContext(fastify, conversationId),
     ]);
-    const systemPromptText = buildSystemPrompt(memoryRow?.summary_text ?? null, fileContext, projectContext);
+    // "Disable memory" (Settings): existing facts are left alone in the
+    // database — this is a pause, distinct from the separate "clear all"
+    // action — but stop USING them (context injection) and stop ADDING to
+    // them (extraction, gated further below via this same flag) the
+    // moment it's off. Defaults to true (memory_enabled's own column
+    // default) for every account that predates this toggle.
+    const memoryEnabled = profileRow?.memory_enabled !== false;
+    const memoryFacts = memoryEnabled ? rawMemoryFacts : [];
+    const memorySummary = memoryEnabled ? await buildMemorySummary(fastify, user.id, profileRow?.full_name ?? null, memoryFacts) : "";
+    const systemPromptText = buildSystemPrompt(memorySummary, fileContext, projectContext);
     const contextBlock = [
-      memoryRow?.summary_text ? `What you remember about this user:\n${memoryRow.summary_text}` : "",
+      memorySummary ? `What you remember about this user:\n${memorySummary}` : "",
       fileContext ? `Relevant file excerpts:\n${fileContext}` : "",
       projectContext ? `Project: ${projectContext}` : "",
     ]
@@ -560,7 +578,7 @@ export async function runChat(
     });
     sse.end();
 
-    if (shouldExtractMemory(classifierInputMessage, history.length, (memoryRow?.summary_text ?? "").length)) {
+    if (memoryEnabled && shouldExtractMemory(classifierInputMessage, history.length, memoryFacts.length)) {
       // waitUntil, NOT a bare floating promise. This is why cross-chat
       // memory silently never worked in production: runChat is itself
       // wrapped in waitUntil, but `void fn()` let runChat resolve

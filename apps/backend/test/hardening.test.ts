@@ -279,3 +279,35 @@ describe("attachment display (source-level)", () => {
     expect(src).toContain('.update({ message_id: messageId })');
   });
 });
+
+describe("structured memory (source-level)", () => {
+  it("memory_enabled gates BOTH context injection and extraction, not just one", () => {
+    const src = read("handlers/chat.ts");
+    expect(src).toContain("const memoryFacts = memoryEnabled ? rawMemoryFacts : [];");
+    expect(src).toContain('const memorySummary = memoryEnabled ? await buildMemorySummary(');
+    expect(src).toContain("if (memoryEnabled && shouldExtractMemory(");
+  });
+
+  it("date_of_birth is never fetched into chat context — only full_name", () => {
+    const src = read("handlers/chat.ts");
+    expect(src).toContain('.select("full_name, memory_enabled")');
+    expect(src).not.toMatch(/\.select\([^)]*date_of_birth/);
+  });
+
+  it("extraction has an explicit no-secrets instruction AND a code-level backstop that doesn't just trust the model", () => {
+    const src = read("memory/extractMemory.ts");
+    expect(src).toMatch(/NEVER extract passwords, API keys, tokens/);
+    expect(src).toContain(".filter((u) => !looksLikeSecret(u.fact))");
+  });
+
+  it("the client's only write path to user_memories is a DELETE — extraction always writes through supabaseAdmin (service role)", () => {
+    const src = read("memory/extractMemory.ts");
+    // Every actual upsert/delete against user_memories in this file must
+    // be reached via fastify.supabaseAdmin.from(...), not a bare
+    // .from(...) — a plain-client write path here would let anything
+    // reusing this code run as the calling role instead of service_role.
+    const fromCalls = [...src.matchAll(/(fastify\.supabaseAdmin\.)?from\("user_memories"\)\.(upsert|delete)\(/g)];
+    expect(fromCalls.length).toBeGreaterThan(0);
+    for (const m of fromCalls) expect(m[1]).toBe("fastify.supabaseAdmin.");
+  });
+});

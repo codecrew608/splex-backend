@@ -28,7 +28,11 @@ export default async function SettingsPage() {
   const { data: profile } = await supabase.from("users").select("plan_tier").eq("id", user.id).single();
   const planTier = (profile?.plan_tier ?? "free") as PlanTier;
 
-  const { data: memoryRow } = await supabase.from("user_memory").select("summary_text").eq("user_id", user.id).maybeSingle();
+  const [{ data: factRows }, { data: memoryRow }, { data: memorySettings }] = await Promise.all([
+    supabase.from("user_memories").select("id, fact").eq("user_id", user.id).order("created_at", { ascending: false }),
+    supabase.from("user_memory").select("summary_text").eq("user_id", user.id).maybeSingle(),
+    supabase.from("users").select("memory_enabled").eq("id", user.id).maybeSingle(),
+  ]);
 
   return (
     <div className="mx-auto h-dvh max-w-2xl overflow-y-auto px-4 pb-10 pt-14 sm:px-6 sm:pt-10">
@@ -67,9 +71,14 @@ export default async function SettingsPage() {
         <p className="text-xs uppercase tracking-wide text-muted-foreground">Memory</p>
         <p className="mb-3 mt-1 text-sm text-muted-foreground">
           What SPLEX remembers about you across every conversation — preferences, ongoing projects, how you like
-          things done. It updates itself as you chat; you can edit or clear it any time.
+          things done. It updates itself as you chat; you can review, delete, or turn it off any time.
         </p>
-        <MemoryEditor userId={user.id} initialSummary={memoryRow?.summary_text ?? ""} />
+        <MemoryEditor
+          userId={user.id}
+          initialFacts={factRows ?? []}
+          initialLegacySummary={memoryRow?.summary_text ?? ""}
+          initialMemoryEnabled={memorySettings?.memory_enabled !== false}
+        />
       </div>
 
       <SecuritySection />
