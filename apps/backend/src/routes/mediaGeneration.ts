@@ -101,6 +101,9 @@ export async function handleSyncMediaGeneration<R extends SyncMediaGenerationRes
   // still leaves a 'failed' row behind instead of one stuck at
   // 'streaming' forever with no explanation.
   let assistantMessageId: string | undefined;
+  // Same visibility reasoning as assistantMessageId above — set once the
+  // upfront generated_media row is created, read by the catch block below.
+  let mediaGenId: string | undefined;
   try {
     const cortexVersion = resolveCortexVersion(user.planTier);
     const candidates = await selectModelCandidates(fastify, kind, user.planTier, cortexVersion, decision.complexity);
@@ -137,6 +140,35 @@ export async function handleSyncMediaGeneration<R extends SyncMediaGenerationRes
       status: "streaming",
     });
 
+    // FIX (capability-count concurrency race — revisited per this pass's
+    // explicit instruction): checkMediaQuota's daily/monthly cap counts
+    // generated_media rows, but this row was previously only ever
+    // recorded AFTER generation finished (success or failure). Two
+    // concurrent requests both pass checkMediaQuota's check (neither sees
+    // the other, since neither has written a row yet), both generate, and
+    // both exceed the advertised per-day cap. Same fix already applied to
+    // video (recordMediaGeneration up front, kept processing) and deep
+    // research this session — recording status='processing' HERE, before
+    // the provider call, closes the window: a second concurrent request
+    // now sees this row and is correctly blocked. Economic exposure was
+    // already bounded regardless (checkAndReserveCredits' atomic daily
+    // reservation below still caps real spend) — this closes the
+    // separate, count-based product-limit bypass.
+    mediaGenId = await recordMediaGeneration(fastify, {
+      userId: user.id,
+      messageId: assistantMessageId,
+      kind,
+      status: "processing",
+      prompt,
+    }) ?? undefined;
+    if (!mediaGenId) {
+      await updateMessageResult(fastify, assistantMessageId, { content: params.unavailableMessage, status: "failed" });
+      sse.error({ message: params.unavailableMessage });
+      sse.done({ blocked: true, conversationId, userMessageId });
+      sse.end();
+      return;
+    }
+
     let model: ModelRegistryRow = candidates[0];
     let result: R | undefined;
     // Same reasoning as chat.ts's own fallback loop: every candidate shares
@@ -167,12 +199,10 @@ export async function handleSyncMediaGeneration<R extends SyncMediaGenerationRes
       // stuck at 'streaming' — a reload must show this failure message,
       // never a blank bubble.
       await updateMessageResult(fastify, assistantMessageId, { content: failedMessage, status: "failed" });
-      await recordMediaGeneration(fastify, {
-        userId: user.id,
-        messageId: null,
-        kind,
+      // Updates the row created up front (status='processing') rather
+      // than inserting a fresh one — see its creation comment above.
+      await updateGeneratedMediaStatus(fastify, mediaGenId, {
         status: "failed",
-        prompt,
         errorMessage: "generation failed on every candidate",
       });
       sse.error({ message: failedMessage });
@@ -193,13 +223,11 @@ export async function handleSyncMediaGeneration<R extends SyncMediaGenerationRes
       status: "complete",
     });
 
-    await recordMediaGeneration(fastify, {
-      userId: user.id,
-      messageId: assistantMessageId,
-      kind,
+    // Updates the row created up front (status='processing') rather than
+    // inserting a fresh one — see its creation comment above.
+    await updateGeneratedMediaStatus(fastify, mediaGenId, {
       status: "completed",
       storagePath: result.storagePath,
-      prompt,
       costUsd: result.costUsd,
       creditsCharged,
       durationSeconds: result.durationSeconds ?? null,
@@ -248,6 +276,9 @@ export async function handleSyncMediaGeneration<R extends SyncMediaGenerationRes
         content: "Something went wrong while generating this. Please try again.",
         status: "failed",
       }).catch(() => {});
+    }
+    if (mediaGenId) {
+      await updateGeneratedMediaStatus(fastify, mediaGenId, { status: "failed", errorMessage: "unexpected error" }).catch(() => {});
     }
     throw err;
   } finally {

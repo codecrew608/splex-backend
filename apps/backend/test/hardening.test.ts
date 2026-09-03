@@ -199,7 +199,27 @@ describe("durable assistant-message persistence (source-level)", () => {
     expect(insertIdx).toBeGreaterThan(-1);
     const generateLoopIdx = src.indexOf("result = await params.generate(");
     expect(generateLoopIdx).toBeGreaterThan(insertIdx);
-    expect((src.match(/updateMessageResult\(fastify, assistantMessageId,/g) ?? []).length).toBe(3); // no-candidate failure, success, outer catch
+    expect((src.match(/updateMessageResult\(fastify, assistantMessageId,/g) ?? []).length).toBe(4); // no-candidate failure, no-mediaGenId failure, success, outer catch
+  });
+
+  it("handleSyncMediaGeneration records generated_media BEFORE the provider call too, closing the capability-count race (revisited per this pass)", () => {
+    // FINDING: the durable-persistence fix above moved the MESSAGE row
+    // earlier, but checkMediaQuota's daily/monthly cap counts
+    // generated_media rows specifically, and that row was still only
+    // recorded after generation finished — two concurrent requests could
+    // both pass the check before either had written a row, both generate,
+    // and both exceed the advertised per-day cap. Same fix as video/deep
+    // research: record status='processing' up front.
+    const src = read("routes/mediaGeneration.ts");
+    const insertMsgIdx = src.indexOf('status: "streaming",\n    });');
+    const recordIdx = src.indexOf("mediaGenId = await recordMediaGeneration(fastify, {");
+    const generateLoopIdx = src.indexOf("result = await params.generate(");
+    expect(insertMsgIdx).toBeGreaterThan(-1);
+    expect(recordIdx).toBeGreaterThan(insertMsgIdx);
+    expect(generateLoopIdx).toBeGreaterThan(recordIdx);
+    // Finalized via updateGeneratedMediaStatus (the SAME row) on every
+    // exit path, not a second recordMediaGeneration insert.
+    expect((src.match(/updateGeneratedMediaStatus\(fastify, mediaGenId,/g) ?? []).length).toBe(3); // no-candidate failure, success, outer catch
   });
 
   it("handleWebSearch inserts the placeholder before the search call and finalizes on every exit", () => {
@@ -208,7 +228,18 @@ describe("durable assistant-message persistence (source-level)", () => {
     expect(insertIdx).toBeGreaterThan(-1);
     const searchLoopIdx = src.indexOf("result = await performWebSearch(");
     expect(searchLoopIdx).toBeGreaterThan(insertIdx);
-    expect((src.match(/updateMessageResult\(fastify, assistantMessageId,/g) ?? []).length).toBe(3); // no-result failure, success, outer catch
+    expect((src.match(/updateMessageResult\(fastify, assistantMessageId,/g) ?? []).length).toBe(4); // no-result failure, no-mediaGenId failure, success, outer catch
+  });
+
+  it("handleWebSearch records generated_media BEFORE the search call too, closing the capability-count race (revisited per this pass)", () => {
+    const src = read("research/handler.ts");
+    const insertMsgIdx = src.indexOf('status: "streaming",\n    });');
+    const recordIdx = src.indexOf("mediaGenId =\n      (await recordMediaGeneration(fastify, {");
+    const searchLoopIdx = src.indexOf("result = await performWebSearch(");
+    expect(insertMsgIdx).toBeGreaterThan(-1);
+    expect(recordIdx).toBeGreaterThan(insertMsgIdx);
+    expect(searchLoopIdx).toBeGreaterThan(recordIdx);
+    expect((src.match(/updateGeneratedMediaStatus\(fastify, mediaGenId,/g) ?? []).length).toBe(3); // no-result failure, success, outer catch
   });
 
   it("runDeepResearch inserts the placeholder before stage 1 and finalizes on every exit, including an outright pipeline failure", () => {

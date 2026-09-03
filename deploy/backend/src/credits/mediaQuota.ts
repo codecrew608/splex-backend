@@ -152,6 +152,11 @@ export async function updateGeneratedMediaStatus(
     messageId?: string | null;
     providerJobId?: string | null;
     openrouterModelId?: string | null;
+    // Audio only (migration 0033) — see recordMediaGeneration's identical
+    // field for what this feeds. Only ever set here now that sync media
+    // (image/audio/ppt) records its row up front and finalizes via this
+    // function instead of a second recordMediaGeneration insert.
+    durationSeconds?: number | null;
   },
 ): Promise<void> {
   const { error } = await fastify.supabaseAdmin
@@ -165,6 +170,7 @@ export async function updateGeneratedMediaStatus(
       message_id: updates.messageId ?? undefined,
       provider_job_id: updates.providerJobId ?? undefined,
       openrouter_model_id: updates.openrouterModelId ?? undefined,
+      duration_seconds: updates.durationSeconds ?? undefined,
       completed_at: updates.status === "completed" || updates.status === "failed" ? new Date().toISOString() : undefined,
     })
     .eq("id", mediaId);

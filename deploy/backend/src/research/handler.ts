@@ -3,7 +3,7 @@ import type { AuthedUser } from "../types/index.js";
 import type { CortexDecision } from "../cortex/index.js";
 import { selectModelCandidates, resolveCortexVersion } from "../cortex/index.js";
 import type { SSEWriter } from "../sse/writer.js";
-import { checkMediaQuota, recordMediaGeneration } from "../credits/mediaQuota.js";
+import { checkMediaQuota, recordMediaGeneration, updateGeneratedMediaStatus } from "../credits/mediaQuota.js";
 import { computeMediaCreditsCharged } from "../credits/mediaCost.js";
 import { resolveCreditGateEstimate } from "../credits/costBand.js";
 import { checkAndReserveCredits, settleDailyReservation, resolveCreditRejectionMessage } from "../credits/checkCredits.js";
@@ -69,6 +69,10 @@ export async function handleWebSearch(params: HandleWebSearchParams): Promise<vo
   // visible to the catch block below so an unexpected exception still
   // finalizes the row instead of leaving it at 'streaming' forever.
   let assistantMessageId: string | undefined;
+  // Capability-count race fix (same as handleSyncMediaGeneration, revisited
+  // per this pass's explicit instruction) — set once the upfront
+  // generated_media row is recorded, below.
+  let mediaGenId: string | undefined;
   try {
     const cortexVersion = resolveCortexVersion(user.planTier);
     const candidates = await selectModelCandidates(fastify, "web_search", user.planTier, cortexVersion, decision.complexity);
@@ -99,6 +103,31 @@ export async function handleWebSearch(params: HandleWebSearchParams): Promise<vo
       status: "streaming",
     });
 
+    // FIX (capability-count concurrency race — revisited per this pass's
+    // explicit instruction): checkMediaQuota's daily/monthly cap counts
+    // generated_media rows, but this row was previously only ever
+    // recorded AFTER the search finished. Two concurrent requests could
+    // both pass checkMediaQuota (neither sees the other yet), both
+    // search, and both exceed the advertised per-day web-search cap. Same
+    // fix as image/audio/ppt/video/deep-research: record
+    // status='processing' before the provider call.
+    mediaGenId =
+      (await recordMediaGeneration(fastify, {
+        userId: user.id,
+        messageId: assistantMessageId,
+        kind: "web_search",
+        status: "processing",
+        prompt: query,
+      })) ?? undefined;
+    if (!mediaGenId) {
+      const message = "Web search is temporarily unavailable, please try again shortly.";
+      await updateMessageResult(fastify, assistantMessageId, { content: message, status: "failed" });
+      sse.error({ message });
+      sse.done({ blocked: true, conversationId, userMessageId });
+      sse.end();
+      return;
+    }
+
     let model = candidates[0];
     let result: Awaited<ReturnType<typeof performWebSearch>> | undefined;
     // Every candidate shares the same OpenRouter account — if the LAST
@@ -128,12 +157,8 @@ export async function handleWebSearch(params: HandleWebSearchParams): Promise<vo
         ? "This AI service is temporarily unavailable. Please try again shortly."
         : "Web search failed, please try again.";
       await updateMessageResult(fastify, assistantMessageId, { content: failedMessage, status: "failed" });
-      await recordMediaGeneration(fastify, {
-        userId: user.id,
-        messageId: null,
-        kind: "web_search",
+      await updateGeneratedMediaStatus(fastify, mediaGenId, {
         status: "failed",
-        prompt: query,
         errorMessage: "search failed on every candidate",
       });
       sse.error({ message: failedMessage });
@@ -169,12 +194,10 @@ export async function handleWebSearch(params: HandleWebSearchParams): Promise<vo
       status: "complete",
     });
 
-    await recordMediaGeneration(fastify, {
-      userId: user.id,
-      messageId: assistantMessageId,
-      kind: "web_search",
+    // Updates the row created up front (status='processing') rather than
+    // inserting a fresh one — see its creation comment above.
+    await updateGeneratedMediaStatus(fastify, mediaGenId, {
       status: "completed",
-      prompt: query,
       costUsd: result.costUsd,
       creditsCharged,
     });
@@ -225,6 +248,9 @@ export async function handleWebSearch(params: HandleWebSearchParams): Promise<vo
         content: "Something went wrong while searching. Please try again.",
         status: "failed",
       }).catch(() => {});
+    }
+    if (mediaGenId) {
+      await updateGeneratedMediaStatus(fastify, mediaGenId, { status: "failed", errorMessage: "unexpected error" }).catch(() => {});
     }
     throw err;
   } finally {
