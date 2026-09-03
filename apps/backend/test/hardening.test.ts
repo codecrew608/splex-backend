@@ -164,3 +164,79 @@ describe("file upload limits are enforced server-side", () => {
     expect(src).toContain("FILE_SIZE_LIMITS[planTier] ?? FILE_SIZE_LIMITS.free");
   });
 });
+
+describe("durable assistant-message persistence (source-level)", () => {
+  // FINDING (production hardening pass): every generation path used to
+  // call insertMessage() for the assistant's row exactly once, at the very
+  // end, with the full final content already known. A client that
+  // disconnected before that single insert ran — navigation, refresh, or
+  // simply a slower response outliving how long the user stayed on the
+  // page — left NO row at all for that turn: not partial content, a hole.
+  // The fix is the same shape everywhere: insert a 'streaming' placeholder
+  // BEFORE the risky provider call, finalize it via updateMessageResult on
+  // every exit (success, partial/aborted, empty output, and an unexpected
+  // exception) instead of inserting fresh. These pins assert the shape
+  // exists in source, not just that tests pass against a fake — the
+  // failure mode (a stuck 'streaming' row) is invisible to a unit test
+  // that always runs a handler to completion.
+
+  it("runChat (plain chat) inserts the placeholder before streamCompletion and finalizes on every exit", () => {
+    const src = read("handlers/chat.ts");
+    const insertIdx = src.indexOf('status: "streaming",\n    });\n\n    sse.cortexStatus({ stage: "executing"');
+    expect(insertIdx).toBeGreaterThan(-1);
+    const streamIdx = src.indexOf("generation = await streamCompletion(");
+    expect(streamIdx).toBeGreaterThan(insertIdx);
+    // Every exit path finalizes the SAME row via updateMessageResult —
+    // none of them insert a second one.
+    expect((src.match(/updateMessageResult\(fastify, assistantMessageId,/g) ?? []).length).toBe(4); // aborted, empty, success, outer catch
+    // The old insert-at-the-end call sites must be gone.
+    expect(src).not.toMatch(/insertMessage\(fastify, \{\s*conversationId, role: "assistant", content: fullText/);
+  });
+
+  it("handleSyncMediaGeneration (image/audio/ppt) inserts the placeholder before the provider call and finalizes on every exit", () => {
+    const src = read("routes/mediaGeneration.ts");
+    const insertIdx = src.indexOf('content: "",\n      intent: decision.intentId,\n      complexity: decision.complexity,\n      status: "streaming",');
+    expect(insertIdx).toBeGreaterThan(-1);
+    const generateLoopIdx = src.indexOf("result = await params.generate(");
+    expect(generateLoopIdx).toBeGreaterThan(insertIdx);
+    expect((src.match(/updateMessageResult\(fastify, assistantMessageId,/g) ?? []).length).toBe(3); // no-candidate failure, success, outer catch
+  });
+
+  it("handleWebSearch inserts the placeholder before the search call and finalizes on every exit", () => {
+    const src = read("research/handler.ts");
+    const insertIdx = src.indexOf('content: "",\n      intent: decision.intentId,\n      complexity: decision.complexity,\n      status: "streaming",');
+    expect(insertIdx).toBeGreaterThan(-1);
+    const searchLoopIdx = src.indexOf("result = await performWebSearch(");
+    expect(searchLoopIdx).toBeGreaterThan(insertIdx);
+    expect((src.match(/updateMessageResult\(fastify, assistantMessageId,/g) ?? []).length).toBe(3); // no-result failure, success, outer catch
+  });
+
+  it("runDeepResearch inserts the placeholder before stage 1 and finalizes on every exit, including an outright pipeline failure", () => {
+    const src = read("research/deepResearch.ts");
+    const insertIdx = src.indexOf('role: "assistant",\n    content: "",\n    intent: "deep_research"');
+    expect(insertIdx).toBeGreaterThan(-1);
+    const stage1Idx = src.indexOf('sse.researchStage({ stage: "planning" });');
+    expect(stage1Idx).toBeGreaterThan(insertIdx);
+    // zero-evidence branch, normal-completion branch, and the outer catch
+    // (which previously finalized ONLY the generated_media row, never the
+    // messages row — a real gap on outright failure, not just disconnect).
+    expect((src.match(/updateMessageResult\(fastify, assistantMessageId,/g) ?? []).length).toBe(3);
+  });
+
+  it("video's placeholder message is inserted as 'streaming' and finalized to 'complete'/'failed', never left defaulting to 'complete'", () => {
+    const gen = read("routes/mediaGeneration.ts");
+    expect(gen).toContain('routedModel: model.openrouter_model_id,\n    status: "streaming",');
+    const media = read("handlers/media.ts");
+    expect((media.match(/content: FAILED_MESSAGE, status: "failed" \}\);/g) ?? []).length).toBe(2);
+    expect(media).toContain('status: "complete"');
+  });
+
+  it("updateMessageResult never silently nulls credits_charged/routed_model when a caller omits them", () => {
+    // A failure finalize (content + status only) must not wipe fields a
+    // success finalize set for a DIFFERENT row, or that insert-time
+    // already set — only touch what the caller actually passed.
+    const src = read("persistence/messages.ts");
+    expect(src).toContain("if (params.creditsCharged !== undefined) update.credits_charged = params.creditsCharged;");
+    expect(src).toContain("if (params.routedModel !== undefined) update.routed_model = params.routedModel;");
+  });
+});

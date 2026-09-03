@@ -7,7 +7,7 @@ import { completeOnce, fetchGenerationCost, withDeadline, isBalanceExceededError
 import { computeMediaCreditsCharged } from "../credits/mediaCost.js";
 import { resolveCreditGateEstimate } from "../credits/costBand.js";
 import { consumeCredits } from "../credits/consumeCredits.js";
-import { insertMessage } from "../persistence/messages.js";
+import { insertMessage, updateMessageResult } from "../persistence/messages.js";
 import { insertCortexDecision } from "../persistence/cortexDecisions.js";
 import { checkMediaQuota, recordMediaGeneration, updateGeneratedMediaStatus } from "../credits/mediaQuota.js";
 import { checkCredits, checkAndReserveCredits, settleDailyReservation, resolveCreditRejectionMessage } from "../credits/checkCredits.js";
@@ -301,6 +301,26 @@ export async function runDeepResearch(params: RunDeepResearchParams): Promise<vo
   // proof across a function-declaration boundary.
   const mediaId: string = mediaIdOrNull;
 
+  // FIX (durable persistence — the "response disappears after
+  // navigation" bug, at its highest-risk site): a deep research run can
+  // legitimately take up to DEEP_RESEARCH_RUN_BUDGET_MS (8 minutes).
+  // Previously the messages row was only ever inserted in writeFinalReport,
+  // after all 5 stages finished — meaning for the entire run, however
+  // long it took, there was NO row a page reload could find, even though
+  // real provider cost was already being incurred stage by stage. Insert
+  // it now, alongside the mediaId row above, and have writeFinalReport's
+  // two branches (and the catch block below, which previously finalized
+  // mediaId's row but never this one) update it in place instead of
+  // inserting fresh.
+  const assistantMessageId = await insertMessage(fastify, {
+    conversationId,
+    role: "assistant",
+    content: "",
+    intent: "deep_research",
+    complexity: RESEARCH_COMPLEXITY,
+    status: "streaming",
+  });
+
   let totalCreditsCharged = 0;
   const seenUrls = new Set<string>();
 
@@ -498,14 +518,12 @@ export async function runDeepResearch(params: RunDeepResearchParams): Promise<vo
           "Rather than guess, I'm not going to present unverified information as a sourced research report. You're welcome to try again, or ask me directly as a normal question if general background knowledge (not live-verified) would still be useful.",
         ].join(" ");
 
-        const assistantMessageId = await insertMessage(fastify, {
-          conversationId,
-          role: "assistant",
+        // Finalizes the row inserted up front, rather than inserting a
+        // fresh one — see its creation comment above.
+        await updateMessageResult(fastify, assistantMessageId, {
           content,
-          intent: "deep_research",
-          complexity: RESEARCH_COMPLEXITY,
           creditsCharged: totalCreditsCharged,
-          routedModel: undefined,
+          status: "complete",
         });
 
         // Updates the row created up front (status='processing') rather
@@ -568,14 +586,13 @@ export async function runDeepResearch(params: RunDeepResearchParams): Promise<vo
       );
       totalCreditsCharged += writeResult.costCredits;
 
-      const assistantMessageId = await insertMessage(fastify, {
-        conversationId,
-        role: "assistant",
+      // Finalizes the row inserted up front, rather than inserting a fresh
+      // one — see its creation comment above.
+      await updateMessageResult(fastify, assistantMessageId, {
         content: writeResult.content,
-        intent: "deep_research",
-        complexity: RESEARCH_COMPLEXITY,
         creditsCharged: totalCreditsCharged,
         routedModel: model?.openrouter_model_id,
+        status: "complete",
       });
 
       await updateGeneratedMediaStatus(fastify, mediaId, {
@@ -618,11 +635,16 @@ export async function runDeepResearch(params: RunDeepResearchParams): Promise<vo
     // row created up front (status='processing') rather than inserting a
     // fresh one — see its creation comment above.
     await updateGeneratedMediaStatus(fastify, mediaId, { status: "failed", errorMessage: "research pipeline failed" });
-    sse.error({
-      message: isBalanceExceededError(err)
-        ? "This AI service is temporarily unavailable. Please try again shortly."
-        : "Deep research failed, please try again.",
-    });
+    const failedMessage = isBalanceExceededError(err)
+      ? "This AI service is temporarily unavailable. Please try again shortly."
+      : "Deep research failed, please try again.";
+    // Same fix as every other capability's catch block: previously this
+    // path finalized mediaId's generated_media row but NEVER the messages
+    // row — an outright pipeline failure (not just a disconnect) left the
+    // conversation with no assistant row at all. Best-effort; never masks
+    // the error above.
+    await updateMessageResult(fastify, assistantMessageId, { content: failedMessage, status: "failed" }).catch(() => {});
+    sse.error({ message: failedMessage });
     sse.done({ blocked: true, conversationId, userMessageId });
     sse.end();
   } finally {

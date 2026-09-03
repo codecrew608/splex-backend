@@ -111,7 +111,7 @@ export async function getMediaStatus(
       errorMessage: poll.errorMessage ?? poll.status,
     });
     if (media.message_id) {
-      await updateMessageResult(fastify, media.message_id, { content: FAILED_MESSAGE });
+      await updateMessageResult(fastify, media.message_id, { content: FAILED_MESSAGE, status: "failed" });
     }
     await settleMediaReservation(fastify, media.id, 0);
     return ok<MediaStatusResponse>({ status: "failed", errorMessage: FAILED_MESSAGE });
@@ -144,6 +144,7 @@ export async function getMediaStatus(
         content: `[Generated video](${stored.url})`,
         creditsCharged,
         routedModel: modelId,
+        status: "complete",
       });
     }
 
@@ -172,7 +173,7 @@ export async function getMediaStatus(
     await updateGeneratedMediaStatus(fastify, media.id, { status: "failed", errorMessage: "download/store failed" });
     await settleMediaReservation(fastify, media.id, 0);
     if (media.message_id) {
-      await updateMessageResult(fastify, media.message_id, { content: FAILED_MESSAGE });
+      await updateMessageResult(fastify, media.message_id, { content: FAILED_MESSAGE, status: "failed" });
     }
     return ok<MediaStatusResponse>({ status: "failed", errorMessage: FAILED_MESSAGE });
   }

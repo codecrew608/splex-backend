@@ -22,7 +22,7 @@ import {
   releaseStaleMediaReservations,
 } from "../credits/checkCredits.js";
 import { consumeCredits } from "../credits/consumeCredits.js";
-import { insertMessage } from "../persistence/messages.js";
+import { insertMessage, updateMessageResult } from "../persistence/messages.js";
 import { insertCortexDecision } from "../persistence/cortexDecisions.js";
 import { recordModelOutcome, recordModelFailure } from "../cortex/modelHealth.js";
 import { isBalanceExceededError, describeError } from "../openrouter/client.js";
@@ -95,6 +95,12 @@ export async function handleSyncMediaGeneration<R extends SyncMediaGenerationRes
   // Set to the real charged amount only once generation genuinely
   // succeeds; stays 0 on every other exit, fully releasing the reservation.
   let dailyActualCost = 0;
+  // Set the moment the placeholder row below is inserted — visible to the
+  // catch block so a genuinely unexpected exception (not one of the
+  // handled failure branches, which already finalize the row themselves)
+  // still leaves a 'failed' row behind instead of one stuck at
+  // 'streaming' forever with no explanation.
+  let assistantMessageId: string | undefined;
   try {
     const cortexVersion = resolveCortexVersion(user.planTier);
     const candidates = await selectModelCandidates(fastify, kind, user.planTier, cortexVersion, decision.complexity);
@@ -111,6 +117,24 @@ export async function handleSyncMediaGeneration<R extends SyncMediaGenerationRes
       capabilities: decision.capabilities,
       categoryLabel: decision.categoryLabel,
       reason: decision.reason,
+    });
+
+    // FIX (durable persistence): inserted BEFORE the provider call below,
+    // not after it succeeds. image/audio/ppt generation can take anywhere
+    // from a couple seconds to tens of seconds — previously nothing was
+    // persisted until it fully finished, so a client that navigated away
+    // (or whose connection dropped) mid-generation came back to find the
+    // user's message with no reply at all, even though real provider
+    // money may already have been spent. Every exit path below now
+    // finalizes THIS row via updateMessageResult instead of inserting a
+    // fresh one.
+    assistantMessageId = await insertMessage(fastify, {
+      conversationId,
+      role: "assistant",
+      content: "",
+      intent: decision.intentId,
+      complexity: decision.complexity,
+      status: "streaming",
     });
 
     let model: ModelRegistryRow = candidates[0];
@@ -136,6 +160,13 @@ export async function handleSyncMediaGeneration<R extends SyncMediaGenerationRes
     }
 
     if (!result) {
+      const failedMessage = isBalanceExceededError(lastError)
+        ? "This AI service is temporarily unavailable. Please try again shortly."
+        : params.failedMessage;
+      // Finalizes the SAME row inserted above, rather than leaving it
+      // stuck at 'streaming' — a reload must show this failure message,
+      // never a blank bubble.
+      await updateMessageResult(fastify, assistantMessageId, { content: failedMessage, status: "failed" });
       await recordMediaGeneration(fastify, {
         userId: user.id,
         messageId: null,
@@ -144,11 +175,7 @@ export async function handleSyncMediaGeneration<R extends SyncMediaGenerationRes
         prompt,
         errorMessage: "generation failed on every candidate",
       });
-      sse.error({
-        message: isBalanceExceededError(lastError)
-          ? "This AI service is temporarily unavailable. Please try again shortly."
-          : params.failedMessage,
-      });
+      sse.error({ message: failedMessage });
       sse.done({ blocked: true, conversationId, userMessageId });
       sse.end();
       return;
@@ -159,14 +186,11 @@ export async function handleSyncMediaGeneration<R extends SyncMediaGenerationRes
 
     const creditsCharged = computeMediaCreditsCharged(fastify, result.costUsd);
     dailyActualCost = creditsCharged;
-    const assistantMessageId = await insertMessage(fastify, {
-      conversationId,
-      role: "assistant",
+    await updateMessageResult(fastify, assistantMessageId, {
       content: markdown,
-      intent: decision.intentId,
-      complexity: decision.complexity,
       creditsCharged,
       routedModel: model.openrouter_model_id,
+      status: "complete",
     });
 
     await recordMediaGeneration(fastify, {
@@ -211,6 +235,21 @@ export async function handleSyncMediaGeneration<R extends SyncMediaGenerationRes
     // number (see DoneEventData's own doc comment in shared-types).
     sse.done({ messageId: assistantMessageId, conversationId, userMessageId });
     sse.end();
+  } catch (err) {
+    // Best-effort — never let a failure to finalize the row mask the real
+    // error, and never throw over top of it. Every handled failure branch
+    // above already finalizes its own row; this only catches whatever
+    // wasn't anticipated (a thrown error from recordMediaGeneration,
+    // insertCortexDecision, consumeCredits, or an SSE write to an already-
+    // closed connection) — without it, that row would sit at 'streaming'
+    // forever with no explanation, the exact bug this whole fix targets.
+    if (assistantMessageId) {
+      await updateMessageResult(fastify, assistantMessageId, {
+        content: "Something went wrong while generating this. Please try again.",
+        status: "failed",
+      }).catch(() => {});
+    }
+    throw err;
   } finally {
     await settleDailyReservation(fastify, user.id, gate.dailyReserved, dailyActualCost);
   }
@@ -379,6 +418,11 @@ export async function handleAsyncMediaGeneration(params: AsyncMediaGenerationPar
 
   sse.token({ delta: params.placeholderContent });
 
+  // 'streaming', not 'complete': this row's content is a placeholder
+  // ("Generating your video...") — handlers/media.ts's polling endpoint is
+  // what rewrites it to the real result (or a failure message) via
+  // updateMessageResult, same as before this fix, now with an accurate
+  // status alongside it.
   const assistantMessageId = await insertMessage(fastify, {
     conversationId,
     role: "assistant",
@@ -386,6 +430,7 @@ export async function handleAsyncMediaGeneration(params: AsyncMediaGenerationPar
     intent: decision.intentId,
     complexity: decision.complexity,
     routedModel: model.openrouter_model_id,
+    status: "streaming",
   });
 
   // The row already exists (created before the reservation above) — attach

@@ -5,6 +5,7 @@ import { z } from "zod";
 import { resolveConversation } from "../persistence/conversations.js";
 import {
   insertMessage,
+  updateMessageResult,
   deleteMessage,
   fetchRecentHistory,
   deleteMessageAndAfter,
@@ -90,6 +91,12 @@ export async function runChat(
   scheduleBackground: ScheduleBackground,
 ): Promise<void> {
   let userMessageId: string | undefined;
+  // Set the moment the placeholder assistant row is inserted below —
+  // visible to the outermost catch at the bottom of this function so a
+  // genuinely unexpected exception still finalizes that row as 'failed'
+  // instead of leaving it stuck at 'streaming' forever. See the durable-
+  // persistence fix's own comment at the insert site for the full story.
+  let assistantMessageId: string | undefined;
   // Same server-side-only resolution as routes/chat.ts — both entry
   // points call the identical resolveCortexVersion function imported from
   // the same cortex/version.ts module, so Fastify and the Worker can never
@@ -370,6 +377,30 @@ export async function runChat(
       return;
     }
 
+    // FIX (durable persistence — the "response disappears after
+    // navigation" bug): inserted BEFORE streamCompletion below, not after
+    // it resolves. Previously the assistant's row was only ever inserted
+    // once, at the very end, with the full final content already known —
+    // so a client that navigated away, refreshed, or simply disconnected
+    // while a response was still streaming had NOTHING persisted for that
+    // turn: not a partially-saved reply, no row at all. Returning to the
+    // conversation showed the user's message with silence after it. Every
+    // exit path below (success, aborted mid-stream, aborted with nothing
+    // yet, empty model output, and the outer catch at the bottom of this
+    // function) now finalizes THIS SAME row via updateMessageResult
+    // instead of inserting a fresh one — so a durable row, and a durable
+    // id, exist from the moment generation begins, exactly as required by
+    // "the database is the source of truth, React state is presentation
+    // only."
+    assistantMessageId = await insertMessage(fastify, {
+      conversationId,
+      role: "assistant",
+      content: "",
+      intent: decision.intentId,
+      complexity: decision.complexity,
+      status: "streaming",
+    });
+
     sse.cortexStatus({ stage: "executing", label: "Executing..." });
     sse.cortexDecision({
       intent: decision.intentId, complexity: decision.complexity, capabilities: decision.capabilities,
@@ -423,17 +454,23 @@ export async function runChat(
     const { fullText, usage, aborted } = generation as Awaited<ReturnType<typeof streamCompletion>>;
 
     if (aborted) {
-      if (fullText.trim().length > 0) {
-        await insertMessage(fastify, {
-          conversationId, role: "assistant", content: fullText,
-          intent: decision.intentId, complexity: decision.complexity, routedModel: model.openrouter_model_id,
-        });
-      }
+      // Whatever streamed before the client disconnected is real content
+      // the user is entitled to see on return — finalize the row with it
+      // rather than leaving 'streaming' forever. Genuinely nothing
+      // streamed (e.g. disconnected before the first token) gets an
+      // honest "cut short" message instead of a permanently blank bubble.
+      await updateMessageResult(fastify, assistantMessageId, {
+        content: fullText.trim().length > 0 ? fullText : "Generation was interrupted before any response was produced.",
+        routedModel: model.openrouter_model_id,
+        status: fullText.trim().length > 0 ? "complete" : "failed",
+      });
       return;
     }
 
     if (fullText.trim().length === 0) {
-      sse.error({ message: "The response was interrupted, please try again." });
+      const message = "The response was interrupted, please try again.";
+      await updateMessageResult(fastify, assistantMessageId, { content: message, status: "failed" });
+      sse.error({ message });
       sse.done({ partial: true, conversationId, userMessageId });
       sse.end();
       return;
@@ -442,10 +479,10 @@ export async function runChat(
     const realCost = await computeRealCost(fastify, decision.category, model, usage);
     dailyActualCost = realCost.creditsCharged;
 
-    const assistantMessageId = await insertMessage(fastify, {
-      conversationId, role: "assistant", content: fullText,
-      intent: decision.intentId, complexity: decision.complexity,
+    await updateMessageResult(fastify, assistantMessageId, {
+      content: fullText,
       creditsCharged: realCost.creditsCharged, routedModel: model.openrouter_model_id,
+      status: "complete",
     });
 
     await insertCortexDecision(fastify, {
@@ -534,5 +571,23 @@ export async function runChat(
     });
     sse.done({ blocked: true, userMessageId });
     sse.end();
+    // Best-effort finalize of the durable placeholder — never let this
+    // failure mask the real error above. Only reachable when an
+    // assistant row genuinely exists (inserted right before
+    // streamCompletion; every image/audio/ppt/video/web_search/
+    // deep_research branch that returns before that point never sets
+    // this, and none of them route errors through this catch either —
+    // each owns its own failure finalization). Without this, an
+    // exception thrown between the placeholder insert and the normal
+    // finalize calls above (a thrown error from insertCortexDecision,
+    // consumeCredits, or an SSE write to an already-closed connection)
+    // would leave the row at 'streaming' forever — the exact bug this
+    // whole fix targets.
+    if (assistantMessageId) {
+      await updateMessageResult(fastify, assistantMessageId, {
+        content: "Something went wrong while generating this. Please try again.",
+        status: "failed",
+      }).catch(() => {});
+    }
   }
 }

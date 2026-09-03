@@ -8,7 +8,7 @@ import { computeMediaCreditsCharged } from "../credits/mediaCost.js";
 import { resolveCreditGateEstimate } from "../credits/costBand.js";
 import { checkAndReserveCredits, settleDailyReservation, resolveCreditRejectionMessage } from "../credits/checkCredits.js";
 import { consumeCredits } from "../credits/consumeCredits.js";
-import { insertMessage } from "../persistence/messages.js";
+import { insertMessage, updateMessageResult } from "../persistence/messages.js";
 import { insertCortexDecision } from "../persistence/cortexDecisions.js";
 import { recordModelOutcome, recordModelFailure } from "../cortex/modelHealth.js";
 import { isBalanceExceededError, describeError } from "../openrouter/client.js";
@@ -65,6 +65,10 @@ export async function handleWebSearch(params: HandleWebSearchParams): Promise<vo
   // Set to the real charged amount only once the search genuinely
   // succeeds; stays 0 on every other exit, fully releasing the reservation.
   let dailyActualCost = 0;
+  // Durable-persistence fix (same as handleSyncMediaGeneration/runChat):
+  // visible to the catch block below so an unexpected exception still
+  // finalizes the row instead of leaving it at 'streaming' forever.
+  let assistantMessageId: string | undefined;
   try {
     const cortexVersion = resolveCortexVersion(user.planTier);
     const candidates = await selectModelCandidates(fastify, "web_search", user.planTier, cortexVersion, decision.complexity);
@@ -81,6 +85,18 @@ export async function handleWebSearch(params: HandleWebSearchParams): Promise<vo
       capabilities: decision.capabilities,
       categoryLabel: decision.categoryLabel,
       reason: decision.reason,
+    });
+
+    // FIX (durable persistence): inserted BEFORE the search/completion
+    // call below — see runChat's identical fix in handlers/chat.ts for
+    // the full reasoning. Every exit path below finalizes this row.
+    assistantMessageId = await insertMessage(fastify, {
+      conversationId,
+      role: "assistant",
+      content: "",
+      intent: decision.intentId,
+      complexity: decision.complexity,
+      status: "streaming",
     });
 
     let model = candidates[0];
@@ -108,6 +124,10 @@ export async function handleWebSearch(params: HandleWebSearchParams): Promise<vo
     }
 
     if (!result) {
+      const failedMessage = isBalanceExceededError(lastError)
+        ? "This AI service is temporarily unavailable. Please try again shortly."
+        : "Web search failed, please try again.";
+      await updateMessageResult(fastify, assistantMessageId, { content: failedMessage, status: "failed" });
       await recordMediaGeneration(fastify, {
         userId: user.id,
         messageId: null,
@@ -116,11 +136,7 @@ export async function handleWebSearch(params: HandleWebSearchParams): Promise<vo
         prompt: query,
         errorMessage: "search failed on every candidate",
       });
-      sse.error({
-        message: isBalanceExceededError(lastError)
-          ? "This AI service is temporarily unavailable. Please try again shortly."
-          : "Web search failed, please try again.",
-      });
+      sse.error({ message: failedMessage });
       sse.done({ blocked: true, conversationId, userMessageId });
       sse.end();
       return;
@@ -146,14 +162,11 @@ export async function handleWebSearch(params: HandleWebSearchParams): Promise<vo
 
     const creditsCharged = computeMediaCreditsCharged(fastify, result.costUsd);
     dailyActualCost = creditsCharged;
-    const assistantMessageId = await insertMessage(fastify, {
-      conversationId,
-      role: "assistant",
+    await updateMessageResult(fastify, assistantMessageId, {
       content: result.text,
-      intent: decision.intentId,
-      complexity: decision.complexity,
       creditsCharged,
       routedModel: model.openrouter_model_id,
+      status: "complete",
     });
 
     await recordMediaGeneration(fastify, {
@@ -204,6 +217,16 @@ export async function handleWebSearch(params: HandleWebSearchParams): Promise<vo
       citations: result.searched ? result.citations : undefined,
     });
     sse.end();
+  } catch (err) {
+    // Best-effort — see handleSyncMediaGeneration's identical catch for
+    // the full reasoning. Never masks or replaces the real error.
+    if (assistantMessageId) {
+      await updateMessageResult(fastify, assistantMessageId, {
+        content: "Something went wrong while searching. Please try again.",
+        status: "failed",
+      }).catch(() => {});
+    }
+    throw err;
   } finally {
     await settleDailyReservation(fastify, user.id, gate.dailyReserved, dailyActualCost);
   }
