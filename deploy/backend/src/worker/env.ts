@@ -37,6 +37,11 @@ const workerEnvSchema = z.object({
   // effectively required whenever that URL is set. Optional in the schema
   // because "URL unset, service just not deployed" must remain valid.
   INTELLIGENCE_SERVICE_TOKEN: z.string().min(1).optional(),
+  // Same schema as plugins/env.ts's identical fields — kept in sync by
+  // hand, see this file's own top-of-file comment.
+  RESEND_API_KEY: z.string().min(1).optional(),
+  FEEDBACK_EMAIL_FROM: z.string().default("SPLEX Feedback <feedback@splex.app>"),
+  FEEDBACK_NOTIFICATION_EMAIL: z.string().email().default("openspace681@gmail.com"),
   LOG_LEVEL: z.string().default("info"),
 });
 

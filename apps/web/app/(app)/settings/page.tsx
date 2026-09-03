@@ -6,6 +6,7 @@ import { DangerZoneSection } from "@/components/settings/DangerZoneSection";
 import { CancelSubscriptionButton } from "@/components/settings/CancelSubscriptionButton";
 import { UsagePanel } from "@/components/sidebar/UsagePanel";
 import { MemoryEditor } from "@/components/memory/MemoryEditor";
+import { FeedbackSection } from "@/components/settings/FeedbackSection";
 import { planDisplayName } from "@/lib/planDisplay";
 import type { PlanTier } from "@splex/shared-types";
 
@@ -79,6 +80,14 @@ export default async function SettingsPage() {
           initialLegacySummary={memoryRow?.summary_text ?? ""}
           initialMemoryEnabled={memorySettings?.memory_enabled !== false}
         />
+      </div>
+
+      <div className="mt-4 rounded-[22px] border border-border bg-surface p-5">
+        <p className="text-xs uppercase tracking-wide text-muted-foreground">Feedback</p>
+        <p className="mb-3 mt-1 text-sm text-muted-foreground">
+          Tell us what&apos;s working or not — this goes straight to the team, not just a suggestion box.
+        </p>
+        <FeedbackSection />
       </div>
 
       <SecuritySection />

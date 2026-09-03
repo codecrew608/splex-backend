@@ -13,6 +13,7 @@ import { handleFakeCheckout, handleFakeCancel } from "./routes/billing.js";
 import { handleDeleteAccount, handleSaveProfile } from "./routes/account.js";
 import { handleMediaStatus } from "./routes/media.js";
 import { handleGetEntitlements } from "./routes/entitlements.js";
+import { handleSubmitFeedback } from "./routes/feedback.js";
 import type { AuthedUser } from "../types/index.js";
 import { describeError } from "../openrouter/client.js";
 
@@ -141,6 +142,14 @@ async function route(request: Request, ctx: WorkerCtx, execCtx: ExecutionContext
     const auth = await requireAuth(request, ctx);
     if (auth instanceof Response) return auth;
     return handleGetEntitlements(ctx, auth);
+  }
+
+  if (method === "POST" && pathname === "/feedback") {
+    const auth = await requireAuth(request, ctx);
+    if (auth instanceof Response) return auth;
+    const limited = await requireRateLimit(ctx, "feedback_submit", auth.id);
+    if (limited) return limited;
+    return handleSubmitFeedback(request, ctx, auth, execCtx);
   }
 
   return errorResponse("Not found.", 404);

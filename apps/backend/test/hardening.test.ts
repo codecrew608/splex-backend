@@ -311,3 +311,46 @@ describe("structured memory (source-level)", () => {
     for (const m of fromCalls) expect(m[1]).toBe("fastify.supabaseAdmin.");
   });
 });
+
+describe("feedback system (source-level)", () => {
+  it("persists before scheduling the notification email — never the other way around", () => {
+    // Order is the whole point: a feedback submission must succeed even
+    // when email delivery is down, misconfigured, or unset. Pinning the
+    // TEXT order in source is a reasonable proxy for the actual control
+    // flow here (both statements are sequential awaits in the same
+    // function, not branches), and catches a future refactor that
+    // reorders them.
+    const src = read("handlers/feedback.ts");
+    const insertIdx = src.indexOf('.from("feedback")\n    .insert({');
+    const scheduleIdx = src.indexOf("scheduleBackground(");
+    expect(insertIdx).toBeGreaterThan(-1);
+    expect(scheduleIdx).toBeGreaterThan(insertIdx);
+  });
+
+  it("re-verifies conversation/message ownership server-side rather than trusting the client's ids", () => {
+    const src = read("handlers/feedback.ts");
+    expect(src).toContain("async function verifyOwnership(");
+    expect(src).toContain("project.user_id !== userId");
+  });
+
+  it("the recipient email is never returned to the client", () => {
+    const src = read("handlers/feedback.ts");
+    // ok()'s body is only { id } — FEEDBACK_NOTIFICATION_EMAIL never
+    // appears inside the HandlerResult returned to the caller, only
+    // inside the scheduleBackground(...) closure that runs server-side
+    // after the response has already been decided.
+    expect(src).toContain("return ok({ id: feedbackId }, 201);");
+  });
+
+  it("the email adapter never throws past its own boundary and no API key is hardcoded", () => {
+    const src = read("email/sendEmail.ts");
+    expect(src).toContain("try {");
+    expect(src).toContain("catch (err) {");
+    expect(src).not.toMatch(/RESEND_API_KEY\s*[:=]\s*["'][A-Za-z0-9]/); // no literal key value, only the env-config reference
+  });
+
+  it("client-facing feedback rows carry no provider/model identifiers", () => {
+    const src = read("handlers/feedback.ts");
+    expect(src).not.toMatch(/openrouter_model_id|routedModel|creditsCharged|costUsd/);
+  });
+});

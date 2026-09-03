@@ -42,6 +42,18 @@ const envSchema = z.object({
   // repointed at a network address, the sidecar refuses to start without a
   // matching token — see main.py's startup guard — so this must be set too.
   INTELLIGENCE_SERVICE_TOKEN: z.string().min(1).optional(),
+  // Feedback-notification email (see email/sendEmail.ts). Entirely
+  // optional: no provider was configured in this project before, and no
+  // API key is invented here — feedback submission always succeeds
+  // regardless of whether these are set; unset simply means the
+  // best-effort notification email is skipped (logged, not an error).
+  RESEND_API_KEY: z.string().min(1).optional(),
+  // Sender identity Resend actually accepts requires a domain verified in
+  // that account — this is NOT a secret, just a display value, safe to
+  // leave at a placeholder until a real domain is verified.
+  FEEDBACK_EMAIL_FROM: z.string().default("SPLEX Feedback <feedback@splex.app>"),
+  // Recipient — never returned in any API response (see routes/feedback.ts).
+  FEEDBACK_NOTIFICATION_EMAIL: z.string().email().default("openspace681@gmail.com"),
   LOG_LEVEL: z.string().default("info"),
 });
 

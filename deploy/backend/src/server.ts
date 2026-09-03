@@ -14,6 +14,7 @@ import billingRoutes from "./routes/billing.js";
 import accountRoutes from "./routes/account.js";
 import mediaRoutes from "./routes/media.js";
 import entitlementsRoutes from "./routes/entitlements.js";
+import feedbackRoutes from "./routes/feedback.js";
 
 async function main() {
   const fastify = Fastify({
@@ -58,6 +59,7 @@ async function main() {
   await fastify.register(accountRoutes);
   await fastify.register(mediaRoutes);
   await fastify.register(entitlementsRoutes);
+  await fastify.register(feedbackRoutes);
 
   await fastify.listen({ port: fastify.config.PORT, host: "0.0.0.0" });
 }

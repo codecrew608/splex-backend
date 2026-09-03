@@ -8,6 +8,7 @@ import { MarkdownRenderer } from "./MarkdownRenderer";
 import { MessageCortexDisclosure } from "./MessageCortexDisclosure";
 import { CitationsList } from "./CitationsList";
 import { AttachmentChip } from "./AttachmentChip";
+import { MessageFeedback } from "./MessageFeedback";
 
 interface MessageBubbleProps {
   message: LocalChatMessage;
@@ -189,6 +190,12 @@ export function MessageBubble({ message, showRegenerate, onRegenerate, onEditSub
           </div>
         )}
       </div>
+      {/* Not hover-gated (unlike the actions row above): once a vote is
+          cast, or the detail panel is open, it must stay visible rather
+          than vanish the moment the pointer moves away. */}
+      {canShowActions && message.conversationId && (
+        <MessageFeedback conversationId={message.conversationId} messageId={message.id} capabilityLabel={message.routing?.categoryLabel ?? undefined} />
+      )}
     </div>
   );
 }
