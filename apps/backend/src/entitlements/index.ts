@@ -390,9 +390,12 @@ export async function getDailyLimit(
 
 // Capabilities surfaced in the UI's usage panel. Deliberately not every
 // capability — `rag`/`workflow` have no per-day numeric cap worth showing,
-// and `chat` is unlimited on Pro (its daily_requests limit is null), so it
-// renders only when a real cap exists.
-const UI_CAPABILITIES: Capability[] = ["image", "video", "audio", "ppt", "web_search", "deep_research", "files", "projects", "chat"];
+// `chat` is unlimited on Pro (its daily_requests limit is null) so it
+// renders only when a real cap exists, and `files`/`projects` were
+// explicitly dropped (product decision) — those are slow-moving, low-signal
+// counts (file uploads/month, a lifetime project cap) that don't belong
+// next to the fast-moving per-day capability rows this panel is for.
+const UI_CAPABILITIES: Capability[] = ["image", "video", "audio", "ppt", "web_search", "deep_research", "chat"];
 
 export interface EntitlementSnapshot {
   planTier: PlanTier;
