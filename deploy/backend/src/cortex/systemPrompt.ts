@@ -90,7 +90,23 @@ If this involves formal logic or evaluating a claim for internal consistency: ch
 
 const MATH_VERIFICATION = `${VERIFICATION_PREAMBLE}
 
-Before calculating, check whether the premises or the question itself contain a contradiction (impossible constraints, a claim that assumes its own conclusion) — flag that instead of computing an answer to an inconsistent setup. For a calculation whose result matters (the final answer, or a value later steps depend on), redo it a second way if practical (a different method, or working backward from the result) rather than trusting the first pass — but don't do this for arithmetic simple enough that a second pass adds nothing (single-step calculations, a well-known identity); match the effort to how much a mistake here would actually cost.`;
+Before calculating, check whether the premises or the question itself contain a contradiction (impossible constraints, a claim that assumes its own conclusion) — flag that instead of computing an answer to an inconsistent setup. Check that each algebraic transformation you perform is actually valid (the same operation applied to both sides, no sign accidentally dropped or flipped) and that any value you substitute back into an equation is consistent with what you solved for. When multiplying or dividing an inequality by a negative value, its direction must flip — check that you actually flipped it, since this is the single most common silent error in inequality work. If the problem carries units, carry them through the calculation and confirm the final answer's units match what's actually being asked for. For a calculation whose result matters (the final answer, or a value later steps depend on), redo it a second way if practical (a different method, or working backward from the result) rather than trusting the first pass — but don't do this for arithmetic simple enough that a second pass adds nothing (single-step calculations, a well-known identity); match the effort to how much a mistake here would actually cost. Before presenting the final result, confirm it actually satisfies the original stated conditions (substitute it back in, or sanity-check it against the problem's constraints).`;
+
+// Item 4/5 of the production completion pass: correct-but-hard-to-read
+// answers ("the value of x is less than or equal to four because we
+// subtract three and then divide by two") were a real, separate failure
+// mode from the accuracy issues VERIFICATION_PREAMBLE targets — the model
+// already gets these right, it just doesn't format them the way a
+// mathematical answer should look. This is a FORMATTING instruction, not a
+// silent one — the opposite of VERIFICATION_PREAMBLE's "don't show your
+// derivation" — so it's kept as its own block rather than folded into it,
+// with an explicit line resolving the two so they don't read as
+// contradictory to the model.
+const MATH_NOTATION_GUIDANCE = `When your answer involves mathematics, write it using standard mathematical notation instead of describing calculations in prose. This app renders LaTeX math delimited with $$...$$ — for BOTH inline expressions within a sentence and standalone/display expressions on their own line (never a single $, which this app deliberately does not treat as math, since it collides with ordinary text mentioning a price or amount) — so use it naturally wherever it makes the answer clearer: equations, fractions, roots, sums, integrals, matrices, vectors, set notation, and inequalities.
+
+For a problem the user is working through, show the actual solving steps as your answer — each transformation of the equation/inequality on its own line for a multi-step derivation — and state the final result plainly once you reach it (e.g. set off clearly, such as boxed). This is the normal, visible worked solution the user is asking for, and is distinct from the silent verification pass described above: that verification is extra internal checking done on top of this, never a replacement for showing the work itself.
+
+Match the amount of shown work to what actually helps: don't pad a one-line calculation into an unnecessary multi-step derivation, and don't force LaTeX onto ordinary prose — a number or unit mentioned in passing (e.g. "the algorithm runs in 3 steps") doesn't need math delimiters just because it's numeric. For physics or vector problems specifically, keep whatever coordinate system and sign convention you fixed (see the check above) visible and consistent in the notation itself, not just in your internal reasoning.`;
 
 const CODING_VERIFICATION = `${VERIFICATION_PREAMBLE}
 
@@ -106,10 +122,13 @@ Distinguish "this looks conceptually right" from "this actually runs correctly" 
 // matches — most single messages will only match one.
 export function reasoningVerificationBlock(category: string): string {
   switch (category) {
+    // "reasoning" is also where physics/vector problems land (see
+    // REASONING_VERIFICATION's own first paragraph) — MATH_NOTATION_GUIDANCE
+    // applies there too, not just to "math", so it's appended for both.
     case "reasoning":
-      return `\n\n${REASONING_VERIFICATION}`;
+      return `\n\n${REASONING_VERIFICATION}\n\n${MATH_NOTATION_GUIDANCE}`;
     case "math":
-      return `\n\n${MATH_VERIFICATION}`;
+      return `\n\n${MATH_VERIFICATION}\n\n${MATH_NOTATION_GUIDANCE}`;
     case "coding":
       return `\n\n${CODING_VERIFICATION}`;
     default:

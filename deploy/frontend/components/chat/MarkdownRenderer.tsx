@@ -3,6 +3,15 @@
 import { isValidElement } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import remarkMath from "remark-math";
+import rehypeKatex from "rehype-katex";
+// Third-party stylesheet, not a CSS module — Next's App Router supports
+// importing one directly from the component that needs it rather than
+// routing it through globals.css. KaTeX's own generated markup depends on
+// this for correct glyph positioning; without it, math renders as
+// unstyled/misaligned text instead of failing loudly, so it's easy to miss
+// if this import is ever dropped.
+import "katex/dist/katex.min.css";
 import { CodeBlock } from "./CodeBlock";
 
 interface MarkdownRendererProps {
@@ -23,7 +32,26 @@ export function MarkdownRenderer({ content }: MarkdownRendererProps) {
     // phone, where there's no slack to absorb it.
     <div className="min-w-0 max-w-none break-words text-[15px] leading-[1.68] text-foreground [text-wrap:pretty]">
       <ReactMarkdown
-        remarkPlugins={[remarkGfm]}
+        // remarkMath parses $$...$$ into math nodes (inline when it appears
+        // within a line, block/display when it's on its own line(s)) and
+        // rehypeKatex renders those nodes to real KaTeX markup. Order
+        // matters: remarkMath must run before the tree is handed to rehype.
+        //
+        // singleDollarTextMath: false turns OFF single-$ inline math —
+        // remark-math's own README calls this out as the standard fix for
+        // exactly the collision this app would otherwise hit constantly: an
+        // ordinary reply mentioning a price ("$5 and $10") would otherwise
+        // parse "5 and " as an inline formula. cortex/systemPrompt.ts's
+        // MATH_NOTATION_GUIDANCE instructs the model to use $$...$$ for
+        // both inline and display math specifically so this stays in sync
+        // with what's actually enabled here.
+        //
+        // Malformed/unbalanced math (a genuine LaTeX syntax error the model
+        // produced) fails closed — rehype-katex renders KaTeX's own inline
+        // error text for just that span rather than throwing and blanking
+        // the whole message.
+        remarkPlugins={[remarkGfm, [remarkMath, { singleDollarTextMath: false }]]}
+        rehypePlugins={[rehypeKatex]}
         components={{
           pre({ children }) {
             const child = Array.isArray(children) ? children[0] : children;
