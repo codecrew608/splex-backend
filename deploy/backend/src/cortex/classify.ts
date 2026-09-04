@@ -1,7 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import { INTENTS, GENERAL_FALLBACK_INTENT, type IntentDefinition } from "./intents.js";
-import { completeOnce } from "../openrouter/client.js";
-import { resolveClassifierModel } from "./classifierModel.js";
+import { completeOnceWithFallback } from "../openrouter/client.js";
+import { resolveClassifierModelCandidates } from "./classifierModel.js";
 import type { PlanTier } from "../shared-types.js";
 
 export interface ClassificationResult {
@@ -45,16 +45,20 @@ If uncertain, use intentId "general_qa", category "general".`;
 
 async function classifyWithFallbackModel(fastify: FastifyInstance, message: string, planTier: PlanTier): Promise<ClassificationResult> {
   try {
-    // Tier-aware: a Free request must never reach a paid model. null means
-    // no free classifier is available, so skip the call entirely rather
-    // than spending — the catch below already produces exactly the right
-    // degraded result for that case.
-    const classifierModel = await resolveClassifierModel(fastify, planTier);
-    if (!classifierModel) throw new Error("no free classifier model available");
+    // Tier-aware: a Free request must never reach a paid model. An empty
+    // candidate list means no free classifier is available at all, so skip
+    // the call entirely rather than spending — the catch below already
+    // produces exactly the right degraded result for that case.
+    //
+    // completeOnceWithFallback tries every active candidate in priority
+    // order rather than just the top one — a single rate-limited free
+    // model (observed live) used to make this whole fallback classifier
+    // fail outright, silently defaulting every affected message to
+    // "general" even when other free models were available.
+    const classifierCandidates = await resolveClassifierModelCandidates(fastify, planTier);
+    if (classifierCandidates.length === 0) throw new Error("no free classifier model available");
 
-    const { content: raw } = await completeOnce({
-      fastify,
-      model: classifierModel,
+    const { content: raw } = await completeOnceWithFallback(fastify, classifierCandidates, {
       messages: [
         { role: "system", content: CLASSIFIER_SYSTEM_PROMPT },
         { role: "user", content: message },

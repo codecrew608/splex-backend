@@ -1,6 +1,6 @@
 import type { FastifyInstance } from "fastify";
-import { completeOnce, describeError } from "../openrouter/client.js";
-import { resolveClassifierModel } from "../cortex/classifierModel.js";
+import { completeOnceWithFallback, describeError } from "../openrouter/client.js";
+import { resolveClassifierModelCandidates } from "../cortex/classifierModel.js";
 import type { PlanTier } from "../shared-types.js";
 
 // Hybrid trigger, same pattern as Cortex's classifier: don't call an LLM on
@@ -152,16 +152,22 @@ export async function extractAndUpdateMemory(
         : "(none yet)";
 
     // Tier-aware — memory upkeep for a Free user must not bill the paid
-    // account (see resolveClassifierModel). null means no free model is
-    // available; memory extraction is best-effort background upkeep, so
-    // skipping it costs the user nothing visible, whereas paying for it
-    // would be an unauthorised charge on a Free account.
-    const memoryModel = await resolveClassifierModel(fastify, planTier);
-    if (!memoryModel) return;
+    // account (see resolveClassifierModelCandidates). An empty list means
+    // no free model is available at all; memory extraction is best-effort
+    // background upkeep, so skipping it costs the user nothing visible,
+    // whereas paying for it would be an unauthorised charge on a Free
+    // account.
+    //
+    // FIX (live bug, reproduced 2026-09-04): this used to resolve and call
+    // exactly ONE model (resolveClassifierModel) — a single upstream 429
+    // on that one model silently killed memory extraction for the whole
+    // turn, even when other free models were available. Now tries every
+    // active candidate in priority order via completeOnceWithFallback,
+    // same resilience the user-facing chat path already has.
+    const memoryModelCandidates = await resolveClassifierModelCandidates(fastify, planTier);
+    if (memoryModelCandidates.length === 0) return;
 
-    const { content: raw } = await completeOnce({
-      fastify,
-      model: memoryModel,
+    const { content: raw } = await completeOnceWithFallback(fastify, memoryModelCandidates, {
       messages: [
         { role: "system", content: EXTRACT_SYSTEM_PROMPT },
         {

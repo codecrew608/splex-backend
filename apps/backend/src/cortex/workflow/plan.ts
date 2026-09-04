@@ -1,6 +1,6 @@
 import type { FastifyInstance } from "fastify";
-import { completeOnce } from "../../openrouter/client.js";
-import { resolveClassifierModel } from "../classifierModel.js";
+import { completeOnceWithFallback } from "../../openrouter/client.js";
+import { resolveClassifierModelCandidates } from "../classifierModel.js";
 import type { PlanTier } from "@splex/shared-types";
 
 export interface PlannedStep {
@@ -44,21 +44,24 @@ export async function planWorkflow(
   const userContent = contextBlock ? `${contextBlock}\n\nUser request:\n${message}` : `User request:\n${message}`;
 
   // Tier-aware. Free users can run workflows (3 steps on the free plan),
-  // so planning must not reach the configured PAID model. null means no
-  // free model is available: fall back to ordinary single-shot chat rather
-  // than spending — a workflow is an enhancement, never worth a paid call
-  // the user's tier doesn't cover.
-  const plannerModel = await resolveClassifierModel(fastify, planTier);
-  if (!plannerModel) {
+  // so planning must not reach the configured PAID model. An empty
+  // candidate list means no free model is available at all: fall back to
+  // ordinary single-shot chat rather than spending — a workflow is an
+  // enhancement, never worth a paid call the user's tier doesn't cover.
+  //
+  // completeOnceWithFallback tries every active candidate in priority
+  // order, not just the top one — a single rate-limited free model used to
+  // make planning fail outright (silently downgrading to single-shot chat)
+  // even when another free model was available and would have worked.
+  const plannerCandidates = await resolveClassifierModelCandidates(fastify, planTier);
+  if (plannerCandidates.length === 0) {
     fastify.log.warn({ planTier }, "no free planner model available, falling back to single-shot chat");
     return { outcome: "fallback" };
   }
 
   let raw: string;
   try {
-    const result = await completeOnce({
-      fastify,
-      model: plannerModel,
+    const result = await completeOnceWithFallback(fastify, plannerCandidates, {
       messages: [
         { role: "system", content: buildPlannerSystemPrompt(maxSteps) },
         { role: "user", content: userContent },

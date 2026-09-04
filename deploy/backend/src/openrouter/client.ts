@@ -400,6 +400,49 @@ export function isRetryableOpenRouterError(err: unknown): boolean {
   );
 }
 
+// FIX (live bug, reproduced 2026-09-04): resolveClassifierModel's three
+// callers (classify.ts's fallback classifier, workflow/plan.ts, memory/
+// extractMemory.ts) each called completeOnce with exactly ONE model — the
+// single highest-priority active free-variant model — and gave up entirely
+// on any failure. A real user's chat request survived an upstream 429 on
+// google/gemma-4-31b-it:free because handlers/chat.ts's own model loop
+// tries multiple candidates; the SAME 429, at the SAME moment, silently
+// killed memory extraction outright (logged as "memory extraction failed —
+// non-fatal", which is true for that one turn but meant memory looked
+// completely broken from the user's side — nothing was ever saved). This
+// is the shared fix: try each candidate in priority order, falling through
+// to the next only on a genuinely retryable failure (the same predicate
+// the chat/workflow-step model loops already use), so a single rate-limited
+// free model no longer takes down every internal (non-user-facing) LLM call
+// that happens to hit it first.
+export async function completeOnceWithFallback(
+  fastify: FastifyInstance,
+  candidates: string[],
+  params: Omit<Parameters<typeof completeOnce>[0], "fastify" | "model">,
+): Promise<CompleteOnceResult> {
+  if (candidates.length === 0) {
+    throw new Error("completeOnceWithFallback: no candidates provided");
+  }
+  for (let i = 0; i < candidates.length; i++) {
+    try {
+      return await completeOnce({ fastify, model: candidates[i], ...params });
+    } catch (err) {
+      const isLast = i === candidates.length - 1;
+      if (!isLast && isRetryableOpenRouterError(err)) {
+        fastify.log.warn(
+          { err: describeError(err), model: candidates[i] },
+          "internal (non-user-facing) model call failed, retrying with next free-tier candidate",
+        );
+        continue;
+      }
+      throw err;
+    }
+  }
+  // Unreachable — the loop above always either returns or throws before
+  // falling off the end (candidates is non-empty, guarded above).
+  throw new Error("completeOnceWithFallback: exhausted candidates unexpectedly");
+}
+
 // "This specific model can't serve the request at all" — as opposed to
 // "the upstream is busy" (429/5xx, retryable) or "the account is out of
 // money" (402, retryable with nothing). OpenRouter answers 404 with

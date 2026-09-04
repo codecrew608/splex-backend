@@ -104,6 +104,41 @@ describe("every provider call site derives its model from a tier-guarded source"
         .not.toMatch(/model:\s*fastify\.config\.CORTEX_CLASSIFIER_MODEL_ID/);
     }
   });
+
+  // completeOnceWithFallback (openrouter/client.ts) takes a whole CANDIDATE
+  // LIST rather than a single `model:` field, so it structurally cannot
+  // match the enumeration test's model: field regex above — a genuine blind
+  // spot for the "every provider call site derives its model from a
+  // tier-guarded source" invariant this whole file exists to enforce.
+  // Closed here with the same two-part shape the rest of this file already
+  // uses for indirection (pin the known callers' exact call shape, then a
+  // whole-tree sweep so an UNDOCUMENTED new caller can't silently satisfy
+  // this suite by never being checked at all).
+  it("completeOnceWithFallback's candidate list always comes from the tier-guarded resolver", () => {
+    const KNOWN_CALLERS = [
+      ["cortex/classify.ts", "classifierCandidates"],
+      ["cortex/workflow/plan.ts", "plannerCandidates"],
+      ["memory/extractMemory.ts", "memoryModelCandidates"],
+    ] as const;
+
+    for (const [file, varName] of KNOWN_CALLERS) {
+      const src = read(file);
+      expect(src, `${file} must declare ${varName} from the tier-guarded resolver`).toContain(
+        `const ${varName} = await resolveClassifierModelCandidates(fastify, planTier);`,
+      );
+      expect(src, `${file} must pass ${varName} straight into completeOnceWithFallback`).toContain(
+        `completeOnceWithFallback(fastify, ${varName}, {`,
+      );
+    }
+
+    const actualCallers = walk(SRC)
+      .map((file) => file.slice(SRC.length + 1))
+      .filter((rel) => rel !== "openrouter/client.ts" && /completeOnceWithFallback\(/.test(read(rel)));
+    expect(
+      actualCallers.sort(),
+      "a new completeOnceWithFallback call site appeared that isn't pinned above — add it to KNOWN_CALLERS with an explicit tier-safety check, don't just let this test pass around it",
+    ).toEqual(KNOWN_CALLERS.map(([file]) => file).slice().sort());
+  });
 });
 
 describe("resolveClassifierModel: the paid model is unreachable for Free", () => {
@@ -141,12 +176,12 @@ describe("empty / failed candidate pools degrade cleanly rather than escalating"
 
   it("workflow planning falls back to single-shot chat", () => {
     const src = read("cortex/workflow/plan.ts");
-    expect(src).toContain("if (!plannerModel)");
+    expect(src).toContain("if (plannerCandidates.length === 0)");
     expect(src).toContain('return { outcome: "fallback" };');
   });
 
   it("memory extraction is simply skipped", () => {
-    expect(read("memory/extractMemory.ts")).toContain("if (!memoryModel) return;");
+    expect(read("memory/extractMemory.ts")).toContain("if (memoryModelCandidates.length === 0) return;");
   });
 
   it("zero candidates produces a refusal, never a cross-variant borrow", () => {

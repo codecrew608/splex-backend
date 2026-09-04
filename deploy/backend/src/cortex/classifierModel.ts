@@ -68,3 +68,55 @@ export async function resolveClassifierModel(fastify: FastifyInstance, planTier:
 
   return data.openrouter_model_id as string;
 }
+
+// FIX (live bug, reproduced 2026-09-04): resolveClassifierModel above
+// returns only the single highest-priority free model — fine for "is
+// there at least one usable model at all", but every one of its 3 callers
+// (classify.ts, workflow/plan.ts, memory/extractMemory.ts) then called
+// completeOnce with exactly that one model and gave up entirely if it
+// failed. Reproduced live: google/gemma-4-31b-it:free (this pool's
+// priority-10 model) hit an upstream 429, and memory extraction died on
+// that single failed attempt — even though z-ai/glm-5.2:free and
+// minimax/minimax-m2.7:free were BOTH active and available at that exact
+// moment. Ordinary chat survives this same kind of failure because
+// handlers/chat.ts's own model loop tries multiple candidates; this gives
+// the 3 internal (non-user-facing) callers that same resilience via
+// completeOnceWithFallback (openrouter/client.ts).
+//
+// Deliberately a SEPARATE, independent query rather than resolveClassifierModel
+// refactored to share it — that function's exact shape (the paid-model
+// return sitting immediately inside the tier guard, appearing exactly
+// once in this file, and the error branch never mentioning the paid
+// model) is pinned by existing security-invariant regression tests
+// (free-paid-isolation.test.ts, failure-simulation.test.ts,
+// production-failures.test.ts) that guarantee Free traffic can never
+// silently reach the paid configured model. Duplicating ~15 lines of
+// straightforward, easily-audited query logic here is a smaller risk than
+// restructuring that already-hardened function under this fix.
+export async function resolveClassifierModelCandidates(fastify: FastifyInstance, planTier: PlanTier): Promise<string[]> {
+  if (planTier !== "free") {
+    return [fastify.config.CORTEX_CLASSIFIER_MODEL_ID];
+  }
+
+  const { data, error } = await fastify.supabaseAdmin
+    .from("model_registry")
+    .select("openrouter_model_id")
+    .eq("category", "general")
+    .eq("variant", "free")
+    .eq("is_active", true)
+    .eq("free_tier_allowed", true)
+    .order("priority", { ascending: true });
+
+  if (error || !data || data.length === 0) {
+    // Same invariant as resolveClassifierModel's own error branch: NEVER
+    // the paid configured model, even on a registry error — an empty list
+    // here, never a fallback that could reach fastify.config.CORTEX_CLASSIFIER_MODEL_ID.
+    fastify.log.error(
+      { error, planTier },
+      "no active free-variant general model for internal classification — skipping LLM classification rather than spending on the paid model",
+    );
+    return [];
+  }
+
+  return (data as Array<{ openrouter_model_id: string }>).map((row) => row.openrouter_model_id);
+}

@@ -86,7 +86,14 @@ describe("BUG: Free users triggered PAID provider calls", () => {
   it("no internal call site uses the configured model unconditionally", () => {
     for (const f of ["cortex/classify.ts", "memory/extractMemory.ts"]) {
       const src = read(f);
-      expect(src).toContain("resolveClassifierModel(fastify, planTier)");
+      // FIX (live bug, reproduced 2026-09-04): both now call the
+      // multi-candidate resolver (resolveClassifierModelCandidates) so a
+      // single rate-limited free model doesn't kill the whole call — see
+      // openrouter/client.ts's completeOnceWithFallback for the fallback
+      // loop itself. Still exactly as tier-aware as the single-model
+      // resolver it replaced here (same underlying query, same "free tier
+      // never reaches the paid model" guarantee).
+      expect(src).toContain("resolveClassifierModelCandidates(fastify, planTier)");
       expect(src, `${f} must not hardcode the configured (paid) model`).not.toMatch(
         /model: fastify\.config\.CORTEX_CLASSIFIER_MODEL_ID/,
       );
@@ -120,9 +127,9 @@ describe("BUG: Free users triggered PAID provider calls", () => {
     expect(read("cortex/classify.ts")).toContain('throw new Error("no free classifier model available")');
     // workflow planning: degrades to ordinary single-shot chat
     expect(read("cortex/workflow/plan.ts")).toContain('return { outcome: "fallback" };');
-    expect(read("cortex/workflow/plan.ts")).toContain("if (!plannerModel)");
+    expect(read("cortex/workflow/plan.ts")).toContain("if (plannerCandidates.length === 0)");
     // memory extraction: best-effort upkeep, simply skipped
-    expect(read("memory/extractMemory.ts")).toContain("if (!memoryModel) return;");
+    expect(read("memory/extractMemory.ts")).toContain("if (memoryModelCandidates.length === 0) return;");
     // and none of them pass the resolver's result straight into completeOnce
     for (const f of ["cortex/classify.ts", "cortex/workflow/plan.ts", "memory/extractMemory.ts"]) {
       expect(read(f), `${f} must not inline the resolver into the call`).not.toContain(
@@ -206,7 +213,7 @@ describe("PROVIDER COST: no Free request can reach a paid model", () => {
 
   it("all three internal call sites resolve the model by tier", () => {
     for (const f of ["cortex/classify.ts", "cortex/workflow/plan.ts", "memory/extractMemory.ts"]) {
-      expect(read(f), `${f} must be tier-aware`).toContain("resolveClassifierModel(fastify, planTier)");
+      expect(read(f), `${f} must be tier-aware`).toContain("resolveClassifierModelCandidates(fastify, planTier)");
     }
   });
 
