@@ -61,7 +61,20 @@ export function estimateComplexity(message: string): ComplexityLevel {
 
   if (wordCount <= 8 && codeBlockCount === 0) score -= 1;
 
-  if (score <= 0) return "simple";
+  if (score <= 0) {
+    // FIX (user-reported, 2026-09-04): a genuinely long message (already
+    // worth +2 above on length alone) could still be dragged all the way
+    // back down to a net score of 0 by an incidental SIMPLE_HINTS match
+    // anywhere in it — "Can you quickly walk me through this: [500 words
+    // of actual content]" matches "quickly" (-2) and cancels the length
+    // signal outright, misclassifying a substantial request as "simple"
+    // and routing it to the fastest/cheapest tier as if it were a
+    // one-line question. A message long enough to have earned the length
+    // bonus in the first place floors at "medium" no matter what else
+    // dragged its score down; a message that never earned that bonus
+    // keeps classifying as "simple" exactly as before.
+    return wordCount > 120 ? "medium" : "simple";
+  }
   if (score <= 2) return "medium";
   return "complex";
 }

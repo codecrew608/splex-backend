@@ -198,3 +198,43 @@ describe("Free/Pro isolation and scoring", () => {
     expect(ranked[0].model.id).toBe("bad");
   });
 });
+
+// FIX (user-reported, 2026-09-04): "a long prompt from a Free user
+// shouldn't feel like it got the throwaway-fastest model." Within the
+// free-variant pool every candidate is $0 either way, so what actually
+// decided a v1 winner was quality/reliability traded off against raw
+// latency — applied identically regardless of complexity. Free requests
+// now use a less latency-dominant weighting once complexity moves past
+// "simple" (see V1_SUBSTANTIAL_WEIGHTS's own doc comment).
+describe("v1 (Free) is no longer complexity-blind for substantial prompts", () => {
+  const health = new Map<string, ModelHealthRow>();
+  // A fast-but-mediocre model and a slower-but-genuinely-better one —
+  // both $0 cost, so cost never differentiates them either way.
+  const fastMediocre = model({ id: "fast", quality_score: 65, latency_score: 95, reliability_score: 70 });
+  const slowBetter = model({ id: "slow", quality_score: 90, latency_score: 30, reliability_score: 70 });
+
+  it("a trivial ('simple') Free request still prefers the fast model — unchanged from before", () => {
+    const ranked = scoreModels([fastMediocre, slowBetter], health, "general", "simple", "v1");
+    expect(ranked[0].model.id).toBe("fast");
+  });
+
+  it("a substantial ('medium') Free request can now prefer the better-but-slower model instead", () => {
+    const ranked = scoreModels([fastMediocre, slowBetter], health, "general", "medium", "v1");
+    expect(ranked[0].model.id).toBe("slow");
+  });
+
+  it("a substantial ('complex') Free request gets the same non-flat treatment as 'medium'", () => {
+    const ranked = scoreModels([fastMediocre, slowBetter], health, "general", "complex", "v1");
+    expect(ranked[0].model.id).toBe("slow");
+  });
+
+  it("v1.5 (Pro) is unaffected by this change — it already had its own complexity-aware profiles", () => {
+    const simple = scoreModels([fastMediocre, slowBetter], health, "general", "simple", "v1.5");
+    const medium = scoreModels([fastMediocre, slowBetter], health, "general", "medium", "v1.5");
+    // Not asserting a specific winner here (that's resolveRoutingProfile's
+    // own, pre-existing territory) — only that v1.5's behavior genuinely
+    // didn't move because of a v1-specific change.
+    expect(simple.map((s) => s.score)).toEqual(scoreModels([fastMediocre, slowBetter], health, "general", "simple", "v1.5").map((s) => s.score));
+    expect(medium.map((s) => s.score)).toEqual(scoreModels([fastMediocre, slowBetter], health, "general", "medium", "v1.5").map((s) => s.score));
+  });
+});

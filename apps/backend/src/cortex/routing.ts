@@ -83,6 +83,28 @@ const MEDIA_CATEGORIES = new Set(["image", "audio", "video", "ppt"]);
 // cheap_fast's own tuning is ever adjusted for v1.5.
 const V1_FLAT_WEIGHTS: ProfileWeights = { quality: 0.6, capabilityFit: 0.4, reliability: 0.9, cost: 1.8, latency: 1.0 };
 
+// FIX (user-reported, 2026-09-04): "a long prompt from a Free user
+// shouldn't feel like it got the throwaway-fastest model." Within the
+// free-variant pool every candidate's cost_per_million is $0 (they're all
+// OpenRouter :free models), so `cost` never actually differentiates
+// anything there — what WAS deciding the winner for every complexity level
+// alike was quality/reliability traded off against raw latency, because
+// v1_FLAT_WEIGHTS applies unconditionally regardless of complexity. That's
+// the right default for a genuinely trivial ask ("hi", a quick fact) where
+// speed IS the only thing that matters — but the same latency-first
+// weighting was also being applied to a long, substantial free-tier
+// prompt, which could land on the same model purely because it answers
+// fastest, not because it's actually well-suited to the work.
+//
+// Used only when complexity !== "simple" (see scoreModels below) —
+// quality/capabilityFit raised, latency's weight cut roughly in half so
+// raw speed stops dominating the choice, reliability/cost unchanged (cost
+// stays a no-op within this $0 pool either way). Still v1's own, separate
+// constant — deliberately NOT resolveRoutingProfile/PROFILE_WEIGHTS, which
+// remain v1.5-exclusive; this is one extra, narrowly-scoped step within
+// v1's own flat-profile design, not v1 adopting v1.5's task-shape system.
+const V1_SUBSTANTIAL_WEIGHTS: ProfileWeights = { quality: 0.9, capabilityFit: 0.6, reliability: 0.9, cost: 1.8, latency: 0.5 };
+
 export function resolveRoutingProfile(category: string, complexity: ComplexityLevel): RoutingProfile {
   if (MEDIA_CATEGORIES.has(category)) return "media";
   if (category === "coding") return "coding";
@@ -163,8 +185,12 @@ function latencyPenaltyFor(model: ModelRegistryRow, health: ModelHealthRow | und
 //
 // cortexVersion is where v1 and v1.5 actually diverge in BEHAVIOR, not
 // just input size:
-//   v1   — flat V1_FLAT_WEIGHTS regardless of category/complexity, no live
-//          health blending (health data is simply never looked up for a
+//   v1   — flat regardless of CATEGORY always (task-shape-blind, still
+//          true), but not entirely blind to complexity any more:
+//          V1_FLAT_WEIGHTS for a "simple" request, V1_SUBSTANTIAL_WEIGHTS
+//          (less latency-dominant) for "medium"/"complex" — see that
+//          constant's own doc comment. No live health blending either way
+//          (health data is simply never looked up for a
 //          v1 candidate — reliability/latency fall back to configured
 //          scores only), capability fit collapses to plain quality_score
 //          (no coding_score/reasoning_score signal).
@@ -178,7 +204,11 @@ export function scoreModels(
   cortexVersion: CortexVersion,
 ): ScoredModel[] {
   const isV1 = cortexVersion === "v1";
-  const w = isV1 ? V1_FLAT_WEIGHTS : PROFILE_WEIGHTS[resolveRoutingProfile(category, complexity)];
+  const w = isV1
+    ? complexity === "simple"
+      ? V1_FLAT_WEIGHTS
+      : V1_SUBSTANTIAL_WEIGHTS
+    : PROFILE_WEIGHTS[resolveRoutingProfile(category, complexity)];
 
   return models
     .map((model) => {
