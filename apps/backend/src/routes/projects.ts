@@ -15,7 +15,7 @@ const projectsRoutes: FastifyPluginAsync = async (fastify) => {
       ],
     },
     async (request, reply) =>
-      sendResult(reply, await createProject(fastify, request.user.id, request.user.planTier, request.body)),
+      sendResult(reply, await createProject(fastify, request.user.id, request.user.planTier, request.body, request.user.timezone)),
   );
 };
 

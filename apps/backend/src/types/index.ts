@@ -5,6 +5,11 @@ export interface AuthedUser {
   email: string;
   planTier: PlanTier;
   orgId: string | null;
+  // IANA timezone name (users.timezone, migration 0044) — drives per-user
+  // daily/monthly reset boundaries. Always a real value: resolveAuthedUser
+  // falls back to "Asia/Kolkata" (this app's prior fixed behavior) for any
+  // row where it's somehow missing, same default the DB side uses.
+  timezone: string;
 }
 
 declare module "fastify" {

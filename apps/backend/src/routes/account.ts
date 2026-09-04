@@ -1,5 +1,5 @@
 import type { FastifyPluginAsync } from "fastify";
-import { deleteAccount, saveProfile } from "../handlers/account.js";
+import { deleteAccount, saveProfile, syncTimezone } from "../handlers/account.js";
 import { RATE_LIMITS } from "../handlers/rateLimits.js";
 import { sendResult } from "./sendResult.js";
 
@@ -25,6 +25,23 @@ const accountRoutes: FastifyPluginAsync = async (fastify) => {
     },
     async (request, reply) => {
       return sendResult(reply, await saveProfile(fastify, request.user.id, request.body));
+    },
+  );
+
+  fastify.patch(
+    "/account/timezone",
+    {
+      preHandler: [
+        fastify.authenticate,
+        fastify.rateLimitByUser(
+          "account_timezone",
+          RATE_LIMITS.account_timezone.max,
+          RATE_LIMITS.account_timezone.windowMs,
+        ),
+      ],
+    },
+    async (request, reply) => {
+      return sendResult(reply, await syncTimezone(fastify, request.user.id, request.body));
     },
   );
 };

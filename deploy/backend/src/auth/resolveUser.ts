@@ -1,6 +1,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { PlanTier } from "../shared-types.js";
 import type { AuthedUser } from "../types/index.js";
+import { DEFAULT_TIMEZONE } from "../entitlements/index.js";
 
 export type ResolveUserResult = { ok: true; user: AuthedUser } | { ok: false };
 
@@ -59,7 +60,7 @@ export async function resolveAuthedUser(supabaseAdmin: SupabaseClient, token: st
   const speculativeId = peekUnverifiedSubject(token);
 
   const lookup = (id: string) =>
-    supabaseAdmin.from("users").select("plan_tier, org_id, email").eq("id", id).single();
+    supabaseAdmin.from("users").select("plan_tier, org_id, email, timezone").eq("id", id).single();
 
   const [verified, speculativeRow] = await Promise.all([
     supabaseAdmin.auth.getUser(token),
@@ -85,6 +86,10 @@ export async function resolveAuthedUser(supabaseAdmin: SupabaseClient, token: st
       email: userRow.email as string,
       planTier: userRow.plan_tier as PlanTier,
       orgId: (userRow.org_id as string | null) ?? null,
+      // Same default the DB's user_timezone() falls back to — column is
+      // NOT NULL with a default, so this only ever guards a null coming
+      // back from an unexpected select shape, not real data.
+      timezone: (userRow.timezone as string | null) ?? DEFAULT_TIMEZONE,
     },
   };
 }

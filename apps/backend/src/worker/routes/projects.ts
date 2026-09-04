@@ -8,6 +8,6 @@ import { parseJsonBody, respondWithResult } from "../http.js";
 // verbatim with routes/projects.ts.
 export async function handleCreateProject(request: Request, ctx: WorkerCtx, user: AuthedUser): Promise<Response> {
   return respondWithResult(
-    await createProject(asFastifyInstance(ctx), user.id, user.planTier, await parseJsonBody(request)),
+    await createProject(asFastifyInstance(ctx), user.id, user.planTier, await parseJsonBody(request), user.timezone),
   );
 }

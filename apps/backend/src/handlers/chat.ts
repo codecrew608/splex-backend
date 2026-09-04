@@ -263,6 +263,7 @@ export async function runChat(
           fastify, user.id, user.planTier, "vision_inputs", "vision_inputs_monthly",
           { kind: "vision_messages", period: "day" },
           { kind: "vision_messages", period: "month" },
+          user.timezone,
         );
         if (!visionQuota.allowed) {
           const message =

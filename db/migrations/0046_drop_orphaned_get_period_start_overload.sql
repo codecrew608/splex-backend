@@ -1,0 +1,13 @@
+-- FIX: `create or replace function public.get_period_start(p_counter_type
+-- counter_type, p_user_id uuid default null)` in migration 0044 changed
+-- this function's argument LIST, which in Postgres creates a second
+-- overload rather than replacing the original — the pre-migration 1-arg
+-- `get_period_start(counter_type)` was left behind, orphaned: nothing
+-- calls it any more (every real call site now passes p_user_id), it still
+-- hardcodes the old fixed-Asia/Kolkata behavior internally, and it was
+-- never covered by 0043's PUBLIC-execute revokes (those targeted three
+-- unrelated trigger functions). Caught by re-checking pg_proc after
+-- applying 0044, not assumed. Dead code left in place is exactly the kind
+-- of thing that bites later — someone adds a new caller, gets it by
+-- name-only autocomplete, and silently loses region-awareness.
+drop function if exists public.get_period_start(counter_type);

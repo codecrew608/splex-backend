@@ -1,4 +1,4 @@
-import { deleteAccount, saveProfile } from "../../handlers/account.js";
+import { deleteAccount, saveProfile, syncTimezone } from "../../handlers/account.js";
 import type { WorkerCtx } from "../context.js";
 import { asFastifyInstance } from "../context.js";
 import type { AuthedUser } from "../../types/index.js";
@@ -12,4 +12,8 @@ export async function handleDeleteAccount(ctx: WorkerCtx, user: AuthedUser): Pro
 
 export async function handleSaveProfile(request: Request, ctx: WorkerCtx, user: AuthedUser): Promise<Response> {
   return respondWithResult(await saveProfile(asFastifyInstance(ctx), user.id, await parseJsonBody(request)));
+}
+
+export async function handleSyncTimezone(request: Request, ctx: WorkerCtx, user: AuthedUser): Promise<Response> {
+  return respondWithResult(await syncTimezone(asFastifyInstance(ctx), user.id, await parseJsonBody(request)));
 }

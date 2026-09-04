@@ -35,7 +35,7 @@ export interface HandleWebSearchParams {
 export async function handleWebSearch(params: HandleWebSearchParams): Promise<void> {
   const { fastify, sse, user, conversationId, userMessageId, decision, query } = params;
 
-  const quota = await checkMediaQuota(fastify, user.id, user.planTier, "web_search");
+  const quota = await checkMediaQuota(fastify, user.id, user.planTier, "web_search", user.timezone);
   if (!quota.allowed) {
     const message =
       quota.blockedBy === "monthly"

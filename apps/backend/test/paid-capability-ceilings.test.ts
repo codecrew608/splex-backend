@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { checkDualPeriodQuota } from "../src/entitlements/index.js";
@@ -95,7 +95,7 @@ describe("checkDualPeriodQuota — the new day+month capability ceiling gate", (
     });
     const q = await checkDualPeriodQuota(f, "u1", "pro", "image_generations", "image_generations_monthly",
       { kind: "generated_media", mediaKind: "image", period: "day" },
-      { kind: "generated_media", mediaKind: "image", period: "month" });
+      { kind: "generated_media", mediaKind: "image", period: "month" }, "Asia/Kolkata");
     expect(q.allowed).toBe(true);
     expect(q.dailyUsed).toBe(1);
     expect(q.monthlyUsed).toBe(1);
@@ -112,7 +112,7 @@ describe("checkDualPeriodQuota — the new day+month capability ceiling gate", (
     });
     const q = await checkDualPeriodQuota(f, "u1", "pro", "image_generations", "image_generations_monthly",
       { kind: "generated_media", mediaKind: "image", period: "day" },
-      { kind: "generated_media", mediaKind: "image", period: "month" });
+      { kind: "generated_media", mediaKind: "image", period: "month" }, "Asia/Kolkata");
     expect(q.allowed).toBe(false);
     expect(q.dailyUsed).toBe(5);
     expect(q.dailyLimit).toBe(5);
@@ -129,7 +129,7 @@ describe("checkDualPeriodQuota — the new day+month capability ceiling gate", (
     });
     const q = await checkDualPeriodQuota(f, "u1", "pro", "image_generations", "image_generations_monthly",
       { kind: "generated_media", mediaKind: "image", period: "day" },
-      { kind: "generated_media", mediaKind: "image", period: "month" });
+      { kind: "generated_media", mediaKind: "image", period: "month" }, "Asia/Kolkata");
     expect(q.allowed).toBe(false);
     expect(q.monthlyUsed).toBe(60);
   });
@@ -138,7 +138,7 @@ describe("checkDualPeriodQuota — the new day+month capability ceiling gate", (
     const f = fastify({ plan_limits: [], generated_media: [] });
     const q = await checkDualPeriodQuota(f, "u1", "pro", "video_generations", "video_generations_monthly",
       { kind: "generated_media", mediaKind: "video", period: "day" },
-      { kind: "generated_media", mediaKind: "video", period: "month" });
+      { kind: "generated_media", mediaKind: "video", period: "month" }, "Asia/Kolkata");
     expect(q.allowed).toBe(false);
   });
 
@@ -155,7 +155,7 @@ describe("checkDualPeriodQuota — the new day+month capability ceiling gate", (
     });
     const q = await checkDualPeriodQuota(f, "u1", "pro", "image_generations", "image_generations_monthly",
       { kind: "generated_media", mediaKind: "image", period: "day" },
-      { kind: "generated_media", mediaKind: "image", period: "month" });
+      { kind: "generated_media", mediaKind: "image", period: "month" }, "Asia/Kolkata");
     expect(q.dailyUsed).toBe(0);
     expect(q.allowed).toBe(true);
   });
@@ -175,7 +175,7 @@ describe("audio quota is duration-summed, not count-based", () => {
     });
     const q = await checkDualPeriodQuota(f, "u1", "pro", "audio_minutes", "audio_minutes_monthly",
       { kind: "generated_media_minutes", mediaKind: "audio", period: "day" },
-      { kind: "generated_media_minutes", mediaKind: "audio", period: "month" });
+      { kind: "generated_media_minutes", mediaKind: "audio", period: "month" }, "Asia/Kolkata");
     expect(q.dailyUsed).toBeCloseTo(310 / 60, 5);
     expect(q.allowed).toBe(true);
   });
@@ -190,7 +190,7 @@ describe("audio quota is duration-summed, not count-based", () => {
     });
     const q = await checkDualPeriodQuota(f, "u1", "pro", "audio_minutes", "audio_minutes_monthly",
       { kind: "generated_media_minutes", mediaKind: "audio", period: "day" },
-      { kind: "generated_media_minutes", mediaKind: "audio", period: "month" });
+      { kind: "generated_media_minutes", mediaKind: "audio", period: "month" }, "Asia/Kolkata");
     expect(q.dailyUsed).toBe(0);
   });
 
@@ -234,7 +234,7 @@ describe("vision and workflow_runs usage is counted via the projects -> conversa
     });
     const q = await checkDualPeriodQuota(f, "u1", "pro", "vision_inputs", "vision_inputs_monthly",
       { kind: "vision_messages", period: "day" },
-      { kind: "vision_messages", period: "month" });
+      { kind: "vision_messages", period: "month" }, "Asia/Kolkata");
     expect(q.dailyUsed).toBe(1);
   });
 
@@ -252,7 +252,7 @@ describe("vision and workflow_runs usage is counted via the projects -> conversa
     });
     const q = await checkDualPeriodQuota(f, "u1", "pro", "workflow_runs", "workflow_runs_monthly",
       { kind: "workflow_runs", period: "day" },
-      { kind: "workflow_runs", period: "month" });
+      { kind: "workflow_runs", period: "month" }, "Asia/Kolkata");
     expect(q.dailyUsed).toBe(1);
   });
 
@@ -266,7 +266,7 @@ describe("vision and workflow_runs usage is counted via the projects -> conversa
     });
     const q = await checkDualPeriodQuota(f, "brand-new-user", "pro", "workflow_runs", "workflow_runs_monthly",
       { kind: "workflow_runs", period: "day" },
-      { kind: "workflow_runs", period: "month" });
+      { kind: "workflow_runs", period: "month" }, "Asia/Kolkata");
     expect(q.dailyUsed).toBe(0);
     expect(q.allowed).toBe(true);
   });
@@ -306,5 +306,86 @@ describe("structural guards for the new premium ceilings are actually wired at t
     const src = read("credits/mediaQuota.ts");
     expect(src).toContain('kind === "audio"');
     expect(src).toContain('"generated_media_minutes"');
+  });
+});
+
+// FIX (user-reported, 2026-09-04): "credits for the users [should] change
+// according to their region time within 24hrs of full credits usage" —
+// checkDualPeriodQuota's day boundary used to be hardcoded Asia/Kolkata
+// (startOfTodayIST) for every user regardless of where they actually are.
+// migration 0044 + entitlements/index.ts's startOfToday(timezone) fixed
+// this at the DB and TS layers; this proves it end-to-end through the real
+// exported function, not just that the helper computes a plausible date.
+describe("day-boundary quota is genuinely per-user-timezone-aware, not fixed Asia/Kolkata", () => {
+  // A fixed instant (not "real now", unlike TODAY()/YESTERDAY() above) —
+  // needed here specifically because the whole point is to straddle two
+  // different zones' midnights at once, which requires controlling exactly
+  // where "now" falls relative to both. This is a different situation from
+  // the TODAY()/YESTERDAY() staleness trap those helpers' own comment
+  // warns about (a hardcoded literal a real clock eventually drifts past)
+  // — vi.setSystemTime freezes "now" for this test's assertions only, then
+  // afterEach restores the real clock, so nothing here can go stale.
+  const NOW = "2026-06-15T01:00:00.000Z";
+  // 2026-06-14T14:00 UTC. Asia/Kolkata (UTC+5:30) local midnight for the
+  // 15th falls at 2026-06-14T18:30Z — this row is BEFORE that, so it's
+  // still "yesterday" for a Kolkata user at NOW. Pacific/Honolulu (UTC-10,
+  // no DST) local midnight for the 14th falls at 2026-06-14T10:00Z — this
+  // row is AFTER that, so it's already "today" for a Honolulu user at the
+  // very same NOW, on the very same row.
+  const STRADDLING_ROW_CREATED_AT = "2026-06-14T14:00:00.000Z";
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(NOW));
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  function fixture() {
+    return fastify({
+      plan_limits: planLimits([
+        { plan_tier: "pro", counter_type: "image_generations", limit_amount: 5 },
+        { plan_tier: "pro", counter_type: "image_generations_monthly", limit_amount: 60 },
+      ]),
+      generated_media: [{ user_id: "u1", kind: "image", status: "completed", created_at: STRADDLING_ROW_CREATED_AT }],
+    });
+  }
+
+  it("the exact same row counts as YESTERDAY for a Kolkata user at this instant", async () => {
+    const q = await checkDualPeriodQuota(
+      fixture(), "u1", "pro", "image_generations", "image_generations_monthly",
+      { kind: "generated_media", mediaKind: "image", period: "day" },
+      { kind: "generated_media", mediaKind: "image", period: "month" },
+      "Asia/Kolkata",
+    );
+    expect(q.dailyUsed).toBe(0);
+  });
+
+  it("...but counts as TODAY for a Honolulu user at the very same instant", async () => {
+    const q = await checkDualPeriodQuota(
+      fixture(), "u1", "pro", "image_generations", "image_generations_monthly",
+      { kind: "generated_media", mediaKind: "image", period: "day" },
+      { kind: "generated_media", mediaKind: "image", period: "month" },
+      "Pacific/Honolulu",
+    );
+    expect(q.dailyUsed).toBe(1);
+  });
+
+  it("both users still see the SAME monthly total — only the daily boundary is region-aware", async () => {
+    const kolkata = await checkDualPeriodQuota(
+      fixture(), "u1", "pro", "image_generations", "image_generations_monthly",
+      { kind: "generated_media", mediaKind: "image", period: "day" },
+      { kind: "generated_media", mediaKind: "image", period: "month" },
+      "Asia/Kolkata",
+    );
+    const honolulu = await checkDualPeriodQuota(
+      fixture(), "u1", "pro", "image_generations", "image_generations_monthly",
+      { kind: "generated_media", mediaKind: "image", period: "day" },
+      { kind: "generated_media", mediaKind: "image", period: "month" },
+      "Pacific/Honolulu",
+    );
+    expect(kolkata.monthlyUsed).toBe(1);
+    expect(honolulu.monthlyUsed).toBe(1);
   });
 });

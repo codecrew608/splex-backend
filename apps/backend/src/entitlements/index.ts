@@ -75,17 +75,71 @@ export interface QuotaState {
   allowed: boolean;
 }
 
-// Day/month boundaries in Asia/Kolkata, matching the app's existing reset
-// convention (enforce_file_limits() in migration 0011, and the media quota
-// helper this consolidates).
-function startOfTodayIST(): string {
-  const ymd = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Kolkata" }).format(new Date());
-  return `${ymd}T00:00:00+05:30`;
+// Day/month boundaries in the user's own timezone (users.timezone,
+// migration 0044 — "credits should reset within 24hrs of full usage
+// according to the user's region time", user-reported 2026-09-04).
+// Previously hardcoded to Asia/Kolkata everywhere in this file; every
+// caller now threads a real per-user IANA zone name through instead. The
+// default fallback stays "Asia/Kolkata" throughout — this app's prior
+// fixed behavior — for any user whose timezone hasn't been captured yet.
+export const DEFAULT_TIMEZONE = "Asia/Kolkata";
+
+// Resolves a UTC instant from a wall-clock date/time as observed in an
+// arbitrary IANA zone, using only the standard Intl API (no date library —
+// this repo has none, and one function doesn't earn adding one).
+//
+// Technique: form a UTC guess for the wall-clock values, then ask Intl what
+// that guessed instant *looks like* when displayed in the target zone. The
+// difference between the guess and what got displayed is exactly the
+// zone's offset at that instant, so subtracting it corrects the guess to
+// the real UTC instant. This is exact for the overwhelming majority of
+// instants; it can be off by up to an hour for a wall-clock time that
+// falls inside a DST transition's gap/fold specifically (a handful of
+// hours a year, in DST-observing zones only) — acceptable for a billing
+// reset boundary that self-corrects at the next reset either way, and not
+// worth a dependency to close completely.
+function zonedWallTimeToUtc(y: number, monthIndex0: number, d: number, hh: number, mm: number, ss: number, timeZone: string): Date {
+  const utcGuess = Date.UTC(y, monthIndex0, d, hh, mm, ss);
+  const dtf = new Intl.DateTimeFormat("en-US", {
+    timeZone,
+    hourCycle: "h23",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+  });
+  const parts: Record<string, string> = {};
+  for (const p of dtf.formatToParts(new Date(utcGuess))) {
+    if (p.type !== "literal") parts[p.type] = p.value;
+  }
+  const displayedAsUtc = Date.UTC(
+    Number(parts.year),
+    Number(parts.month) - 1,
+    Number(parts.day),
+    Number(parts.hour) % 24, // Intl can format midnight as "24" with h23
+    Number(parts.minute),
+    Number(parts.second),
+  );
+  const offsetMs = displayedAsUtc - utcGuess;
+  return new Date(utcGuess - offsetMs);
 }
 
-function startOfMonthIST(): string {
-  const ymd = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Kolkata" }).format(new Date());
-  return `${ymd.slice(0, 7)}-01T00:00:00+05:30`;
+function ymdInZone(timeZone: string, date: Date = new Date()): { y: number; m: number; d: number; ymd: string } {
+  const ymd = new Intl.DateTimeFormat("en-CA", { timeZone }).format(date);
+  const [y, m, d] = ymd.split("-").map(Number);
+  return { y, m, d, ymd };
+}
+
+function startOfToday(timeZone: string): string {
+  const { y, m, d } = ymdInZone(timeZone);
+  return zonedWallTimeToUtc(y, m - 1, d, 0, 0, 0, timeZone).toISOString();
+}
+
+function startOfMonth(timeZone: string): string {
+  const { y, m } = ymdInZone(timeZone);
+  return zonedWallTimeToUtc(y, m - 1, 1, 0, 0, 0, timeZone).toISOString();
 }
 
 // Bare-date (not timestamp) equivalents, for exact-match filtering against
@@ -101,12 +155,17 @@ function startOfMonthIST(): string {
 // usage panel and canUseCapability() would read yesterday's count as
 // today's — silently over-restricting daily_requests (and would have done
 // the same to daily_credits) rather than showing/enforcing a fresh zero.
-function todayDateIST(): string {
-  return new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Kolkata" }).format(new Date());
+//
+// No offset math needed here (unlike startOfToday/startOfMonth above) — a
+// plain calendar-date read in the target zone is already exactly what
+// usage_counters.period_start (and the DB's matching `at time zone
+// user_timezone(...)::date`) both compute, so this stays a direct port.
+function todayDate(timeZone: string): string {
+  return ymdInZone(timeZone).ymd;
 }
 
-function monthStartDateIST(): string {
-  return `${todayDateIST().slice(0, 7)}-01`;
+function monthStartDate(timeZone: string): string {
+  return `${todayDate(timeZone).slice(0, 7)}-01`;
 }
 
 async function fetchLimit(fastify: FastifyInstance, planTier: PlanTier, counterType: string): Promise<number | null | undefined> {
@@ -128,7 +187,7 @@ async function fetchLimit(fastify: FastifyInstance, planTier: PlanTier, counterT
   return data.limit_amount as number | null;
 }
 
-async function fetchUsage(fastify: FastifyInstance, userId: string, source: UsageSource): Promise<number> {
+async function fetchUsage(fastify: FastifyInstance, userId: string, source: UsageSource, timezone: string): Promise<number> {
   if (source.kind === "none") return 0;
 
   if (source.kind === "generated_media") {
@@ -140,7 +199,7 @@ async function fetchUsage(fastify: FastifyInstance, userId: string, source: Usag
       // A failed generation is never charged and never counts against the
       // cap — same rule the credit system uses for failed completions.
       .neq("status", "failed")
-      .gte("created_at", source.period === "day" ? startOfTodayIST() : startOfMonthIST());
+      .gte("created_at", source.period === "day" ? startOfToday(timezone) : startOfMonth(timezone));
     if (error) {
       fastify.log.error({ error, userId, mediaKind: source.mediaKind }, "generated_media usage count failed");
       return Number.POSITIVE_INFINITY; // fail closed
@@ -155,7 +214,7 @@ async function fetchUsage(fastify: FastifyInstance, userId: string, source: Usag
       .eq("user_id", userId)
       .eq("kind", source.mediaKind)
       .neq("status", "failed")
-      .gte("created_at", source.period === "day" ? startOfTodayIST() : startOfMonthIST());
+      .gte("created_at", source.period === "day" ? startOfToday(timezone) : startOfMonth(timezone));
     if (error) {
       fastify.log.error({ error, userId, mediaKind: source.mediaKind }, "generated_media duration sum failed");
       return Number.POSITIVE_INFINITY; // fail closed
@@ -178,7 +237,7 @@ async function fetchUsage(fastify: FastifyInstance, userId: string, source: Usag
     // error) rather than loudly — not a risk worth taking on a
     // quota-enforcement path for a data volume (low hundreds of rows
     // system-wide) where three round trips cost nothing real.
-    const since = source.period === "day" ? startOfTodayIST() : startOfMonthIST();
+    const since = source.period === "day" ? startOfToday(timezone) : startOfMonth(timezone);
     const { data: ownProjects, error: projErr } = await fastify.supabaseAdmin
       .from("projects")
       .select("id")
@@ -251,7 +310,7 @@ async function fetchUsage(fastify: FastifyInstance, userId: string, source: Usag
     // project again (observed live: 111 containers against an 8-project
     // history). See migration 0023.
     if (source.table === "projects") query = query.eq("is_implicit", false);
-    if (source.period === "month") query = query.gte("created_at", startOfMonthIST());
+    if (source.period === "month") query = query.gte("created_at", startOfMonth(timezone));
     const { count, error } = await query;
     if (error) {
       fastify.log.error({ error, userId, table: source.table }, "row_count usage failed");
@@ -260,7 +319,7 @@ async function fetchUsage(fastify: FastifyInstance, userId: string, source: Usag
     return count ?? 0;
   }
 
-  const currentPeriod = source.period === "day" ? todayDateIST() : monthStartDateIST();
+  const currentPeriod = source.period === "day" ? todayDate(timezone) : monthStartDate(timezone);
   const { data, error } = await fastify.supabaseAdmin
     .from("usage_counters")
     .select("used")
@@ -291,6 +350,7 @@ export async function getQuotaState(
   userId: string,
   planTier: PlanTier,
   capability: Capability,
+  timezone: string,
 ): Promise<QuotaState> {
   const config = CAPABILITY_CONFIG[capability];
 
@@ -300,7 +360,7 @@ export async function getQuotaState(
 
   const [limit, used] = await Promise.all([
     fetchLimit(fastify, planTier, config.counterType),
-    fetchUsage(fastify, userId, config.usage),
+    fetchUsage(fastify, userId, config.usage, timezone),
   ]);
 
   if (limit === undefined) {
@@ -317,8 +377,9 @@ export async function canUseCapability(
   userId: string,
   planTier: PlanTier,
   capability: Capability,
+  timezone: string,
 ): Promise<boolean> {
-  return (await getQuotaState(fastify, userId, planTier, capability)).allowed;
+  return (await getQuotaState(fastify, userId, planTier, capability, timezone)).allowed;
 }
 
 export interface DualPeriodQuota {
@@ -345,12 +406,13 @@ export async function checkDualPeriodQuota(
   monthlyCounterType: string,
   dailySource: UsageSource,
   monthlySource: UsageSource,
+  timezone: string,
 ): Promise<DualPeriodQuota> {
   const [dailyLimit, monthlyLimit, dailyUsed, monthlyUsed] = await Promise.all([
     fetchLimit(fastify, planTier, dailyCounterType),
     fetchLimit(fastify, planTier, monthlyCounterType),
-    fetchUsage(fastify, userId, dailySource),
-    fetchUsage(fastify, userId, monthlySource),
+    fetchUsage(fastify, userId, dailySource, timezone),
+    fetchUsage(fastify, userId, monthlySource, timezone),
   ]);
   const dailyOk = dailyLimit === null ? true : dailyLimit !== undefined && dailyUsed < dailyLimit;
   const monthlyOk = monthlyLimit === null ? true : monthlyLimit !== undefined && monthlyUsed < monthlyLimit;
@@ -368,8 +430,9 @@ export async function getRemainingQuota(
   userId: string,
   planTier: PlanTier,
   capability: Capability,
+  timezone: string,
 ): Promise<number | null> {
-  const state = await getQuotaState(fastify, userId, planTier, capability);
+  const state = await getQuotaState(fastify, userId, planTier, capability, timezone);
   if (state.limit === null) return null; // unlimited
   return Math.max(0, state.limit - state.used);
 }
@@ -420,8 +483,9 @@ export async function getEntitlementSnapshot(
   fastify: FastifyInstance,
   userId: string,
   planTier: PlanTier,
+  timezone: string,
 ): Promise<EntitlementSnapshot> {
-  const quotas = await Promise.all(UI_CAPABILITIES.map((c) => getQuotaState(fastify, userId, planTier, c)));
+  const quotas = await Promise.all(UI_CAPABILITIES.map((c) => getQuotaState(fastify, userId, planTier, c, timezone)));
 
   return { planTier, quotas };
 }

@@ -37,6 +37,7 @@ export async function createProject(
   userId: string,
   planTier: PlanTier,
   rawBody: unknown,
+  timezone: string,
 ): Promise<HandlerResult> {
   const parsed = createProjectSchema.safeParse(rawBody);
   if (!parsed.success) {
@@ -45,7 +46,7 @@ export async function createProject(
 
   // Routed through the central entitlement service rather than a local
   // plan_limits query — same rules, one implementation.
-  const quota = await getQuotaState(fastify, userId, planTier, "projects");
+  const quota = await getQuotaState(fastify, userId, planTier, "projects", timezone);
   if (!quota.allowed) {
     return fail(`Your plan allows up to ${quota.limit} projects. Upgrade to create more.`, 403);
   }

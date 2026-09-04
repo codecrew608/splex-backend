@@ -13,7 +13,7 @@ import { getEntitlementSnapshot } from "../entitlements/index.js";
 // counts only.
 const entitlementsRoutes: FastifyPluginAsync = async (fastify) => {
   fastify.get("/entitlements", { preHandler: fastify.authenticate }, async (request, reply) => {
-    const snapshot = await getEntitlementSnapshot(fastify, request.user.id, request.user.planTier);
+    const snapshot = await getEntitlementSnapshot(fastify, request.user.id, request.user.planTier, request.user.timezone);
     return reply.send(snapshot);
   });
 };

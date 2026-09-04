@@ -701,6 +701,7 @@ export async function startWorkflow(params: {
     fastify, user.id, user.planTier, "workflow_runs", "workflow_runs_monthly",
     { kind: "workflow_runs", period: "day" },
     { kind: "workflow_runs", period: "month" },
+    user.timezone,
   );
   if (!runQuota.allowed) {
     const message =

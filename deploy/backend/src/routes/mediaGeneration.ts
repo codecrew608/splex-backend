@@ -71,7 +71,7 @@ export async function handleSyncMediaGeneration<R extends SyncMediaGenerationRes
 ): Promise<void> {
   const { fastify, sse, user, conversationId, userMessageId, decision, kind, prompt } = params;
 
-  const quota = await checkMediaQuota(fastify, user.id, user.planTier, kind);
+  const quota = await checkMediaQuota(fastify, user.id, user.planTier, kind, user.timezone);
   if (!quota.allowed) {
     sse.error({ message: params.quotaExceededMessage(quota) });
     sse.done({ blocked: true, conversationId, userMessageId });
@@ -319,7 +319,7 @@ export interface AsyncMediaGenerationParams {
 export async function handleAsyncMediaGeneration(params: AsyncMediaGenerationParams): Promise<void> {
   const { fastify, sse, user, conversationId, userMessageId, decision, kind, prompt } = params;
 
-  const quota = await checkMediaQuota(fastify, user.id, user.planTier, kind);
+  const quota = await checkMediaQuota(fastify, user.id, user.planTier, kind, user.timezone);
   if (!quota.allowed) {
     sse.error({ message: params.quotaExceededMessage(quota) });
     sse.done({ blocked: true, conversationId, userMessageId });

@@ -5,6 +5,6 @@ import type { AuthedUser } from "../../types/index.js";
 import { jsonResponse } from "../http.js";
 
 export async function handleGetEntitlements(ctx: WorkerCtx, user: AuthedUser): Promise<Response> {
-  const snapshot = await getEntitlementSnapshot(asFastifyInstance(ctx), user.id, user.planTier);
+  const snapshot = await getEntitlementSnapshot(asFastifyInstance(ctx), user.id, user.planTier, user.timezone);
   return jsonResponse(snapshot);
 }

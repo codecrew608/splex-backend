@@ -44,6 +44,7 @@ export async function checkMediaQuota(
   userId: string,
   planTier: PlanTier,
   kind: MediaKind,
+  timezone: string,
 ): Promise<MediaQuota> {
   const dailyCounterType = DAILY_COUNTER_TYPE[kind];
   const monthlyCounterType = `${dailyCounterType}_monthly`;
@@ -53,11 +54,13 @@ export async function checkMediaQuota(
           fastify, userId, planTier, dailyCounterType, monthlyCounterType,
           { kind: "generated_media_minutes", mediaKind: "audio", period: "day" },
           { kind: "generated_media_minutes", mediaKind: "audio", period: "month" },
+          timezone,
         )
       : await checkDualPeriodQuota(
           fastify, userId, planTier, dailyCounterType, monthlyCounterType,
           { kind: "generated_media", mediaKind: kind, period: "day" },
           { kind: "generated_media", mediaKind: kind, period: "month" },
+          timezone,
         );
 
   const dailyOk = dual.dailyLimit === null || dual.dailyUsed < dual.dailyLimit;

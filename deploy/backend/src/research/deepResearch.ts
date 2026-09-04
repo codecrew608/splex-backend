@@ -210,7 +210,7 @@ export async function runDeepResearch(params: RunDeepResearchParams): Promise<vo
   // openrouter/client.ts; this bounds the total and honours cancellation.
   const runDeadline = withDeadline(params.abortSignal, DEEP_RESEARCH_RUN_BUDGET_MS);
 
-  const quota = await checkMediaQuota(fastify, user.id, user.planTier, "deep_research");
+  const quota = await checkMediaQuota(fastify, user.id, user.planTier, "deep_research", user.timezone);
   if (!quota.allowed) {
     const message =
       quota.blockedBy === "monthly"

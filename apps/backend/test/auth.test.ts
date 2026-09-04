@@ -64,7 +64,16 @@ describe("the speculative lookup is a latency optimisation, never an authorizati
 
     expect(result.ok).toBe(true);
     if (!result.ok) throw new Error("unreachable");
-    expect(result.user).toEqual({ id: "user-real", email: "real@example.com", planTier: "pro", orgId: null });
+    // No `timezone` in the mocked row (Row's own shape doesn't carry one) —
+    // this also proves resolveAuthedUser's fallback-to-default path works,
+    // not just the happy path where the column is populated.
+    expect(result.user).toEqual({
+      id: "user-real",
+      email: "real@example.com",
+      planTier: "pro",
+      orgId: null,
+      timezone: "Asia/Kolkata",
+    });
     // Exactly one lookup: the speculative one was correct and got reused.
     expect(lookups).toEqual(["user-real"]);
   });
