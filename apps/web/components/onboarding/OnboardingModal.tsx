@@ -51,7 +51,15 @@ export function OnboardingModal() {
         fetch(`${BACKEND_URL}/account/profile`, {
           method: "POST",
           headers: { "Content-Type": "application/json", Authorization: `Bearer ${session.access_token}` },
-          body: JSON.stringify({ fullName: fullName.trim(), dateOfBirth }),
+          body: JSON.stringify({
+            fullName: fullName.trim(),
+            dateOfBirth,
+            // Best-effort: an unrecognized/unavailable value is just
+            // dropped server-side (see handlers/account.ts's
+            // isValidIanaTimezone) — never something worth failing this
+            // step over.
+            timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+          }),
         }),
         SUBMIT_TIMEOUT_MS,
       );
