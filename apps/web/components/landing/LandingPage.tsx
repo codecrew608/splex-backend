@@ -78,7 +78,7 @@ const PLANS = [
   },
   {
     name: "Starter",
-    price: "₹199",
+    price: "₹299",
     period: "/mo",
     features: [
       "Everything in Free, plus:",

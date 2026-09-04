@@ -97,7 +97,7 @@ export default async function UpgradePage() {
         />
         <PlanCard
           name="Starter"
-          price="₹199"
+          price="₹299"
           period="/mo"
           features={buildFeatures(byTier.pro, "pro")}
           isCurrent={currentTier === "pro"}

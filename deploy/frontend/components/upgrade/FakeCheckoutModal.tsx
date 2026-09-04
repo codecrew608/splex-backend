@@ -79,7 +79,7 @@ export function FakeCheckoutModal({ onClose }: FakeCheckoutModalProps) {
 
         <div className="mt-5 flex items-center justify-between rounded-lg border border-border bg-surface px-4 py-3">
           <span className="text-sm text-foreground">SPLEX Starter</span>
-          <span className="text-sm font-medium text-foreground">₹199/mo</span>
+          <span className="text-sm font-medium text-foreground">₹299/mo</span>
         </div>
 
         <div className="mt-3 flex flex-col gap-2">
@@ -93,7 +93,7 @@ export function FakeCheckoutModal({ onClose }: FakeCheckoutModalProps) {
 
         <Button onClick={handlePay} disabled={loading} className="mt-5 w-full">
           <Lock size={13} strokeWidth={1.8} />
-          {loading ? "Processing..." : "Confirm test payment — ₹199"}
+          {loading ? "Processing..." : "Confirm test payment — ₹299"}
         </Button>
       </div>
     </div>
