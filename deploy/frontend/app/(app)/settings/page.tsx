@@ -4,20 +4,18 @@ import { createClient } from "@/lib/supabase/server";
 import { SecuritySection } from "@/components/settings/SecuritySection";
 import { DangerZoneSection } from "@/components/settings/DangerZoneSection";
 import { CancelSubscriptionButton } from "@/components/settings/CancelSubscriptionButton";
-import { UsagePanel } from "@/components/sidebar/UsagePanel";
 import { MemoryEditor } from "@/components/memory/MemoryEditor";
 import { FeedbackSection } from "@/components/settings/FeedbackSection";
 import { planDisplayName } from "@/lib/planDisplay";
 import type { PlanTier } from "@/shared-types";
 
-// SPLEX credit balances (monthly/daily usage_counters vs plan_limits)
-// were previously queried and rendered directly here, with their own
-// progress bar. Removed — SPLEX credits are an internal backend metering
-// unit, never a product-facing number, regardless of whether the query
-// runs server-side (this page) or client-side. UsagePanel below still
-// shows per-capability feature usage (e.g. "3/5 images today"), which is
-// legitimate product UX and stays; it goes through the backend's own
-// GET /entitlements, never a direct plan_limits/usage_counters read.
+// No usage/quota numbers of any kind on this page (explicit product
+// decision) — not SPLEX's internal credit economics, and not even the
+// simple per-capability counts (e.g. "3/5 images today") that used to
+// render here via UsagePanel. That still exists, and still gets its data
+// from the backend-authoritative GET /entitlements, but only as a
+// numberless animated fill bar in the sidebar (components/sidebar/
+// UsagePanel.tsx) — Settings shows none of it.
 export default async function SettingsPage() {
   const supabase = await createClient();
   const {
@@ -61,11 +59,6 @@ export default async function SettingsPage() {
             <CancelSubscriptionButton />
           )}
         </div>
-      </div>
-
-      <div className="mt-4 rounded-[22px] border border-border bg-surface p-5">
-        <p className="mb-3 text-xs uppercase tracking-wide text-muted-foreground">Today&apos;s usage</p>
-        <UsagePanel bordered={false} showLabel={false} />
       </div>
 
       <div className="mt-4 rounded-[22px] border border-border bg-surface p-5">

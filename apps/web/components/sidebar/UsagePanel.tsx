@@ -1,6 +1,5 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
 import { useEntitlements } from "@/hooks/useEntitlements";
 import { cn } from "@/lib/cn";
 import type { QuotaState } from "@splex/shared-types";
@@ -22,38 +21,32 @@ interface UsagePanelProps {
   showLabel?: boolean;
 }
 
-// Flashes briefly whenever a capability's `used` count actually changes —
-// this panel previously had no visual feedback at all beyond the number
-// itself swapping instantly, which reads as "nothing happened" even when
-// a fresh, correct count just landed from the server. Purely cosmetic:
-// the number itself is always the current authoritative value regardless
-// of whether the flash fires (a missed animation is never a stale read).
+// Deliberately no digits anywhere in this row — not "used", not "limit",
+// not a percentage. Only a fill bar, whose WIDTH is what animates against
+// real usage (a CSS transition on `width`, driven straight by the
+// authoritative used/limit ratio from the server — no separate flash
+// timer needed the way the old numeric version had, since the bar moving
+// already IS the animation). This is intentionally coarser information
+// than the old "12 / 25" text: enough to see a capability filling up at a
+// glance, never enough to reverse-engineer exact request counts or
+// anything cost-shaped from it.
 function UsageRow({ quota }: { quota: QuotaState }) {
   const limit = quota.limit as number;
   const atLimit = quota.used >= limit;
-  const prevUsed = useRef(quota.used);
-  const [flash, setFlash] = useState(false);
-
-  useEffect(() => {
-    if (prevUsed.current !== quota.used) {
-      setFlash(true);
-      prevUsed.current = quota.used;
-      const t = setTimeout(() => setFlash(false), 600);
-      return () => clearTimeout(t);
-    }
-  }, [quota.used]);
+  const percent = Math.min(100, Math.max(0, (quota.used / limit) * 100));
 
   return (
-    <div className="flex items-baseline justify-between text-[11px]">
-      <span className="text-muted-foreground">{quota.label}</span>
-      <span
-        className={cn(
-          "transition-colors duration-500",
-          atLimit ? "font-medium text-danger" : flash ? "font-medium text-accent" : "text-foreground",
-        )}
-      >
-        {atLimit ? "Limit reached" : `${quota.used} / ${limit}`}
-      </span>
+    <div className="flex flex-col gap-1">
+      <div className="flex items-center justify-between text-[11px]">
+        <span className="text-muted-foreground">{quota.label}</span>
+        {atLimit && <span className="font-medium text-danger">Limit reached</span>}
+      </div>
+      <div className="h-1 w-full overflow-hidden rounded-full bg-border">
+        <div
+          className={cn("h-full rounded-full transition-[width] duration-700 ease-out", atLimit ? "bg-danger" : "bg-accent")}
+          style={{ width: `${percent}%` }}
+        />
+      </div>
     </div>
   );
 }
