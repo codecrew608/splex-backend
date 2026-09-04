@@ -6,6 +6,7 @@ import { ocrImage, ocrPdf, isIntelligenceConfigured, IntelligenceNotConfiguredEr
 import { describeError } from "../openrouter/client.js";
 import { validateOwnedStoragePath } from "../files/storagePath.js";
 import { indexFileChunks } from "../intelligence/indexFile.js";
+import { validateDeclaredFileType, scanZipSafety, DOCX_MIME } from "../files/contentSafety.js";
 import { type HandlerResult, ok, fail } from "./result.js";
 
 const fileIdSchema = z.string().uuid();
@@ -18,8 +19,6 @@ const TEXT_EXTRACT_CAP = 20_000;
 // Below this many extracted characters, a "PDF" is almost certainly a scan
 // with no embedded text layer — worth the OCR fallback.
 const SCANNED_PDF_TEXT_THRESHOLD = 30;
-
-const DOCX_MIME = "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
 
 // Server-side per-tier size ceiling, mirroring apps/web/lib/fileLimits.ts.
 //
@@ -209,6 +208,36 @@ export async function processFile(
     return fail(`File exceeds your plan's ${formatBytes(sizeLimit)} limit.`, 413);
   }
 
+  // FIX (file-type hardening — production completion pass): mime_type is
+  // 100% client-declared and, until now, was never checked against the
+  // bytes actually downloaded above. Every extraction branch below keys
+  // off file.mime_type, so a mismatch is caught once, here, before any of
+  // them run — rather than letting a relabeled upload pick which parser
+  // handles it (see contentSafety.ts's own doc comment for the full
+  // reasoning).
+  const typeCheck = validateDeclaredFileType({
+    buffer,
+    mimeType: file.mime_type,
+    looksLikeTextClaim: looksLikePlainText(file.mime_type, file.filename),
+  });
+  if (!typeCheck.ok) {
+    fastify.log.warn(
+      { fileId: file.id, claimedMimeType: file.mime_type, reason: typeCheck.reason },
+      "uploaded file content did not match its declared type — rejecting",
+    );
+    await fastify.supabaseAdmin
+      .from("files")
+      .update({ processing_status: "failed", error_message: "This file's content doesn't match its type and can't be processed." })
+      .eq("id", file.id);
+    // Deliberately not the sniffed/expected type detail — see
+    // validateOwnedStoragePath's own doc comment above for why this file
+    // is careful about what a rejection reveals; here the reason is
+    // internal diagnostic detail, not an existence leak, but there's still
+    // no product reason to teach a client what a server-side sniffer
+    // checks for.
+    return fail("This file's content doesn't match its type and can't be processed.", 422);
+  }
+
   // Record the TRUE size, measured from the downloaded object.
   //
   // size_bytes is what enforce_file_limits() sums for the storage quota, and
@@ -302,8 +331,21 @@ export async function processFile(
         }
       }
     } else if (file.mime_type === DOCX_MIME) {
-      const result = await mammoth.extractRawText({ buffer });
-      extractedText = result.value;
+      // FIX (ZIP decompression-bomb hardening — production completion
+      // pass): DOCX is a zip container, and mammoth decompresses it via a
+      // real zip library — a crafted archive with an extreme compression
+      // ratio could exhaust memory/CPU before mammoth ever returns. This
+      // reads only the archive's central directory (entry names + declared
+      // sizes, no decompression) and runs BEFORE the real, expensive parse
+      // — see contentSafety.ts's own doc comment for the exact limits.
+      const zipSafety = scanZipSafety(buffer);
+      if (!zipSafety.ok) {
+        fastify.log.warn({ fileId: file.id, reason: zipSafety.reason }, "docx failed pre-extraction zip safety scan — rejecting");
+        failReason = "This document couldn't be safely processed.";
+      } else {
+        const result = await mammoth.extractRawText({ buffer });
+        extractedText = result.value;
+      }
     } else if (looksLikePlainText(file.mime_type, file.filename)) {
       extractedText = buffer.toString("utf-8");
     } else {
