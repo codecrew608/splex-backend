@@ -20,7 +20,7 @@ import {
 } from "../../credits/checkCredits.js";
 import { computeRealCost } from "../../credits/realCost.js";
 import { consumeCredits } from "../../credits/consumeCredits.js";
-import { insertMessage } from "../../persistence/messages.js";
+import { insertMessage, updateMessageResult } from "../../persistence/messages.js";
 import { insertCortexDecision } from "../../persistence/cortexDecisions.js";
 import { planWorkflow, type PlannedStep } from "./plan.js";
 import { getWorkflowLimits } from "./limits.js";
@@ -185,6 +185,19 @@ async function executeStep(
   // priorCreditsSoFar, and double-counting there is exactly the bug this
   // parameter exists to fix.
   carriedStepCredits = 0,
+  // Set ONLY when isFinal — runSteps inserts this row (status:'streaming')
+  // BEFORE calling this function, right when the final step (the one
+  // whose output becomes a real, user-visible `messages` row) is about to
+  // run, exactly mirroring handlers/chat.ts's own upfront-insert/finalize
+  // pattern. Every exit path below that can be reached while isFinal is
+  // true finalizes THIS SAME row via updateMessageResult instead of
+  // runSteps inserting a fresh one at the end — so a client that
+  // disconnects mid-final-step (or a genuinely unexpected exception) still
+  // finds a real, durable row instead of the workflow's answer vanishing
+  // outright. Non-final steps never receive this (it stays undefined) —
+  // their output is internal, tracked only in workflow_steps, exactly as
+  // before.
+  assistantMessageId?: string,
 ): Promise<StepOutcome> {
   const { fastify, sse, user, workflowRunId, cortexVersion } = ctx;
 
@@ -195,6 +208,12 @@ async function executeStep(
   if (modelCandidates.length === 0) {
     await markStep(fastify, workflowRunId, stepIndex, { status: "failed" });
     sse.workflowStepStatus({ stepIndex, status: "failed", title: step.title });
+    if (assistantMessageId) {
+      await updateMessageResult(fastify, assistantMessageId, {
+        content: "This capability is temporarily unavailable.",
+        status: "failed",
+      }).catch(() => {});
+    }
     return { kind: "failed", reason: "This capability is temporarily unavailable." };
   }
   let model = modelCandidates[0];
@@ -208,7 +227,11 @@ async function executeStep(
   if (!gate.allowed) {
     await markStep(fastify, workflowRunId, stepIndex, { status: "failed" });
     sse.workflowStepStatus({ stepIndex, status: "failed", title: step.title });
-    return { kind: "failed", reason: await resolveCreditRejectionMessage(fastify, user.id, gateEstimate) };
+    const rejectionMessage = await resolveCreditRejectionMessage(fastify, user.id, gateEstimate);
+    if (assistantMessageId) {
+      await updateMessageResult(fastify, assistantMessageId, { content: rejectionMessage, status: "failed" }).catch(() => {});
+    }
+    return { kind: "failed", reason: rejectionMessage };
   }
 
   // Set to the real charged amount only once this step's generation
@@ -350,76 +373,126 @@ async function executeStep(
   // still safe here: a retryable failure is always thrown from
   // streamCompletion's initial response.ok check, before onToken has ever
   // fired, so no partial tokens have reached the client yet.
-  let generation;
+  //
+  // The whole final-step body from here on is wrapped in its own
+  // try/catch (below) so that ANY exception — not just the ones already
+  // anticipated inline (generation call failure, aborted/empty output) —
+  // still finalizes assistantMessageId as 'failed' rather than letting it
+  // propagate up through runSteps/startWorkflow/resumeWorkflow unfinalized
+  // (chat.ts's own outer catch only knows about ITS OWN assistantMessageId
+  // variable, which is never set on the workflow path — see runChat's
+  // doc comment at its insert site).
   try {
-    ({ model, result: generation } = await runWithModelFallback(fastify, modelCandidates, step.category, (m) =>
-      streamCompletion({
-        fastify,
-        model: m.openrouter_model_id,
-        messages: [
-          { role: "system", content: ctx.systemPromptText },
-          { role: "user", content: userContent },
-        ],
-        signal: ctx.abortSignal,
-        onToken: (delta) => sse.token({ delta }),
-        // "complex" floor, not step's own complexity — workflow steps are
-        // gated/charged at the complex band regardless (see this file's
-        // own comment above), and a workflow's final deliverable is
-        // exactly the kind of output that needs real room.
-        maxTokens: resolveMaxTokens(step.category, "complex", m),
-      }),
-    ));
-  } catch (err) {
-    fastify.log.error({ err, stepIndex }, "workflow final step generation failed");
-    await markStep(fastify, workflowRunId, stepIndex, { status: "failed" });
-    sse.workflowStepStatus({ stepIndex, status: "failed", title: step.title });
-    return {
-      kind: "failed",
-      reason: isBalanceExceededError(err)
+    let generation;
+    try {
+      ({ model, result: generation } = await runWithModelFallback(fastify, modelCandidates, step.category, (m) =>
+        streamCompletion({
+          fastify,
+          model: m.openrouter_model_id,
+          messages: [
+            { role: "system", content: ctx.systemPromptText },
+            { role: "user", content: userContent },
+          ],
+          signal: ctx.abortSignal,
+          onToken: (delta) => sse.token({ delta }),
+          // "complex" floor, not step's own complexity — workflow steps are
+          // gated/charged at the complex band regardless (see this file's
+          // own comment above), and a workflow's final deliverable is
+          // exactly the kind of output that needs real room.
+          maxTokens: resolveMaxTokens(step.category, "complex", m),
+        }),
+      ));
+    } catch (err) {
+      fastify.log.error({ err, stepIndex }, "workflow final step generation failed");
+      await markStep(fastify, workflowRunId, stepIndex, { status: "failed" });
+      sse.workflowStepStatus({ stepIndex, status: "failed", title: step.title });
+      const reason = isBalanceExceededError(err)
         ? "This AI service is temporarily unavailable. Please try again shortly."
-        : "Something went wrong running this step.",
-    };
-  }
-  const { fullText, usage, aborted } = generation;
+        : "Something went wrong running this step.";
+      if (assistantMessageId) {
+        await updateMessageResult(fastify, assistantMessageId, { content: reason, status: "failed" }).catch(() => {});
+      }
+      return { kind: "failed", reason };
+    }
+    const { fullText, usage, aborted } = generation;
 
-  if (aborted || fullText.trim().length === 0) {
-    await markStep(fastify, workflowRunId, stepIndex, { status: "failed" });
-    sse.workflowStepStatus({ stepIndex, status: "failed", title: step.title });
-    return { kind: "failed", reason: "The response was interrupted." };
-  }
+    if (aborted || fullText.trim().length === 0) {
+      await markStep(fastify, workflowRunId, stepIndex, { status: "failed" });
+      sse.workflowStepStatus({ stepIndex, status: "failed", title: step.title });
+      if (assistantMessageId) {
+        // Whatever streamed before the client disconnected (or the run was
+        // otherwise cut short) is real content the user is entitled to
+        // see — same "preserve partial content" convention as the plain
+        // single-shot chat path (handlers/chat.ts). The step's own
+        // workflow_steps status stays 'failed' either way (unchanged
+        // above) — this only concerns the separate, user-visible
+        // `messages` row.
+        const hasPartial = fullText.trim().length > 0;
+        await updateMessageResult(fastify, assistantMessageId, {
+          content: hasPartial ? fullText : "The response was interrupted.",
+          status: hasPartial ? "complete" : "failed",
+        }).catch(() => {});
+      }
+      return { kind: "failed", reason: "The response was interrupted." };
+    }
 
-  const realCost = await computeRealCost(fastify, step.category, model, usage);
-  dailyActualCost = realCost.creditsCharged;
-  await consumeCredits(fastify, {
-    userId: user.id,
-    creditCost: realCost.creditsCharged,
-    intent: `workflow_step:${step.category}`,
-    complexity: STEP_COMPLEXITY,
-    openrouterModelId: model.openrouter_model_id,
-    realCostEstimate: realCost.realCostEstimateUsd,
-    realInputTokens: realCost.inputTokens,
-    realOutputTokens: realCost.outputTokens,
-      // Daily is settled by settleDailyReservation() in the finally below —
-      // charging it here too double-counts (see skipDaily's doc comment in
-      // consumeCredits.ts; this shipped and produced an exact 2x daily
-      // overcharge in production).
-      skipDaily: true,
-  });
-  await markStep(fastify, workflowRunId, stepIndex, {
-    status: "completed",
-    output: fullText,
-    routed_model: model.openrouter_model_id,
-    credits_charged: carriedStepCredits + realCost.creditsCharged,
-    real_input_tokens: realCost.inputTokens,
-    real_output_tokens: realCost.outputTokens,
-  });
-  sse.workflowStepStatus({
-    stepIndex,
-    status: "completed",
-    title: step.title,
-    modelDisplayName: friendlyModelName(model.openrouter_model_id),
-  });
-  return { kind: "completed", output: fullText, creditsCharged: realCost.creditsCharged };
+    const realCost = await computeRealCost(fastify, step.category, model, usage);
+    dailyActualCost = realCost.creditsCharged;
+    await consumeCredits(fastify, {
+      userId: user.id,
+      creditCost: realCost.creditsCharged,
+      intent: `workflow_step:${step.category}`,
+      complexity: STEP_COMPLEXITY,
+      openrouterModelId: model.openrouter_model_id,
+      realCostEstimate: realCost.realCostEstimateUsd,
+      realInputTokens: realCost.inputTokens,
+      realOutputTokens: realCost.outputTokens,
+        // Daily is settled by settleDailyReservation() in the finally below —
+        // charging it here too double-counts (see skipDaily's doc comment in
+        // consumeCredits.ts; this shipped and produced an exact 2x daily
+        // overcharge in production).
+        skipDaily: true,
+    });
+    await markStep(fastify, workflowRunId, stepIndex, {
+      status: "completed",
+      output: fullText,
+      routed_model: model.openrouter_model_id,
+      credits_charged: carriedStepCredits + realCost.creditsCharged,
+      real_input_tokens: realCost.inputTokens,
+      real_output_tokens: realCost.outputTokens,
+    });
+    if (assistantMessageId) {
+      await updateMessageResult(fastify, assistantMessageId, {
+        content: fullText,
+        creditsCharged: carriedStepCredits + realCost.creditsCharged,
+        routedModel: model.openrouter_model_id,
+        status: "complete",
+      });
+    }
+    sse.workflowStepStatus({
+      stepIndex,
+      status: "completed",
+      title: step.title,
+      modelDisplayName: friendlyModelName(model.openrouter_model_id),
+    });
+    return { kind: "completed", output: fullText, creditsCharged: realCost.creditsCharged };
+  } catch (err) {
+    // Not one of the anticipated branches above (e.g. computeRealCost,
+    // consumeCredits, or markStep itself threw) — the step's generation
+    // may well have genuinely succeeded, but its bookkeeping didn't, so
+    // there's no trustworthy partial content to preserve here the way the
+    // aborted/empty branch does. Finalize honestly as failed rather than
+    // leaving the row at 'streaming' forever.
+    fastify.log.error({ err, stepIndex }, "workflow final step failed after generation");
+    if (assistantMessageId) {
+      await updateMessageResult(fastify, assistantMessageId, {
+        content: "Something went wrong while generating this. Please try again.",
+        status: "failed",
+      }).catch(() => {});
+    }
+    await markStep(fastify, workflowRunId, stepIndex, { status: "failed" }).catch(() => {});
+    return { kind: "failed", reason: "Something went wrong running this step." };
+  } // end of the try/catch guarding the final-step branch specifically
   } finally {
     await settleDailyReservation(fastify, user.id, gate.dailyReserved, dailyActualCost);
   }
@@ -484,7 +557,42 @@ async function runSteps(
     // Stop before spending anything further on a run someone cancelled.
     if (await isRunCancelled(fastify, workflowRunId)) return { outcome: "cancelled" };
     const isFinal = i === steps.length - 1;
-    const result = await executeStep(ctx, step, i, isFinal, priorOutputs, i === startIndex ? carriedStepCredits : 0);
+
+    // FIX (durable persistence for workflows — same "insert at the end"
+    // class of bug already fixed for plain chat/media/web-search/deep-
+    // research): the final step's output is the only step output that
+    // becomes a real, user-visible `messages` row (see this function's own
+    // doc comment above) — previously that row was only ever inserted
+    // AFTER executeStep had already fully succeeded, with the complete
+    // content already known. A client that disconnected while the final
+    // step was still streaming (or a genuinely unexpected exception during
+    // its bookkeeping) left nothing durable for that turn at all. Inserted
+    // here, immediately before the final step's generation begins, and
+    // finalized by executeStep itself on every exit path (success, failed
+    // generation, aborted/empty, or an unanticipated exception) — see its
+    // assistantMessageId parameter. Non-final steps never get one; their
+    // output stays internal to workflow_steps, exactly as before.
+    let finalAssistantMessageId: string | undefined;
+    if (isFinal) {
+      finalAssistantMessageId = await insertMessage(fastify, {
+        conversationId,
+        role: "assistant",
+        content: "",
+        intent: "workflow",
+        complexity: STEP_COMPLEXITY,
+        status: "streaming",
+      });
+    }
+
+    const result = await executeStep(
+      ctx,
+      step,
+      i,
+      isFinal,
+      priorOutputs,
+      i === startIndex ? carriedStepCredits : 0,
+      finalAssistantMessageId,
+    );
 
     if (result.kind === "needs_clarification") {
       await fastify.supabaseAdmin
@@ -514,14 +622,18 @@ async function runSteps(
     priorOutputs.push({ title: step.title, output: result.output });
 
     if (isFinal) {
-      const assistantMessageId = await insertMessage(fastify, {
-        conversationId,
-        role: "assistant",
+      // finalAssistantMessageId is guaranteed set here — it was inserted
+      // right above, before this same step's executeStep call, and
+      // executeStep's own success path already finalized its
+      // content/status. What it could NOT know is this run's cumulative
+      // cost across every step (it only sees this one step's own charge)
+      // — patch the displayed number up to the true total now that
+      // runSteps knows it, without touching content or status again.
+      const assistantMessageId = finalAssistantMessageId as string;
+      await updateMessageResult(fastify, assistantMessageId, {
         content: result.output,
-        intent: "workflow",
-        complexity: STEP_COMPLEXITY,
         creditsCharged: totalCredits,
-        routedModel: undefined,
+        status: "complete",
       });
       await insertCortexDecision(fastify, {
         messageId: assistantMessageId,

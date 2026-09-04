@@ -320,7 +320,16 @@ describe("displayed charge integrity: what the user is shown equals what they we
     expect(message.credits_charged).toBe(state.monthlyUsed);
   });
 
-  it("a FAILED workflow displays no charge at all — it inserts no assistant message", async () => {
+  it("a FAILED final step still gets a durable, honestly-failed assistant message — not silently dropped", async () => {
+    // FIX (workflow message durability): this test used to assert "no
+    // assistant message exists" on a failed final step — that WAS the
+    // "insert at the end" bug (see orchestrator.ts's runSteps doc comment):
+    // a client that disconnected, or a step that failed outright, left
+    // nothing durable at all. The placeholder is now inserted before the
+    // final step (Step B here) ever runs, and executeStep finalizes it to
+    // 'failed' with an honest message the instant the step fails — same
+    // "the database is the source of truth" guarantee plain chat already
+    // has.
     const state = makeState({ planTier: "pro", dailyLimit: 5000, monthlyLimit: 15000, planLimits: { workflow_steps: 10, workflow_cost: 40000 } });
     const fastify = makeFastify(state);
     const sse = makeFakeSSE();
@@ -339,11 +348,14 @@ describe("displayed charge integrity: what the user is shown equals what they we
       message: "two things", contextBlock: "", systemPromptText: "sys", abortSignal: abortSignal(),
     });
 
-    // Step A really did cost credits and the pools reflect that honestly —
-    // but no assistant message exists, so there is no displayed number that
-    // could misstate it. The failure surfaces as an SSE error instead.
+    // Step A really did cost credits and the pools reflect that honestly.
     expect(state.dailyUsed).toBe(STEP_COST);
-    expect(state.messages.size).toBe(0);
+    expect(state.messages.size).toBe(1);
+    const message = [...state.messages.values()][0];
+    expect(message.status).toBe("failed");
+    expect(message.content).toBe("This capability is temporarily unavailable.");
+    // Never a fabricated charge on a failed row.
+    expect(message.credits_charged).toBeNull();
     expect(sse.events.some((e) => e.type === "error")).toBe(true);
     expect([...state.workflowRuns.values()][0].status).toBe("failed");
   });
@@ -500,6 +512,13 @@ describe("scenario 3: zero live candidates -> zero credit charge", () => {
     expect([...state.workflowRuns.values()][0].status).toBe("failed");
     expect([...state.workflowSteps.values()][0].status).toBe("failed");
     expect(sse.events.some((e) => e.type === "error")).toBe(true);
+    // This single step IS the final step -- its placeholder message still
+    // gets a durable, honest 'failed' finalization, even though nothing
+    // was ever generated (no candidates at all).
+    expect(state.messages.size).toBe(1);
+    const message = [...state.messages.values()][0];
+    expect(message.status).toBe("failed");
+    expect(message.credits_charged).toBeNull();
   });
 
   it("3b: the cleanest form -- resuming straight into a no-candidates step calls zero credit RPCs at all", async () => {
@@ -529,6 +548,10 @@ describe("scenario 3: zero live candidates -> zero credit charge", () => {
     expect(state.monthlyUsed).toBe(0);
     expect(state.workflowSteps.get(`${runId}:0`)!.status).toBe("failed");
     expect(state.workflowRuns.get(runId)!.status).toBe("failed");
+    // Same durability guarantee on the resume path: the retried step is
+    // still the run's only (and therefore final) step.
+    expect(state.messages.size).toBe(1);
+    expect([...state.messages.values()][0].status).toBe("failed");
   });
 
   it("3c: an earlier step's legitimate charge survives a later step having no candidates", async () => {
@@ -735,5 +758,81 @@ describe("scenario 5: the atomic-claim race in resumeWorkflow", () => {
     // No assistant message: the run never reached a final step.
     expect(state.messages.size).toBe(0);
     expect([...state.workflowRuns.values()][0].status).toBe("cancelled");
+  });
+});
+
+describe("scenario 6: final-step message durability (upfront placeholder, finalized on every exit)", () => {
+  it("6a: a successful final step's row is inserted BEFORE generation and finalized in place — not a fresh insert at the end", async () => {
+    const state = makeState({ planTier: "pro", dailyLimit: 750, monthlyLimit: 15000, planLimits: { workflow_steps: 10, workflow_cost: 40000 } });
+    const fastify = makeFastify(state);
+    const sse = makeFakeSSE();
+    vi.mocked(planWorkflow).mockResolvedValueOnce({
+      outcome: "workflow",
+      steps: [{ title: "Step A", category: "writing", detailedPrompt: "..." }],
+    });
+    vi.mocked(streamCompletion).mockResolvedValueOnce(streamResult("Final answer"));
+
+    await startWorkflow({
+      fastify, sse, user: USER, conversationId: "conv-1", userMessageId: "msg-1",
+      message: "one thing", contextBlock: "", systemPromptText: "sys", abortSignal: abortSignal(),
+    });
+
+    // Exactly one row -- never a duplicate from reaching the finalization
+    // stage (the upfront placeholder gets updated in place, never a second
+    // fresh insert).
+    expect(state.messages.size).toBe(1);
+    const message = [...state.messages.values()][0];
+    expect(message.status).toBe("complete");
+    expect(message.content).toBe("Final answer");
+    expect(message.credits_charged).toBe(STEP_COST);
+  });
+
+  it("6b: an aborted final step preserves whatever partial content streamed before the disconnect", async () => {
+    const state = makeState({ planTier: "pro", dailyLimit: 750, monthlyLimit: 15000, planLimits: { workflow_steps: 10, workflow_cost: 40000 } });
+    const fastify = makeFastify(state);
+    const sse = makeFakeSSE();
+    vi.mocked(planWorkflow).mockResolvedValueOnce({
+      outcome: "workflow",
+      steps: [{ title: "Step A", category: "writing", detailedPrompt: "..." }],
+    });
+    vi.mocked(streamCompletion).mockResolvedValueOnce({ fullText: "Partial answer before disconnect", usage: USAGE, aborted: true });
+
+    await startWorkflow({
+      fastify, sse, user: USER, conversationId: "conv-1", userMessageId: "msg-1",
+      message: "one thing", contextBlock: "", systemPromptText: "sys", abortSignal: abortSignal(),
+    });
+
+    expect(state.messages.size).toBe(1);
+    const message = [...state.messages.values()][0];
+    // Real, streamed content the user is entitled to see -- same
+    // "preserve partial content" convention as plain single-shot chat.
+    expect(message.status).toBe("complete");
+    expect(message.content).toBe("Partial answer before disconnect");
+    // Nothing was charged for an aborted step -- workflow_steps' own
+    // status stays 'failed' regardless of the messages row (unchanged
+    // step-level semantics), and no credits were ever consumed for it.
+    expect(state.workflowSteps.get(`${[...state.workflowRuns.keys()][0]}:0`)!.status).toBe("failed");
+    expect(state.dailyUsed).toBe(0);
+  });
+
+  it("6c: an aborted final step with literally nothing streamed yet finalizes honestly as failed, not a blank bubble", async () => {
+    const state = makeState({ planTier: "pro", dailyLimit: 750, monthlyLimit: 15000, planLimits: { workflow_steps: 10, workflow_cost: 40000 } });
+    const fastify = makeFastify(state);
+    const sse = makeFakeSSE();
+    vi.mocked(planWorkflow).mockResolvedValueOnce({
+      outcome: "workflow",
+      steps: [{ title: "Step A", category: "writing", detailedPrompt: "..." }],
+    });
+    vi.mocked(streamCompletion).mockResolvedValueOnce({ fullText: "", usage: USAGE, aborted: true });
+
+    await startWorkflow({
+      fastify, sse, user: USER, conversationId: "conv-1", userMessageId: "msg-1",
+      message: "one thing", contextBlock: "", systemPromptText: "sys", abortSignal: abortSignal(),
+    });
+
+    expect(state.messages.size).toBe(1);
+    const message = [...state.messages.values()][0];
+    expect(message.status).toBe("failed");
+    expect(message.content).toBe("The response was interrupted.");
   });
 });

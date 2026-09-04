@@ -401,93 +401,133 @@ export async function handleAsyncMediaGeneration(params: AsyncMediaGenerationPar
     reason: decision.reason,
   });
 
-  let model: ModelRegistryRow = candidates[0];
-  let job: AsyncMediaJob | undefined;
-  let lastError: unknown;
-  for (let i = 0; i < candidates.length; i++) {
-    model = candidates[i];
-    const startedAt = Date.now();
-    try {
-      job = await params.submit(fastify, model.openrouter_model_id, prompt);
-      // Only the *submission* succeeded — the generation itself is still
-      // running, and its real outcome/cost is recorded later by
-      // routes/media.ts when the job reaches a terminal state.
-      recordModelOutcome(fastify, model.id, "success", Date.now() - startedAt);
-      break;
-    } catch (err) {
-      lastError = err;
-      recordModelFailure(fastify, model.id, err, Date.now() - startedAt);
-      fastify.log.warn({ ...describeError(err), model: model.openrouter_model_id, kind }, "async media submit failed, trying next candidate");
-    }
-  }
-
-  if (!job) {
-    // Same pattern as handleSyncMediaGeneration's own all-candidates-failed
-    // branch above — live testing found this one skipped it, so a run of
-    // failed video submissions (e.g. an upstream account issue) left zero
-    // trace in generated_media, unlike every other capability's failure
-    // path. Doesn't change quota math either way (status='failed' rows are
-    // already excluded from quota counts) — this is purely closing an
-    // observability gap.
-    // Releases the reservation and marks the row we already created, rather
-    // than inserting a SECOND failed row as the previous code did (the
-    // reservation is attached to the existing one).
-    await settleMediaReservation(fastify, mediaId, 0);
-    await updateGeneratedMediaStatus(fastify, mediaId, {
-      status: "failed",
-      errorMessage: "submission failed on every candidate",
-    });
-    sse.error({
-      message: isBalanceExceededError(lastError)
-        ? "This AI service is temporarily unavailable. Please try again shortly."
-        : params.submitFailedMessage,
-    });
-    sse.done({ blocked: true, conversationId, userMessageId });
-    sse.end();
-    return;
-  }
-
-  sse.token({ delta: params.placeholderContent });
-
-  // 'streaming', not 'complete': this row's content is a placeholder
-  // ("Generating your video...") — handlers/media.ts's polling endpoint is
-  // what rewrites it to the real result (or a failure message) via
-  // updateMessageResult, same as before this fix, now with an accurate
-  // status alongside it.
+  // FIX (durable persistence — production completion pass, item 7's async
+  // sweep): this row used to be inserted only AFTER params.submit()
+  // succeeded, the same "insert at the end" bug already fixed for every
+  // other generation path. generated_media's own row (mediaId, above) was
+  // already upfront, but that alone doesn't help the USER — nothing linked
+  // to their conversation existed if the process died between a real
+  // (potentially billable) job submission and this insert. Created here,
+  // before submission is attempted, and finalized on every exit below —
+  // including a genuinely unexpected exception, via the try/catch that now
+  // wraps the rest of this function — instead of a caller-side outer catch
+  // ever needing to (handlers/chat.ts dispatches straight into this
+  // function and returns; it never sets its OWN assistantMessageId for the
+  // video branch, so nothing else would finalize this row otherwise — see
+  // the workflow orchestrator's identical reasoning for its own final-step
+  // message).
   const assistantMessageId = await insertMessage(fastify, {
     conversationId,
     role: "assistant",
     content: params.placeholderContent,
     intent: decision.intentId,
     complexity: decision.complexity,
-    routedModel: model.openrouter_model_id,
     status: "streaming",
   });
 
-  // The row already exists (created before the reservation above) — attach
-  // the message, polling URL and chosen model to it now that they exist.
-  await updateGeneratedMediaStatus(fastify, mediaId, {
-    status: "queued",
-    messageId: assistantMessageId,
-    providerJobId: job.pollingUrl,
-    openrouterModelId: model.openrouter_model_id,
-  });
+  try {
+    let model: ModelRegistryRow = candidates[0];
+    let job: AsyncMediaJob | undefined;
+    let lastError: unknown;
+    for (let i = 0; i < candidates.length; i++) {
+      model = candidates[i];
+      const startedAt = Date.now();
+      try {
+        job = await params.submit(fastify, model.openrouter_model_id, prompt);
+        // Only the *submission* succeeded — the generation itself is still
+        // running, and its real outcome/cost is recorded later by
+        // routes/media.ts when the job reaches a terminal state.
+        recordModelOutcome(fastify, model.id, "success", Date.now() - startedAt);
+        break;
+      } catch (err) {
+        lastError = err;
+        recordModelFailure(fastify, model.id, err, Date.now() - startedAt);
+        fastify.log.warn({ ...describeError(err), model: model.openrouter_model_id, kind }, "async media submit failed, trying next candidate");
+      }
+    }
 
-  await insertCortexDecision(fastify, {
-    messageId: assistantMessageId,
-    intent: decision.intentId,
-    complexity: decision.complexity,
-    capabilities: decision.capabilities,
-    category: decision.category,
-    reason: decision.reason,
-    modelSelected: model.openrouter_model_id,
-  });
+    if (!job) {
+      // Same pattern as handleSyncMediaGeneration's own all-candidates-failed
+      // branch above — live testing found this one skipped it, so a run of
+      // failed video submissions (e.g. an upstream account issue) left zero
+      // trace in generated_media, unlike every other capability's failure
+      // path. Doesn't change quota math either way (status='failed' rows are
+      // already excluded from quota counts) — this is purely closing an
+      // observability gap.
+      // Releases the reservation and marks the rows we already created,
+      // rather than inserting a SECOND failed row as the previous code did
+      // (the reservation is attached to the existing one).
+      await settleMediaReservation(fastify, mediaId, 0);
+      await updateGeneratedMediaStatus(fastify, mediaId, {
+        status: "failed",
+        errorMessage: "submission failed on every candidate",
+      });
+      const failMessage = isBalanceExceededError(lastError)
+        ? "This AI service is temporarily unavailable. Please try again shortly."
+        : params.submitFailedMessage;
+      await updateMessageResult(fastify, assistantMessageId, { content: failMessage, status: "failed" }).catch(() => {});
+      sse.error({ message: failMessage });
+      sse.done({ blocked: true, conversationId, userMessageId });
+      sse.end();
+      return;
+    }
 
-  sse.done({
-    messageId: assistantMessageId,
-    conversationId,
-    userMessageId,
-    pendingMediaId: mediaId ?? undefined,
-  });
-  sse.end();
+    sse.token({ delta: params.placeholderContent });
+
+    // 'streaming', not 'complete': this row's content is still just the
+    // placeholder ("Generating your video...") — handlers/media.ts's
+    // polling endpoint is what rewrites it to the real result (or a
+    // failure message) via updateMessageResult once the job actually
+    // finishes. routedModel is only known now (after the fallback loop
+    // picked a candidate), so it's attached here rather than at insert time.
+    await updateMessageResult(fastify, assistantMessageId, {
+      content: params.placeholderContent,
+      routedModel: model.openrouter_model_id,
+      status: "streaming",
+    });
+
+    // The row already exists (created before the reservation above) — attach
+    // the message, polling URL and chosen model to it now that they exist.
+    await updateGeneratedMediaStatus(fastify, mediaId, {
+      status: "queued",
+      messageId: assistantMessageId,
+      providerJobId: job.pollingUrl,
+      openrouterModelId: model.openrouter_model_id,
+    });
+
+    await insertCortexDecision(fastify, {
+      messageId: assistantMessageId,
+      intent: decision.intentId,
+      complexity: decision.complexity,
+      capabilities: decision.capabilities,
+      category: decision.category,
+      reason: decision.reason,
+      modelSelected: model.openrouter_model_id,
+    });
+
+    sse.done({
+      messageId: assistantMessageId,
+      conversationId,
+      userMessageId,
+      pendingMediaId: mediaId ?? undefined,
+    });
+    sse.end();
+  } catch (err) {
+    // Not one of the anticipated branches above — finalize honestly as
+    // failed rather than leaving the row at 'streaming' forever. The
+    // generated_media reservation is best-effort-released too; if a job
+    // genuinely was submitted before this exception, routes/media.ts's own
+    // stale-reservation sweep (releaseStaleMediaReservations, invoked at
+    // the top of this function on the NEXT request) still recovers it.
+    fastify.log.error({ err, kind }, "async media generation failed unexpectedly after the message placeholder was created");
+    await updateMessageResult(fastify, assistantMessageId, {
+      content: "Something went wrong while generating this. Please try again.",
+      status: "failed",
+    }).catch(() => {});
+    await settleMediaReservation(fastify, mediaId, 0).catch(() => {});
+    await updateGeneratedMediaStatus(fastify, mediaId, { status: "failed", errorMessage: "unexpected error" }).catch(() => {});
+    sse.error({ message: "Something went wrong. Please try again." });
+    sse.done({ blocked: true, conversationId, userMessageId });
+    sse.end();
+  }
 }

@@ -194,7 +194,11 @@ describe("durable assistant-message persistence (source-level)", () => {
   });
 
   it("handleSyncMediaGeneration (image/audio/ppt) inserts the placeholder before the provider call and finalizes on every exit", () => {
-    const src = read("routes/mediaGeneration.ts");
+    const full = read("routes/mediaGeneration.ts");
+    // Scoped to just this function's body — the file also contains
+    // handleAsyncMediaGeneration (video), which has its own separate durable-
+    // persistence pins below, and a whole-file count would conflate the two.
+    const src = full.slice(0, full.indexOf("export interface AsyncMediaJob"));
     const insertIdx = src.indexOf('content: "",\n      intent: decision.intentId,\n      complexity: decision.complexity,\n      status: "streaming",');
     expect(insertIdx).toBeGreaterThan(-1);
     const generateLoopIdx = src.indexOf("result = await params.generate(");
@@ -255,11 +259,32 @@ describe("durable assistant-message persistence (source-level)", () => {
   });
 
   it("video's placeholder message is inserted as 'streaming' and finalized to 'complete'/'failed', never left defaulting to 'complete'", () => {
-    const gen = read("routes/mediaGeneration.ts");
-    expect(gen).toContain('routedModel: model.openrouter_model_id,\n    status: "streaming",');
     const media = read("handlers/media.ts");
     expect((media.match(/content: FAILED_MESSAGE, status: "failed" \}\);/g) ?? []).length).toBe(2);
     expect(media).toContain('status: "complete"');
+  });
+
+  it("handleAsyncMediaGeneration (video's submission step) inserts the placeholder before params.submit and finalizes on every exit — closing the same 'insert at the end' gap this pass revisited", () => {
+    // FINDING (production completion pass, item 7): unlike every OTHER
+    // generation path in this file, this row used to be inserted only
+    // AFTER params.submit() succeeded — a process death (or genuinely
+    // unexpected exception) between a real job submission and that insert
+    // left a live, potentially billable provider job with nothing linking
+    // it to the user's conversation at all. generated_media's own row
+    // (mediaId) was already upfront; this closes the matching gap for the
+    // user-visible `messages` row.
+    const full = read("routes/mediaGeneration.ts");
+    const src = full.slice(full.indexOf("export async function handleAsyncMediaGeneration"));
+    const insertIdx = src.indexOf('content: params.placeholderContent,\n    intent: decision.intentId,\n    complexity: decision.complexity,\n    status: "streaming",');
+    expect(insertIdx).toBeGreaterThan(-1);
+    const submitLoopIdx = src.indexOf("job = await params.submit(");
+    expect(submitLoopIdx).toBeGreaterThan(insertIdx);
+    // no-job (all candidates failed), success (routedModel now attached
+    // post-fallback), and the catch-all — three distinct finalize sites,
+    // none of them a fresh insert.
+    expect((src.match(/updateMessageResult\(fastify, assistantMessageId,/g) ?? []).length).toBe(3);
+    // The old insert-at-the-end call site must be gone from this function.
+    expect(src).not.toMatch(/insertMessage\(fastify, \{\s*conversationId,\s*role: "assistant",\s*content: params\.placeholderContent,\s*intent: decision\.intentId,\s*complexity: decision\.complexity,\s*routedModel:/);
   });
 
   it("updateMessageResult never silently nulls credits_charged/routed_model when a caller omits them", () => {
@@ -269,6 +294,41 @@ describe("durable assistant-message persistence (source-level)", () => {
     const src = read("persistence/messages.ts");
     expect(src).toContain("if (params.creditsCharged !== undefined) update.credits_charged = params.creditsCharged;");
     expect(src).toContain("if (params.routedModel !== undefined) update.routed_model = params.routedModel;");
+  });
+
+  it("the workflow orchestrator's final step inserts the placeholder before it runs and finalizes the SAME row on every exit — no more insert-at-the-end", () => {
+    // FINDING (final production completion pass): a workflow's final step
+    // is the only step whose output becomes a real, user-visible `messages`
+    // row (earlier steps stay internal to workflow_steps) — but that row
+    // used to be inserted by runSteps only AFTER executeStep had already
+    // fully succeeded, the exact same "insert at the end" bug already fixed
+    // everywhere else in this describe block. workflow.test.ts's behavioral
+    // scenario 6 (plus the updated FAILED-workflow case in its "displayed
+    // charge integrity" block) proves this against the fake; these pins
+    // assert the shape exists in source for the one exit path the fake
+    // can't easily trigger (a genuinely unexpected exception after
+    // generation succeeds, e.g. computeRealCost/consumeCredits throwing).
+    const src = read("cortex/workflow/orchestrator.ts");
+    const insertIdx = src.indexOf('finalAssistantMessageId = await insertMessage(fastify, {');
+    expect(insertIdx).toBeGreaterThan(-1);
+    const executeStepCallIdx = src.indexOf("const result = await executeStep(");
+    expect(executeStepCallIdx).toBeGreaterThan(insertIdx);
+    // executeStep finalizes THIS SAME row (via its assistantMessageId
+    // parameter) on: no-candidates, credit-gate-rejected, generation
+    // error, aborted/empty, success, and the catch-all for anything else
+    // (six sites) — plus runSteps' own follow-up patch of the cumulative
+    // total once every step's cost is known (one more) — seven distinct
+    // call sites total, none of them a fresh insert.
+    expect((src.match(/updateMessageResult\(fastify, assistantMessageId,/g) ?? []).length).toBe(7);
+    // The catch-all specifically — the one exit path with no anticipated
+    // inline handling — must still finalize as failed rather than leaving
+    // the row at 'streaming' forever.
+    const finalBranchCatchIdx = src.indexOf('fastify.log.error({ err, stepIndex }, "workflow final step failed after generation");');
+    expect(finalBranchCatchIdx).toBeGreaterThan(-1);
+    expect(src.indexOf('status: "failed",', finalBranchCatchIdx)).toBeGreaterThan(finalBranchCatchIdx);
+    // The old insert-at-the-end call site (fresh insertMessage with the
+    // final content already known) must be gone from runSteps.
+    expect(src).not.toMatch(/insertMessage\(fastify, \{\s*conversationId,\s*role: "assistant",\s*content: result\.output/);
   });
 });
 
