@@ -17,15 +17,20 @@ import type { FastifyInstance } from "fastify";
 // two, so filtering on it here is the precise fix: real projects still give
 // the model genuine situational awareness, and synthetic containers
 // contribute nothing rather than inventing a topic out of a greeting.
-export async function buildProjectContext(fastify: FastifyInstance, conversationId: string): Promise<string | null> {
+export interface ProjectContext {
+  projectId: string;
+  title: string;
+}
+
+export async function buildProjectContext(fastify: FastifyInstance, conversationId: string): Promise<ProjectContext | null> {
   const { data, error } = await fastify.supabaseAdmin
     .from("conversations")
-    .select("projects!inner(title, is_implicit)")
+    .select("projects!inner(id, title, is_implicit)")
     .eq("id", conversationId)
     .maybeSingle();
 
   if (error || !data) return null;
-  const project = data.projects as unknown as { title: string; is_implicit: boolean } | null;
+  const project = data.projects as unknown as { id: string; title: string; is_implicit: boolean } | null;
   if (!project || project.is_implicit) return null;
-  return project.title ?? null;
+  return { projectId: project.id, title: project.title ?? "" };
 }

@@ -38,17 +38,30 @@ function fileContextBlock(fileContext: string | null): string {
 // whose first message was "hi" get told they were working on a "hi
 // project". Genuine projects still land here and still give the model
 // situational awareness without the user restating it every message.
-function projectContextBlock(projectContext: string | null): string {
-  if (!projectContext || projectContext.trim().length === 0) return "";
-  return `\n\nThe user is working within a project called "${projectContext.trim()}". Use this as context for what they're likely trying to accomplish, but don't mention the project name unprompted.`;
+function projectContextBlock(projectTitle: string | null): string {
+  if (!projectTitle || projectTitle.trim().length === 0) return "";
+  return `\n\nThe user is working within a project called "${projectTitle.trim()}". Use this as context for what they're likely trying to accomplish, but don't mention the project name unprompted.`;
+}
+
+// Same "answer directly from it" framing as memoryBlock, scoped to the
+// project rather than the user — carried across every chat WITHIN this
+// same project (see memory/extractMemory.ts's project-scoped extraction),
+// never across a different project or a standalone chat. Only ever
+// non-empty alongside projectContextBlock (both come from the same real,
+// non-implicit project — see buildProjectContext's own doc comment for
+// why implicit containers are filtered out before either is built).
+function projectMemoryBlock(projectMemorySummary: string | null): string {
+  if (!projectMemorySummary || projectMemorySummary.trim().length === 0) return "";
+  return `\n\nWhat's been established so far in this project, carried over from its other chats (use it naturally; don't recite it back or mention "memory" unless asked):\n${projectMemorySummary.trim()}`;
 }
 
 export function buildSystemPrompt(
   memorySummary: string | null,
   fileContext: string | null = null,
-  projectContext: string | null = null,
+  projectTitle: string | null = null,
+  projectMemorySummary: string | null = null,
 ): string {
-  return `${PERSONA}${memoryBlock(memorySummary)}${fileContextBlock(fileContext)}${projectContextBlock(projectContext)}`;
+  return `${PERSONA}${memoryBlock(memorySummary)}${fileContextBlock(fileContext)}${projectContextBlock(projectTitle)}${projectMemoryBlock(projectMemorySummary)}`;
 }
 
 // Kept for any call site that hasn't been threaded through with a memory

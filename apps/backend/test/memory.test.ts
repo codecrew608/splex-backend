@@ -1,5 +1,11 @@
 import { describe, it, expect } from "vitest";
-import { shouldExtractMemory, looksLikeSecret } from "../src/memory/extractMemory.js";
+import {
+  shouldExtractMemory,
+  looksLikeSecret,
+  parseFactUpserts,
+  parseFactDeletes,
+  buildProjectMemorySummary,
+} from "../src/memory/extractMemory.js";
 
 describe("shouldExtractMemory — the gate deciding whether to spend an LLM call on this turn", () => {
   it("fires on an explicit 'remember' request", () => {
@@ -53,5 +59,56 @@ describe("looksLikeSecret — defense-in-depth backstop against the model extrac
     expect(looksLikeSecret("Prefers concise answers.")).toBe(false);
     expect(looksLikeSecret("The user's name is Alex.")).toBe(false);
     expect(looksLikeSecret("Is building SPLEX, an AI chat product.")).toBe(false);
+  });
+});
+
+// parseFactUpserts/parseFactDeletes are the shared validation used for
+// BOTH user facts and project facts (memory/extractMemory.ts) — a gap
+// here is a gap in the project-memory feature's defense-in-depth too, not
+// just the original per-user one.
+describe("parseFactUpserts — shared upsert validation for user and project facts", () => {
+  it("drops entries missing a non-empty key or fact", () => {
+    const result = parseFactUpserts([{ key: "name", fact: "Alex" }, { key: "", fact: "x" }, { key: "y" }, { fact: "z" }, {}]);
+    expect(result).toEqual([{ key: "name", fact: "Alex" }]);
+  });
+
+  it("drops a fact that looks like a secret even if the model labeled it as a real fact", () => {
+    const result = parseFactUpserts([{ key: "api", fact: "Uses API key sk-proj-abcdefghijklmnopqrstuvwxyz123456" }]);
+    expect(result).toEqual([]);
+  });
+
+  it("caps at 5 — a single exchange producing more is treated as a runaway response, not a memory dump", () => {
+    const many = Array.from({ length: 8 }, (_, i) => ({ key: `k${i}`, fact: `fact ${i}` }));
+    expect(parseFactUpserts(many)).toHaveLength(5);
+  });
+
+  it("returns [] for non-array input rather than throwing", () => {
+    expect(parseFactUpserts(undefined)).toEqual([]);
+    expect(parseFactUpserts(null)).toEqual([]);
+    expect(parseFactUpserts("not an array")).toEqual([]);
+  });
+});
+
+describe("parseFactDeletes", () => {
+  it("keeps only non-empty strings", () => {
+    expect(parseFactDeletes(["name", "", "  ", 5, null, "job"])).toEqual(["name", "job"]);
+  });
+
+  it("returns [] for non-array input rather than throwing", () => {
+    expect(parseFactDeletes(undefined)).toEqual([]);
+  });
+});
+
+describe("buildProjectMemorySummary — the block injected into every chat within the same project", () => {
+  it("joins facts as bullet lines", () => {
+    const summary = buildProjectMemorySummary([
+      { fact_key: "goal", fact: "Ship the Q3 marketing site redesign." },
+      { fact_key: "constraint", fact: "Must support IE11." },
+    ]);
+    expect(summary).toBe("- Ship the Q3 marketing site redesign.\n- Must support IE11.");
+  });
+
+  it("returns an empty string for no facts, which systemPrompt.ts treats as \"omit this block\"", () => {
+    expect(buildProjectMemorySummary([])).toBe("");
   });
 });

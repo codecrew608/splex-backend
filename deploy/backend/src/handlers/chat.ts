@@ -23,7 +23,15 @@ import {
   friendlyModelName,
   explainModelSelection,
 } from "../cortex/index.js";
-import { shouldExtractMemory, extractAndUpdateMemory, fetchMemoryFacts, buildMemorySummary } from "../memory/extractMemory.js";
+import {
+  shouldExtractMemory,
+  extractAndUpdateMemory,
+  fetchMemoryFacts,
+  buildMemorySummary,
+  fetchProjectMemoryFacts,
+  buildProjectMemorySummary,
+  type ProjectMemoryContext,
+} from "../memory/extractMemory.js";
 import { checkAndReserveCredits, settleDailyReservation, resolveCreditRejectionMessage } from "../credits/checkCredits.js";
 import { consumeCredits } from "../credits/consumeCredits.js";
 import { resolveCreditGateEstimate } from "../credits/costBand.js";
@@ -212,15 +220,25 @@ export async function runChat(
     const memoryEnabled = profileRow?.memory_enabled !== false;
     const memoryFacts = memoryEnabled ? rawMemoryFacts : [];
     const memorySummary = memoryEnabled ? await buildMemorySummary(fastify, user.id, profileRow?.full_name ?? null, memoryFacts) : "";
+
+    // Project memory (see memory/extractMemory.ts) reuses the same
+    // memoryEnabled toggle as the user profile above — one switch for
+    // "use/extract remembered context at all", not two independent ones a
+    // user would have to understand separately.
+    const projectMemoryFacts =
+      memoryEnabled && projectContext ? await fetchProjectMemoryFacts(fastify, projectContext.projectId) : [];
+    const projectMemorySummary = buildProjectMemorySummary(projectMemoryFacts);
+
     // let, not const: reasoningVerificationBlock is appended below, once
     // decision.category is known — buildSystemPrompt itself runs here,
     // in parallel WITH classification (see classificationPromise's own
     // comment above), before that's available.
-    let systemPromptText = buildSystemPrompt(memorySummary, fileContext, projectContext);
+    let systemPromptText = buildSystemPrompt(memorySummary, fileContext, projectContext?.title ?? null, projectMemorySummary);
     const contextBlock = [
       memorySummary ? `What you remember about this user:\n${memorySummary}` : "",
       fileContext ? `Relevant file excerpts:\n${fileContext}` : "",
-      projectContext ? `Project: ${projectContext}` : "",
+      projectContext ? `Project: ${projectContext.title}` : "",
+      projectMemorySummary ? `What's been established in this project:\n${projectMemorySummary}` : "",
     ]
       .filter(Boolean)
       .join("\n\n");
@@ -607,7 +625,10 @@ export async function runChat(
       // has already been streamed and ended above, so this adds no latency
       // to what they see, and extractAndUpdateMemory swallows its own
       // errors.
-      scheduleBackground(extractAndUpdateMemory(fastify, user.id, user.planTier, classifierInputMessage, fullText));
+      const projectMemoryContext: ProjectMemoryContext | undefined = projectContext
+        ? { projectId: projectContext.projectId, title: projectContext.title, existingFacts: projectMemoryFacts }
+        : undefined;
+      scheduleBackground(extractAndUpdateMemory(fastify, user.id, user.planTier, classifierInputMessage, fullText, projectMemoryContext));
     }
     } finally {
       // Fires on every exit from the try above — see routes/chat.ts's

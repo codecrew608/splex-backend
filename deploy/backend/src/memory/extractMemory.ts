@@ -77,9 +77,27 @@ Respond with ONLY a JSON object, no prose, no markdown fences:
 
 Both arrays may be empty. "fact" should be a short, third-person, factual sentence (e.g. "Prefers concise answers." not "I like short answers").`;
 
+// Extends EXTRACT_SYSTEM_PROMPT with a second, PROJECT-scoped profile —
+// only used when this conversation belongs to a real, user-created project
+// (see cortex/userContext.ts's buildProjectContext). Facts here are about
+// the PROJECT itself (its goal, decisions made, constraints, terminology
+// specific to it), carried across every chat within that same project —
+// never across a different project or a standalone chat — distinct from
+// the user profile above, which follows the user everywhere.
+const EXTRACT_SYSTEM_PROMPT_WITH_PROJECT = `${EXTRACT_SYSTEM_PROMPT}
+
+You ALSO maintain a separate structured memory profile for the PROJECT this conversation belongs to (named "{{PROJECT_TITLE}}") — durable facts about the project itself, not the user: its goal or scope, decisions already made, constraints or requirements it operates under, and terminology/names specific to it. These are shared across every chat within this same project, so extract only what would genuinely help someone picking up a DIFFERENT chat in this same project cold — not conversational trivia or a one-off task detail from just this exchange. Same rules as the user profile above: explicit and durable only, short stable snake_case keys, upsert-by-key, real deletes for "forget"/"no longer applies", never a secret or credential.
+
+Respond with ONLY a JSON object, no prose, no markdown fences:
+{"upserts": [{"key": string, "fact": string}], "deletes": [string], "projectUpserts": [{"key": string, "fact": string}], "projectDeletes": [string]}
+
+All four arrays may be empty.`;
+
 interface ExtractedMemory {
   upserts?: Array<{ key?: unknown; fact?: unknown }>;
   deletes?: unknown;
+  projectUpserts?: Array<{ key?: unknown; fact?: unknown }>;
+  projectDeletes?: unknown;
 }
 
 export interface MemoryFact {
@@ -130,15 +148,60 @@ export async function buildMemorySummary(fastify: FastifyInstance, userId: strin
   return lines.join("\n");
 }
 
+// Project-scoped equivalent of fetchMemoryFacts above — same shape, same
+// service-role-scoped-by-id read, different table.
+export async function fetchProjectMemoryFacts(fastify: FastifyInstance, projectId: string): Promise<MemoryFact[]> {
+  const { data, error } = await fastify.supabaseAdmin.from("project_memories").select("fact_key, fact").eq("project_id", projectId);
+  if (error || !data) return [];
+  return data as MemoryFact[];
+}
+
+// No fullName/legacy-blob concerns here (those are user-specific) — just
+// the facts themselves, or "" when there are none yet (projectMemoryBlock
+// in systemPrompt.ts already treats an empty string as "omit this block").
+export function buildProjectMemorySummary(facts: MemoryFact[]): string {
+  return facts.map((f) => `- ${f.fact}`).join("\n");
+}
+
+// Shared validation for both upserts and projectUpserts below — same
+// rules either way, so the exact same defense-in-depth applies to a
+// project fact as to a user fact rather than trusting the prompt alone
+// twice over. Exported for direct unit testing (test/memory.test.ts),
+// same rationale as looksLikeSecret below: this is the actual defense,
+// not just a source-text pin.
+export function parseFactUpserts(raw: unknown): Array<{ key: string; fact: string }> {
+  return (Array.isArray(raw) ? raw : [])
+    .filter(
+      (u): u is { key: string; fact: string } =>
+        typeof u?.key === "string" && u.key.trim().length > 0 && typeof u?.fact === "string" && u.fact.trim().length > 0,
+    )
+    .filter((u) => !looksLikeSecret(u.fact))
+    .slice(0, 5); // one exchange should never plausibly produce more than a few real facts — a runaway response is a bug, not a memory dump
+}
+
+export function parseFactDeletes(raw: unknown): string[] {
+  return (Array.isArray(raw) ? raw : []).filter((k): k is string => typeof k === "string" && k.trim().length > 0);
+}
+
+export interface ProjectMemoryContext {
+  projectId: string;
+  title: string;
+  existingFacts: MemoryFact[];
+}
+
 // Fire-and-forget from the caller (never awaited on the response path) —
 // this must never add latency to what the user sees, and a failure here
-// should never surface as a chat error.
+// should never surface as a chat error. projectMemory is present only when
+// this conversation belongs to a real, user-created project (see
+// buildProjectContext) — a standalone chat extracts user facts exactly as
+// before, unchanged.
 export async function extractAndUpdateMemory(
   fastify: FastifyInstance,
   userId: string,
   planTier: PlanTier,
   userMessage: string,
   assistantResponse: string,
+  projectMemory?: ProjectMemoryContext,
 ): Promise<void> {
   try {
     const { data: existingRows } = await fastify.supabaseAdmin
@@ -150,6 +213,12 @@ export async function extractAndUpdateMemory(
       existingRows && existingRows.length > 0
         ? existingRows.map((r: { fact_key: string; fact: string }) => `${r.fact_key}: ${r.fact}`).join("\n")
         : "(none yet)";
+
+    const projectExistingBlock = projectMemory
+      ? projectMemory.existingFacts.length > 0
+        ? projectMemory.existingFacts.map((f) => `${f.fact_key}: ${f.fact}`).join("\n")
+        : "(none yet)"
+      : null;
 
     // Tier-aware — memory upkeep for a Free user must not bill the paid
     // account (see resolveClassifierModelCandidates). An empty list means
@@ -167,15 +236,19 @@ export async function extractAndUpdateMemory(
     const memoryModelCandidates = await resolveClassifierModelCandidates(fastify, planTier);
     if (memoryModelCandidates.length === 0) return;
 
+    const systemPrompt = projectMemory
+      ? EXTRACT_SYSTEM_PROMPT_WITH_PROJECT.replace("{{PROJECT_TITLE}}", projectMemory.title)
+      : EXTRACT_SYSTEM_PROMPT;
+    const userContent = projectMemory
+      ? `Existing user facts:\n${existingBlock}\n\nExisting project facts:\n${projectExistingBlock}\n\nNew exchange:\nUser: ${userMessage.slice(0, 2000)}\nAssistant: ${assistantResponse.slice(0, 2000)}`
+      : `Existing facts:\n${existingBlock}\n\nNew exchange:\nUser: ${userMessage.slice(0, 2000)}\nAssistant: ${assistantResponse.slice(0, 2000)}`;
+
     const { content: raw } = await completeOnceWithFallback(fastify, memoryModelCandidates, {
       messages: [
-        { role: "system", content: EXTRACT_SYSTEM_PROMPT },
-        {
-          role: "user",
-          content: `Existing facts:\n${existingBlock}\n\nNew exchange:\nUser: ${userMessage.slice(0, 2000)}\nAssistant: ${assistantResponse.slice(0, 2000)}`,
-        },
+        { role: "system", content: systemPrompt },
+        { role: "user", content: userContent },
       ],
-      maxTokens: 500,
+      maxTokens: projectMemory ? 800 : 500, // extended schema needs more room for two profiles' worth of output
     });
 
     const jsonMatch = raw.match(/\{[\s\S]*\}/);
@@ -183,16 +256,33 @@ export async function extractAndUpdateMemory(
 
     const parsed = JSON.parse(jsonMatch[0]) as ExtractedMemory;
 
-    const upserts = (Array.isArray(parsed.upserts) ? parsed.upserts : [])
-      .filter((u): u is { key: string; fact: string } => typeof u?.key === "string" && u.key.trim().length > 0 && typeof u?.fact === "string" && u.fact.trim().length > 0)
-      // Defense in depth alongside the prompt's own instruction — a model
-      // that ignores instructions once can ignore them twice. Never
-      // persist anything that looks like a secret/credential regardless
-      // of what the model decided to label it.
-      .filter((u) => !looksLikeSecret(u.fact))
-      .slice(0, 5); // one exchange should never plausibly produce more than a few real facts — a runaway response is a bug, not a memory dump
+    const upserts = parseFactUpserts(parsed.upserts);
+    const deletes = parseFactDeletes(parsed.deletes);
+    const projectUpserts = projectMemory ? parseFactUpserts(parsed.projectUpserts) : [];
+    const projectDeletes = projectMemory ? parseFactDeletes(parsed.projectDeletes) : [];
 
-    const deletes = (Array.isArray(parsed.deletes) ? parsed.deletes : []).filter((k): k is string => typeof k === "string" && k.trim().length > 0);
+    if (projectMemory && (projectUpserts.length > 0 || projectDeletes.length > 0)) {
+      // Same invariant as user_memories: the model never writes directly,
+      // this function (server only, service_role) is the sole write path.
+      if (projectUpserts.length > 0) {
+        await fastify.supabaseAdmin.from("project_memories").upsert(
+          projectUpserts.map((u) => ({
+            project_id: projectMemory.projectId,
+            fact_key: u.key.trim().slice(0, 100),
+            fact: u.fact.trim().slice(0, 500),
+            updated_at: new Date().toISOString(),
+          })),
+          { onConflict: "project_id,fact_key" },
+        );
+      }
+      if (projectDeletes.length > 0) {
+        await fastify.supabaseAdmin
+          .from("project_memories")
+          .delete()
+          .eq("project_id", projectMemory.projectId)
+          .in("fact_key", projectDeletes.slice(0, 20));
+      }
+    }
 
     if (upserts.length === 0 && deletes.length === 0) return;
 
