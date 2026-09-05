@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { ChevronLeft, Settings, Moon, Sun, LogOut, Sparkles } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
+import { BACKEND_URL } from "@/lib/backendUrl";
 import { useSidebarStore } from "@/state/sidebarStore";
 import { useThemeStore } from "@/state/themeStore";
 import { useUserPlanTier } from "@/hooks/useUserPlanTier";
@@ -56,6 +57,44 @@ export function Sidebar({ email }: SidebarProps) {
     // Runs once on mount only — deliberately not re-subscribing on every
     // setIsMobile/setOpen identity change (those are stable zustand setters).
     // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Region-aware credit/usage reset (migration 0044) needs a real
+  // users.timezone value. OnboardingModal.tsx already captures this for
+  // brand-new signups; this covers everyone who completed onboarding
+  // before that existed (or moved timezones since). Sidebar is mounted
+  // exactly once per authenticated app-shell session (app/(app)/layout.tsx
+  // doesn't remount it on client-side navigation), so a sessionStorage
+  // guard is enough to keep this to one best-effort call per browser tab
+  // session rather than one per page. Deliberately fire-and-forget: never
+  // blocks rendering, never surfaces an error to the user — see
+  // syncTimezone's own comment for why a failure here is silently fine.
+  useEffect(() => {
+    const FLAG = "splex:tz-synced";
+    if (typeof window === "undefined" || sessionStorage.getItem(FLAG)) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const supabase = createClient();
+        const {
+          data: { session },
+        } = await supabase.auth.getSession();
+        if (cancelled || !session) return;
+        await fetch(`${BACKEND_URL}/account/timezone`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json", Authorization: `Bearer ${session.access_token}` },
+          body: JSON.stringify({ timezone: Intl.DateTimeFormat().resolvedOptions().timeZone }),
+        });
+      } catch {
+        // Best-effort — next session tries again (flag is per-tab-session,
+        // not persisted), nothing here should ever affect the visible UI.
+      } finally {
+        if (!cancelled) sessionStorage.setItem(FLAG, "1");
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   async function handleSignOut() {

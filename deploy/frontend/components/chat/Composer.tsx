@@ -86,6 +86,36 @@ function resolveRecognitionLang(): string {
 // is why the mic used to silently switch itself off mid-thought.
 const TRANSIENT_RECOGNITION_ERRORS = new Set(["no-speech", "aborted", "network"]);
 
+// FIX (user-reported, 2026-09-04): "the mic thing is not working properly."
+// The transient/fatal split above was already correct, but neither path
+// told the user anything — a fatal error (mic permission blocked, no
+// microphone) just silently turned the button back off with zero
+// explanation, which reads exactly like "broken" from the outside. And a
+// TRANSIENT error that never actually clears (e.g. a flaky network only
+// ever produces "network" errors, one after another) restarted forever
+// with no cap — the button stayed lit as if it were listening while
+// nothing was ever transcribed. Both are fixed below: every fatal error
+// gets a real message, and a restart loop that fires too many times too
+// fast gets treated as a fatal condition instead of retried indefinitely.
+const RESTART_WINDOW_MS = 15_000;
+const MAX_RESTARTS_IN_WINDOW = 6;
+const VOICE_ERROR_DISPLAY_MS = 6_000;
+
+function describeVoiceError(code: string): string {
+  switch (code) {
+    case "not-allowed":
+      return "Microphone access is blocked. Allow it in your browser's site settings and try again.";
+    case "service-not-allowed":
+      return "Voice input isn't available right now. Try again in a moment.";
+    case "audio-capture":
+      return "No microphone found. Check that one is connected and try again.";
+    case "language-not-supported":
+      return "Voice input doesn't support your language yet.";
+    default:
+      return "Voice input stopped unexpectedly. Try again.";
+  }
+}
+
 // maxAlternatives asks the engine for several candidate transcriptions per
 // utterance; alternative[0] is its own first guess but not always its most
 // confident one, so pick by confidence explicitly. Falls back to [0] when
@@ -103,6 +133,7 @@ export function Composer({ onSend, onStop, isStreaming, disabled }: ComposerProp
   const [attachments, setAttachments] = useState<StagedAttachment[]>([]);
   const [listening, setListening] = useState(false);
   const [voiceSupported, setVoiceSupported] = useState(false);
+  const [voiceError, setVoiceError] = useState<string | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const recognitionRef = useRef<SpeechRecognitionLike | null>(null);
@@ -121,6 +152,10 @@ export function Composer({ onSend, onStop, isStreaming, disabled }: ComposerProp
   // because Chrome ends a recognition session on its own after a few
   // seconds of silence. onend consults this to decide restart vs stop.
   const wantsListeningRef = useRef(false);
+  // Timestamps of recent auto-restarts (see onend below) — a rolling
+  // window used to tell "Chrome ending the session after a pause, as
+  // normal" apart from "this keeps failing and restarting won't help."
+  const restartTimestampsRef = useRef<number[]>([]);
   const planTier = useUserPlanTier();
 
   const attachmentsBusy = attachments.some((a) => a.status === "uploading" || a.status === "processing");
@@ -140,6 +175,16 @@ export function Composer({ onSend, onStop, isStreaming, disabled }: ComposerProp
       recognitionRef.current?.abort();
     };
   }, []);
+
+  // Non-blocking (no window.alert — this can fire mid-dictation, and a
+  // modal would swallow the keystroke/focus the user is mid-flow on).
+  // Self-clears so a transient hiccup doesn't leave a stale message
+  // sitting there after the user's moved on.
+  useEffect(() => {
+    if (!voiceError) return;
+    const t = setTimeout(() => setVoiceError(null), VOICE_ERROR_DISPLAY_MS);
+    return () => clearTimeout(t);
+  }, [voiceError]);
 
   function autosize() {
     const el = textareaRef.current;
@@ -180,14 +225,22 @@ export function Composer({ onSend, onStop, isStreaming, disabled }: ComposerProp
       }
       setValue(voiceBaseRef.current + finalTranscriptRef.current + interim);
       requestAnimationFrame(autosize);
+      // A real result is proof the connection is genuinely healthy right
+      // now — any earlier restarts (a rough patch that's since recovered)
+      // shouldn't count against a later, unrelated hiccup.
+      restartTimestampsRef.current = [];
+      setVoiceError(null);
     };
 
     recognition.onerror = (e) => {
       if (TRANSIENT_RECOGNITION_ERRORS.has(e.error)) return; // onend restarts us
       // Genuinely fatal (not-allowed, service-not-allowed, audio-capture):
       // stop asking, or onend would restart into the same failure forever.
+      // Previously this just flipped the button back off with no
+      // explanation — indistinguishable from "broken" to the user.
       wantsListeningRef.current = false;
       setListening(false);
+      setVoiceError(describeVoiceError(e.error));
     };
 
     recognition.onend = () => {
@@ -199,6 +252,21 @@ export function Composer({ onSend, onStop, isStreaming, disabled }: ComposerProp
         setListening(false);
         return;
       }
+      // A transient error (network, no-speech) that never actually
+      // resolves produces exactly this: onend fires, wantsListening is
+      // still true, restart, repeat — forever, with the button lit the
+      // whole time as if it were working. Cap it: too many restarts in
+      // too short a window means restarting isn't helping.
+      const now = Date.now();
+      const recent = restartTimestampsRef.current.filter((t) => now - t < RESTART_WINDOW_MS);
+      recent.push(now);
+      restartTimestampsRef.current = recent;
+      if (recent.length > MAX_RESTARTS_IN_WINDOW) {
+        wantsListeningRef.current = false;
+        setListening(false);
+        setVoiceError("Voice input is having trouble staying connected. Check your network and try again.");
+        return;
+      }
       try {
         recognitionRef.current?.start();
       } catch {
@@ -206,17 +274,38 @@ export function Composer({ onSend, onStop, isStreaming, disabled }: ComposerProp
         // engine is gone, so reflect that instead of pretending to listen.
         wantsListeningRef.current = false;
         setListening(false);
+        setVoiceError(describeVoiceError("aborted"));
       }
     };
 
     return recognition;
   }
 
-  function toggleVoice() {
+  async function toggleVoice() {
     if (listening) {
       wantsListeningRef.current = false;
       recognitionRef.current?.stop();
       return;
+    }
+
+    setVoiceError(null);
+    restartTimestampsRef.current = [];
+
+    // Progressive enhancement, not load-bearing: Chrome/Edge support
+    // querying microphone permission ahead of time, so a blocked mic can
+    // say so immediately instead of waiting on recognition.start() to
+    // fail. Safari doesn't implement this query at all — caught and
+    // ignored, falling straight through to the start()-and-see-what-
+    // happens path every browser already supports via onerror above.
+    try {
+      const nav = navigator as Navigator & { permissions?: { query: (d: { name: string }) => Promise<{ state: string }> } };
+      const status = await nav.permissions?.query({ name: "microphone" });
+      if (status?.state === "denied") {
+        setVoiceError(describeVoiceError("not-allowed"));
+        return;
+      }
+    } catch {
+      // Unsupported query — proceed normally.
     }
 
     const recognition = buildRecognition();
@@ -398,28 +487,46 @@ export function Composer({ onSend, onStop, isStreaming, disabled }: ComposerProp
           className="max-h-[196px] w-full resize-none overflow-y-auto bg-transparent p-0.5 pt-0 text-[15px] leading-[1.6] text-foreground placeholder:text-muted-foreground focus:outline-none"
           disabled={disabled}
         />
+        {voiceError && (
+          <p className="px-0.5 text-[11.5px] leading-snug text-danger" role="alert">
+            {voiceError}
+          </p>
+        )}
         <div className="flex items-center gap-1">
           <ComposerMenu
             onUploadFile={() => fileInputRef.current?.click()}
             onPrefill={handlePrefill}
             disabled={disabled || attachments.length >= MAX_ATTACHMENTS}
           />
-          {voiceSupported && (
-            <button
-              type="button"
-              onClick={toggleVoice}
-              disabled={disabled}
-              title={listening ? "Stop voice input" : "Voice input"}
-              aria-label={listening ? "Stop voice input" : "Voice input"}
-              aria-pressed={listening}
-              className={cn(
-                "flex h-11 w-11 shrink-0 items-center justify-center rounded-lg transition-colors disabled:opacity-40 sm:h-[31px] sm:w-[31px]",
-                listening ? "text-accent" : "text-muted-foreground hover:bg-hover hover:text-foreground",
-              )}
-            >
-              <Mic size={17} strokeWidth={1.4} />
-            </button>
-          )}
+          <button
+            type="button"
+            onClick={toggleVoice}
+            disabled={disabled || !voiceSupported}
+            title={
+              !voiceSupported
+                ? "Voice input isn't supported in this browser — try Chrome or Edge"
+                : listening
+                  ? "Stop voice input"
+                  : "Voice input"
+            }
+            aria-label={listening ? "Stop voice input" : "Voice input"}
+            aria-pressed={listening}
+            className={cn(
+              "relative flex h-11 w-11 shrink-0 items-center justify-center rounded-lg transition-colors disabled:opacity-40 sm:h-[31px] sm:w-[31px]",
+              listening ? "text-accent" : "text-muted-foreground hover:bg-hover hover:text-foreground",
+            )}
+          >
+            {listening && (
+              // Reuses the app's existing "quiet, ongoing activity" pulse
+              // (same token as the sidebar's usage indicator) rather than a
+              // new animation — the mic button's own color change is easy
+              // to miss, and this is the difference between "did my click
+              // register?" and a clear, ongoing "yes, it's listening."
+              <span className="absolute inset-2 rounded-full bg-accent/20 animate-pulse-soft" aria-hidden />
+            )}
+            <Mic size={17} strokeWidth={1.4} className="relative" />
+          </button>
+
           <span className="flex-1" />
           <span className="pr-1 font-mono text-[9.5px] tracking-[0.08em] text-muted-foreground">
             {value.trim() ? "ENTER TO SEND" : ""}
