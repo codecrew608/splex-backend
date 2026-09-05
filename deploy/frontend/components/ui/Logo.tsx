@@ -30,7 +30,14 @@ export function Logo({ size = 26, wordmarkClassName, className }: LogoProps) {
   return (
     <span className={`inline-flex items-center gap-[11px] text-foreground ${className ?? ""}`}>
       <LogoMark size={size} />
-      <span className={`font-display text-[13.5px] font-semibold tracking-[0.16em] text-foreground ${wordmarkClassName ?? ""}`}>SPLEX</span>
+      {/* font-sans, not font-display: Instrument Serif (Prism's display
+          face) is a single-weight serif that reads thin and fussy at this
+          size with heavy all-caps tracking — the wordmark uses the body
+          sans's own semibold instead, a common, confident logotype
+          convention in its own right. font-display is for content
+          headings, where its editorial character actually earns its
+          keep. */}
+      <span className={`font-sans text-[13.5px] font-semibold tracking-[0.16em] text-foreground ${wordmarkClassName ?? ""}`}>SPLEX</span>
     </span>
   );
 }

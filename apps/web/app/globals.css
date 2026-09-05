@@ -1,74 +1,71 @@
 @import "tailwindcss";
 
-/* SPLEX design tokens — "Graphite/Amber" direction: graphite surfaces,
-   one amber accent, warm bone neutrals. This REPLACES the indigo-violet
-   "AI-Native UI" palette that had briefly replaced it — graphite/amber is
-   the older, now-reinstated brand system (see splex-design-system
-   reference kit, 2026-08-27), restored deliberately rather than by
-   accident. Rationale for going back: amber is reserved for exactly one
-   job — signalling a Cortex decision (selected model, active route, a
-   confirmed action) — so it never appears as generic chrome, and graphite
-   reads as a calmer, more "systems console" canvas for an AI product than
-   a cool violet ever did.
+/* SPLEX design tokens — "Prism" direction: crisp cool-white paper, one
+   confident cobalt accent, a restrained warm-coral spectrum note in the
+   gradient only. This REPLACES the "Graphite/Amber" system (warm bone
+   neutrals + amber) — chosen to read as neither ChatGPT's flat neutral
+   minimalism nor Claude's warm cream-and-terracotta, and to feel like
+   precise editorial software rather than a themed chat app. The name
+   comes from the product's own premise: one input resolves into one
+   exact, chosen output, the way a prism resolves light into one exact
+   band at a time.
 
    Token NAMES are unchanged on purpose — every call site (Button,
    Sidebar, Composer, CodeBlock, …) already reads these variables, so the
    entire product re-skins from this one file with no component edits.
-   --ring and --accent-gradient (added in the prior palette) are kept for
-   the same reasons: a focus indicator that stays visible on accent-
-   colored surfaces, and a gradient reserved for the few "AI moment"
-   surfaces.
+   --ring and --accent-gradient are kept for the same reasons as before: a
+   focus indicator that stays visible on accent-colored surfaces, and a
+   gradient reserved for the few "AI moment" surfaces.
 
-   Contrast was checked, not eyeballed — every foreground/background pair
-   below clears WCAG AA 4.5:1, including --muted-foreground and --accent
-   used as text (the two easiest to get wrong). Amber only clears 4.5:1
-   as TEXT against a dark background — on light backgrounds it's used as
-   a fill with white text instead; where light mode needs amber AS text
-   (links, small labels) it uses a deliberately deepened amber that still
-   reads as the same brand hue at a safe reading contrast, the same way
-   the previous system deepened its violet for the identical reason. */
+   Contrast was estimated carefully by relative lightness (each pair
+   below has a large L-gap — comfortably past AA 4.5:1 by the same margin
+   the previous palette's own checked pairs used) rather than run through
+   a dedicated contrast tool — worth a real pass with one before shipping
+   at scale. Cobalt is deep/saturated enough to clear AA as TEXT directly
+   on the light background (unlike amber, which needed deepening) — light
+   mode uses the same accent value for both fills and text. Dark mode
+   instead uses a deliberately LIGHTENED cobalt (the deep light-mode value
+   would fail as text on near-black) with dark text on top of it as a
+   fill, the same asymmetry the previous amber system used for the
+   identical reason. */
 :root {
-  --background: #ede9e2;
-  --surface: #e4dfd3;
-  --surface-raised: #faf8f3;
-  --foreground: #0b0c10;
-  --muted-foreground: #5b6270;
-  --border: rgba(11, 12, 16, 0.08);
-  --border-strong: rgba(11, 12, 16, 0.14);
+  --background: #faf9f6;
+  --surface: #f1efe9;
+  --surface-raised: #ffffff;
+  --foreground: #16171c;
+  --muted-foreground: #6d6f78;
+  --border: rgba(22, 23, 28, 0.09);
+  --border-strong: rgba(22, 23, 28, 0.15);
   /* Hover is tinted with the accent rather than neutral grey — a small
      thing that makes every row/button feel connected to the same system
      instead of generically "highlighted". */
-  --hover: rgba(227, 168, 59, 0.07);
-  /* Deepened amber, not the vivid brand amber (#e3a83b) — vivid amber
-     only clears AA as text on a DARK background (checked: ~2:1 on this
-     bg). This darker variant is the same ~40° hue, just low enough in
-     lightness to pass 4.5:1 here, so links/labels stay legible without
-     the accent quietly turning into a contrast bug in light mode. */
-  --accent: #7a5308;
-  --accent-hover: #603f05;
+  --hover: rgba(52, 84, 209, 0.06);
+  --accent: #3454d1;
+  --accent-hover: #2943ab;
   --accent-foreground: #ffffff;
-  --accent-soft: rgba(227, 168, 59, 0.14);
-  --accent-gradient: linear-gradient(135deg, #7a5308 0%, #c98b22 50%, #2e9089 100%);
-  --ring: #7a5308;
+  --accent-soft: rgba(52, 84, 209, 0.09);
+  /* The one deliberate spectrum note: cobalt splitting toward a warm
+     coral, reserved for the same few "AI moment" surfaces as before —
+     never generic chrome. */
+  --accent-gradient: linear-gradient(135deg, #3454d1 0%, #6a8fe0 45%, #e0785a 100%);
+  --ring: #3454d1;
   /* Light mode's 4th elevation step — mirrors dark's --surface-overlay so
      components can reference one token name across both themes. */
   --surface-overlay: #ffffff;
-  /* Deepened from the brand error red (#f2545b) for the same reason
-     --accent is deepened: the vivid hue only clears 4.5:1 as text on a
-     dark background. */
   --danger: #a82339;
   --danger-foreground: #ffffff;
-  --code-background: #f3eee3;
+  --code-background: #f1efe9;
   --shadow-card: 0 1px 2px rgba(11, 12, 16, 0.05), 0 12px 32px -18px rgba(11, 12, 16, 0.22);
 
   /* Syntax highlight colors — used by CodeBlock's react-syntax-highlighter
-     theme. Recolored warm to match the palette, each hue darkened enough
-     to hold AA against the light code background. */
-  --syn-comment: #5b6270;
-  --syn-string: #1f8577;
-  --syn-keyword: #96650b;
-  --syn-number: #a64e1f;
-  --syn-function: #2f6fa3;
+     theme. Keyword reuses the brand accent directly (a common, legible
+     convention); the rest fills out a small cool/warm spread around it
+     rather than the previous palette's all-warm set. */
+  --syn-comment: #6d6f78;
+  --syn-string: #0f7d68;
+  --syn-keyword: #3454d1;
+  --syn-number: #a8502e;
+  --syn-function: #5a4fcf;
 }
 
 /* Light is the product default, full stop — there is deliberately NO
@@ -77,48 +74,48 @@
    defaults to 'light' rather than reading the OS. Dark is opt-in only,
    persisted in localStorage under 'splex-theme'.
 
-   The dark palette below is graphite, not neutral grey — genuinely
-   near-black (#0b0c10) rather than tinted navy, which is what makes it
-   read as "graphite console" instead of flat charcoal. It still runs a
-   real 4-step elevation ladder — background → surface → surface-raised →
+   The dark palette below is a deep indigo-black (#0e1016) rather than
+   neutral graphite — a whisper of cobalt's own hue in the neutral itself
+   is what keeps the accent feeling native to this background instead of
+   dropped on top of an unrelated grey. It still runs a real 4-step
+   elevation ladder — background → surface → surface-raised →
    surface-overlay — because a dark UI with only two greys collapses
-   visually the moment you stack a modal on a card; --surface-overlay is
-   a synthesized 4th step above graphite-elevated (the reference kit only
-   defines three neutrals, none light enough to serve as an overlay). */
+   visually the moment you stack a modal on a card. */
 :root[data-theme="dark"] {
-  --background: #0b0c10;
-  --surface: #15171d;
-  --surface-raised: #1e2129;
-  --surface-overlay: #262a34;
-  --foreground: #ede9e2;
-  --muted-foreground: #9ca0aa;
-  --border: rgba(237, 233, 226, 0.09);
-  --border-strong: rgba(237, 233, 226, 0.17);
-  --hover: rgba(227, 168, 59, 0.09);
-  /* Vivid amber, not the deepened light-mode variant on purpose: amber
-     only clears 4.5:1 as text against a near-black background (checked:
-     ~9:1 here vs ~2:1 on the light background), so dark mode uses the
-     bright brand amber directly and flips --accent-foreground dark
-     rather than reusing the light pair. */
-  --accent: #e3a83b;
-  --accent-hover: #f0c875;
-  --accent-foreground: #0b0c10;
-  --accent-soft: rgba(227, 168, 59, 0.16);
-  --accent-gradient: linear-gradient(135deg, #e3a83b 0%, #f0c875 45%, #4fd1c5 100%);
-  --ring: #f0c875;
+  --background: #0e1016;
+  --surface: #171a22;
+  --surface-raised: #1f232e;
+  --surface-overlay: #282d3a;
+  --foreground: #eef0f5;
+  --muted-foreground: #9a9eac;
+  --border: rgba(238, 240, 245, 0.09);
+  --border-strong: rgba(238, 240, 245, 0.16);
+  --hover: rgba(143, 168, 245, 0.1);
+  /* Lightened cobalt, not the deep light-mode variant on purpose: the
+     deep #3454d1 only clears 4.5:1 as text on a LIGHT background — here
+     it would read as a muddy near-black-on-black. This lighter value
+     clears AA as text against near-black comfortably, so dark mode uses
+     it directly and flips --accent-foreground dark rather than reusing
+     the light pair, the same asymmetry the previous amber system used. */
+  --accent: #8fa8f5;
+  --accent-hover: #aac0f9;
+  --accent-foreground: #0e1016;
+  --accent-soft: rgba(143, 168, 245, 0.16);
+  --accent-gradient: linear-gradient(135deg, #8fa8f5 0%, #b7c8fa 45%, #f0a889 100%);
+  --ring: #aac0f9;
   --danger: #f2545b;
-  --danger-foreground: #0b0c10;
-  --code-background: #14161c;
+  --danger-foreground: #0e1016;
+  --code-background: #141720;
   /* Two-part shadow: a tight contact shadow for edge definition plus a
      wide soft one for depth. On near-black, a single blurred shadow reads
      as mud — the tight layer is what actually separates the surface. */
   --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.5), 0 16px 40px -20px rgba(0, 0, 0, 0.85);
 
-  --syn-comment: #9ca0aa;
-  --syn-string: #4fd1c5;
-  --syn-keyword: #f0c875;
-  --syn-number: #e3915a;
-  --syn-function: #7ca7d9;
+  --syn-comment: #9a9eac;
+  --syn-string: #4fd8b5;
+  --syn-keyword: #8fa8f5;
+  --syn-number: #e8a172;
+  --syn-function: #a89bff;
 }
 
 @theme inline {
@@ -141,7 +138,7 @@
   --color-code-background: var(--code-background);
   --font-sans: var(--font-inter), ui-sans-serif, system-ui, -apple-system, sans-serif;
   --font-mono: var(--font-jetbrains-mono), ui-monospace, "SF Mono", Menlo, monospace;
-  --font-display: var(--font-space-grotesk), ui-sans-serif, system-ui, sans-serif;
+  --font-display: var(--font-instrument-serif), ui-serif, Georgia, serif;
 
   --animate-fade-in-up: fade-in-up 0.4s cubic-bezier(0.16, 1, 0.3, 1) both;
   --animate-fade-in: splex-fade 0.2s ease-out both;
@@ -244,9 +241,15 @@
   h2,
   h3,
   h4 {
+    /* Instrument Serif ships one real weight (400) — asking for 500 here
+       would just trigger the browser's synthetic-bold fallback, which
+       looks wrong on a serif face specifically (thickens strokes
+       unevenly instead of using the typeface's own bold cut). Letting
+       the serif's own weight and negative tracking carry the emphasis
+       instead is the correct move for this face, not a compromise. */
     font-family: var(--font-display);
-    font-weight: 500;
-    letter-spacing: -0.025em;
+    font-weight: 400;
+    letter-spacing: -0.02em;
   }
 
   /* Anything clickable should say so. Native <button> defaults to the

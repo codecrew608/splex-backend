@@ -1,5 +1,5 @@
 import type { Metadata } from "next";
-import { Inter, JetBrains_Mono, Space_Grotesk } from "next/font/google";
+import { Inter, JetBrains_Mono, Instrument_Serif } from "next/font/google";
 import Script from "next/script";
 import "./globals.css";
 
@@ -17,16 +17,18 @@ const jetbrainsMono = JetBrains_Mono({
   display: "swap",
   weight: ["400", "500", "600"],
 });
-// Display face — the graphite/amber system's third type role, reserved
-// for headings, nav section labels, and empty states (globals.css'
-// --font-display). Fixed weights only (500/600/700): unlike Inter, it's
-// never used at body-text sizes where a variable range's in-between
-// weights would matter.
-const spaceGrotesk = Space_Grotesk({
+// Display face — the Prism system's third type role, reserved for
+// headings, nav section labels, and empty states (globals.css'
+// --font-display). Instrument Serif ships one weight (400) only, in both
+// styles — italic is reserved for the landing page's own hero headline
+// (a deliberate one-off flourish, applied directly there via font-style,
+// not a second global token) rather than every heading in the app.
+const instrumentSerif = Instrument_Serif({
   subsets: ["latin"],
-  variable: "--font-space-grotesk",
+  variable: "--font-instrument-serif",
   display: "swap",
-  weight: ["500", "600", "700"],
+  weight: "400",
+  style: ["normal", "italic"],
 });
 
 export const metadata: Metadata = {
@@ -53,7 +55,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
   return (
     <html
       lang="en"
-      className={`${inter.variable} ${jetbrainsMono.variable} ${spaceGrotesk.variable}`}
+      className={`${inter.variable} ${jetbrainsMono.variable} ${instrumentSerif.variable}`}
       suppressHydrationWarning
     >
       <head>

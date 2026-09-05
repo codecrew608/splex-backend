@@ -22,7 +22,7 @@ export default function AppError({ error, reset }: { error: Error & { digest?: s
 
   return (
     <div className="flex min-h-[60vh] flex-col items-center justify-center gap-4 px-6 text-center">
-      <h1 className="font-display text-xl font-semibold text-foreground">Something went wrong</h1>
+      <h1 className="font-display text-2xl text-foreground">Something went wrong</h1>
       <p className="max-w-md text-sm text-muted-foreground">
         This part of SPLEX failed to load. Your conversations and files are unaffected.
       </p>

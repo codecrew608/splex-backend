@@ -24,6 +24,18 @@ const rise: Variants = {
   visible: { opacity: 1, y: 0, transition: { duration: 0.55, ease: EASE } },
 };
 
+// Card-only variant: settles in from a slight backward 3D tilt rather than
+// just rising — needs `perspective` set on the parent grid (see its own
+// className below) for rotateX to actually read as depth instead of a flat
+// vertical squash. Deliberately NOT used for headline/body text or CTAs —
+// tilting something meant to be read is a readability/motion-sickness
+// problem (the same reason the hero's own parallax stays confined to its
+// decorative glow layer); this is reserved for card-shaped objects only.
+const riseCard: Variants = {
+  hidden: { opacity: 0, y: 28, rotateX: -14, scale: 0.96 },
+  visible: { opacity: 1, y: 0, rotateX: 0, scale: 1, transition: { duration: 0.7, ease: EASE } },
+};
+
 // Scroll-triggered sections share these props. `once` matters: re-playing
 // the animation every time a section re-enters the viewport turns ordinary
 // scrolling-back into a strobe. `amount: 0.2` fires when a fifth of the
@@ -111,6 +123,14 @@ export function LandingPage() {
     offset: ["start start", "end start"],
   });
   const glowY = useTransform(heroProgress, [0, 1], [0, 60]);
+  // The routing demo card's own 3D presence — a genuine perspective tilt
+  // (rotateY/rotateX), not a flat 2D transform, that eases toward facing
+  // the viewer straight-on as they scroll down through the hero. Small
+  // angles on purpose: enough to read as a physical, tilted object with
+  // real depth, not enough to feel like a gimmick or strain reading the
+  // card's own text mid-transition.
+  const demoRotateY = useTransform(heroProgress, [0, 1], [-6, 2]);
+  const demoRotateX = useTransform(heroProgress, [0, 1], [3, -1]);
 
   return (
     <div className="min-h-screen bg-background">
@@ -195,7 +215,12 @@ export function LandingPage() {
                 the headline run edge-to-edge on a wide screen. */}
             <motion.h1
               variants={rise}
-              className="mt-5 max-w-[16ch] text-balance font-display text-[34px] font-semibold leading-[1.08] tracking-[-0.03em] text-foreground sm:text-5xl lg:max-w-[15ch] lg:text-[56px]"
+              // italic is the one deliberate flourish reserved for this
+              // single hero moment — every other heading on the page (and
+              // in the app) stays upright. Instrument Serif ships one
+              // weight only, so size/tracking/leading carry the emphasis
+              // instead of a bold cut that doesn't exist for this face.
+              className="mt-5 max-w-[17ch] text-balance font-display text-[34px] italic leading-[1.15] tracking-[-0.01em] text-foreground sm:text-5xl lg:max-w-[16ch] lg:text-[58px]"
             >
               You choose the outcome. <span className="text-accent">Cortex</span> chooses the intelligence.
             </motion.h1>
@@ -229,7 +254,14 @@ export function LandingPage() {
             </motion.p>
           </div>
 
-          <motion.div variants={rise}>
+          <motion.div
+            variants={rise}
+            style={
+              reduceMotion
+                ? undefined
+                : { rotateY: demoRotateY, rotateX: demoRotateX, transformPerspective: 1200 }
+            }
+          >
             <RoutingDemo />
           </motion.div>
         </motion.div>
@@ -241,7 +273,7 @@ export function LandingPage() {
           <motion.div variants={container} {...inView}>
             <motion.h2
               variants={rise}
-              className="max-w-[22ch] text-balance font-display text-[26px] font-semibold leading-tight tracking-[-0.025em] text-foreground sm:text-4xl"
+              className="max-w-[22ch] text-balance font-display text-[27px] leading-tight tracking-[-0.015em] text-foreground sm:text-4xl"
             >
               Routing is the product.
             </motion.h2>
@@ -250,11 +282,11 @@ export function LandingPage() {
               SPLEX is actually built to get right.
             </motion.p>
 
-            <div className="mt-10 grid gap-4 sm:grid-cols-2 sm:gap-5">
+            <div className="mt-10 grid gap-4 sm:grid-cols-2 sm:gap-5" style={{ perspective: 1000 }}>
               {PILLARS.map(({ icon: Icon, title, body }) => (
                 <motion.div
                   key={title}
-                  variants={rise}
+                  variants={riseCard}
                   // Lifts toward the pointer. -3px is enough to register as
                   // a response without the card appearing to detach from
                   // the grid; skipped entirely under reduced motion.
@@ -265,7 +297,7 @@ export function LandingPage() {
                   <span className="inline-flex h-9 w-9 items-center justify-center rounded-lg bg-accent-soft text-accent transition-transform duration-200 group-hover:scale-105">
                     <Icon size={17} strokeWidth={1.6} />
                   </span>
-                  <h3 className="mt-4 font-display text-[17px] font-semibold tracking-[-0.015em] text-foreground">
+                  <h3 className="mt-4 font-display text-[19px] tracking-[-0.01em] text-foreground">
                     {title}
                   </h3>
                   <p className="mt-2 text-[14px] leading-relaxed text-muted-foreground">{body}</p>
@@ -282,7 +314,7 @@ export function LandingPage() {
           <motion.div variants={container} {...inView}>
             <motion.h2
               variants={rise}
-              className="mx-auto max-w-[20ch] text-balance text-center font-display text-[26px] font-semibold tracking-[-0.025em] text-foreground sm:text-4xl"
+              className="mx-auto max-w-[20ch] text-balance text-center font-display text-[27px] tracking-[-0.015em] text-foreground sm:text-4xl"
             >
               Simple pricing
             </motion.h2>
@@ -290,11 +322,11 @@ export function LandingPage() {
               No per-message pricing. One plan covers everything.
             </motion.p>
 
-            <div className="mt-10 grid gap-4 sm:grid-cols-2 sm:gap-5">
+            <div className="mt-10 grid gap-4 sm:grid-cols-2 sm:gap-5" style={{ perspective: 1000 }}>
               {PLANS.map((plan) => (
                 <motion.div
                   key={plan.name}
-                  variants={rise}
+                  variants={riseCard}
                   whileHover={reduceMotion ? undefined : { y: -3 }}
                   transition={{ duration: 0.2, ease: EASE }}
                   className={
@@ -303,9 +335,9 @@ export function LandingPage() {
                       : "rounded-2xl border border-border bg-surface p-6 transition-colors hover:border-border-strong"
                   }
                 >
-                  <h3 className="font-display text-lg font-semibold text-foreground">{plan.name}</h3>
+                  <h3 className="font-display text-xl text-foreground">{plan.name}</h3>
                   <p className="mt-2">
-                    <span className="font-display text-3xl font-semibold text-foreground sm:text-4xl">{plan.price}</span>
+                    <span className="font-display text-3xl text-foreground sm:text-4xl">{plan.price}</span>
                     {plan.period && <span className="text-sm text-muted-foreground">{plan.period}</span>}
                   </p>
                   <ul className="mt-5 space-y-2.5">
@@ -338,7 +370,7 @@ export function LandingPage() {
         <motion.div variants={container} {...inView} className="mx-auto max-w-3xl px-4 py-16 text-center sm:px-6 sm:py-24">
           <motion.h2
             variants={rise}
-            className="mx-auto max-w-[20ch] text-balance font-display text-[26px] font-semibold tracking-[-0.025em] text-foreground sm:text-4xl"
+            className="mx-auto max-w-[20ch] text-balance font-display text-[27px] tracking-[-0.015em] text-foreground sm:text-4xl"
           >
             Describe the outcome you want.
           </motion.h2>
