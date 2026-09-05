@@ -2,10 +2,15 @@ import type { FastifyInstance } from "fastify";
 import { type HandlerResult, ok, fail } from "./result.js";
 import { createRazorpaySubscription, RazorpayApiError } from "../razorpay/client.js";
 
-// A subscription in any of these states is either live or already in the
-// middle of being set up — creating a second one on top of it is exactly
-// the duplicate the create-subscription flow must refuse.
-const ACTIVE_OR_IN_FLIGHT_STATUSES = new Set(["created", "authenticated", "active", "pending"]);
+// Unconditionally blocking states — no reclaim path exists for any of
+// these in claim_subscription_slot (migration 0049), ever, so refusing
+// here is a safe fast path that saves the RPC round-trip. Deliberately
+// does NOT include "created": that status DOES have reclaim conditions
+// (an abandoned checkout, or a claim that never reached Razorpay at all)
+// that only claim_subscription_slot itself can correctly evaluate — a
+// "created" row must always fall through to the RPC rather than being
+// fast-blocked here, or those reclaim conditions become unreachable.
+const ACTIVE_OR_IN_FLIGHT_STATUSES = new Set(["authenticated", "active", "pending"]);
 
 // Placeholder billing until Razorpay is wired up — flips plan_tier and
 // records a subscription row so entitlements/quotas behave exactly as they
@@ -87,16 +92,24 @@ export async function fakeCancel(fastify: FastifyInstance, userId: string): Prom
 //  1. Cheap pre-check (fast, friendly error in the common non-race case,
 //     avoids burning a Razorpay API call on a request that's certainly
 //     going to be refused anyway).
-//  2. Create the subscription on Razorpay's side — plan_id always comes
+//  2. Atomically claim the local slot (claim_subscription_slot, migration
+//     0049) BEFORE calling Razorpay at all — this, not step 1, is what
+//     actually makes two simultaneous requests safe, and claiming first
+//     means at most one concurrent request per user ever reaches the
+//     Razorpay API, not just "at most one gets tracked locally." The slot
+//     is claimed with no subscription id yet (none exists until step 3
+//     succeeds) — see migration 0049 for how a claim that never gets one
+//     (this function fails before recording it) is itself immediately
+//     reclaimable by the next attempt, so a failed Razorpay call can't
+//     leave a permanently-claimed row.
+//  3. Create the subscription on Razorpay's side — plan_id always comes
 //     from server config, never the client, and the only trusted content
 //     in `notes` is the ALREADY-authenticated user id this function was
 //     called with.
-//  3. Atomically claim the local slot (claim_subscription_slot, migration
-//     0048) keyed on subscriptions.user_id's unique constraint — this,
-//     not step 1, is what actually makes two simultaneous requests safe.
-// If step 3 loses a race, the Razorpay-side subscription created in step 2
-// is simply abandoned: nobody ever completes Checkout for it, so it can
-// never charge anyone and needs no separate cleanup call.
+//  4. Record the real subscription id on the row this request already
+//     holds the exclusive claim to — a plain update, no atomicity needed
+//     here since no concurrent request for this user could have gotten
+//     this far.
 export async function createSubscription(fastify: FastifyInstance, userId: string): Promise<HandlerResult> {
   const { data: existing, error: fetchError } = await fastify.supabaseAdmin
     .from("subscriptions")
@@ -111,27 +124,40 @@ export async function createSubscription(fastify: FastifyInstance, userId: strin
     return fail("You already have a subscription in progress or active.", 409);
   }
 
+  const { data: claimed, error: claimError } = await fastify.supabaseAdmin.rpc("claim_subscription_slot", {
+    p_user_id: userId,
+  });
+  if (claimError) {
+    fastify.log.error({ claimError, userId }, "create-subscription: failed to claim local slot");
+    return fail("Couldn't start checkout. Please try again.", 500);
+  }
+  if (!claimed) {
+    fastify.log.warn({ userId }, "create-subscription: lost race, local slot already claimed");
+    return fail("You already have a subscription in progress or active.", 409);
+  }
+
   const planId = fastify.config.RAZORPAY_STARTER_PLAN_ID;
   let subscription: { id: string; status: string };
   try {
     subscription = await createRazorpaySubscription(fastify, planId, { splex_user_id: userId });
   } catch (err) {
+    // The claim above already left this row at status='created' with
+    // razorpay_subscription_id still null — exactly the shape migration
+    // 0049 treats as immediately reclaimable, so there's nothing further
+    // to clean up here; the next attempt (even an immediate retry) just
+    // reclaims it.
     if (err instanceof RazorpayApiError) return fail(err.message, err.status);
     throw err;
   }
 
-  const { data: claimedStatus, error: claimError } = await fastify.supabaseAdmin.rpc("claim_subscription_slot", {
-    p_user_id: userId,
-    p_razorpay_subscription_id: subscription.id,
-    p_razorpay_plan_id: planId,
-  });
-  if (claimError) {
-    fastify.log.error({ claimError, userId, subscriptionId: subscription.id }, "create-subscription: failed to claim local slot");
+  const { error: updateError } = await fastify.supabaseAdmin
+    .from("subscriptions")
+    .update({ razorpay_subscription_id: subscription.id, razorpay_plan_id: planId })
+    .eq("user_id", userId)
+    .eq("status", "created");
+  if (updateError) {
+    fastify.log.error({ updateError, userId, subscriptionId: subscription.id }, "create-subscription: failed to record subscription id");
     return fail("Couldn't start checkout. Please try again.", 500);
-  }
-  if (!claimedStatus) {
-    fastify.log.warn({ userId, subscriptionId: subscription.id }, "create-subscription: lost race, local slot already claimed");
-    return fail("You already have a subscription in progress or active.", 409);
   }
 
   // Non-null: createRazorpaySubscription above already validated both

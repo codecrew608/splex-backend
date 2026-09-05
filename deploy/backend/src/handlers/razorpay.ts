@@ -226,6 +226,18 @@ export async function processRazorpayWebhook(
 // webhook caller supplies directly. If a future create-subscription flow
 // hasn't stamped notes.splex_user_id or pre-created a local row yet, this
 // correctly resolves to null and the caller fails safe.
+//
+// Resubscription safety: a user can move from one razorpay_subscription_id
+// to another over time (cancelled/halted/expired -> resubscribed — see
+// migration 0049). A LATE or duplicate-but-distinct event for the
+// ABANDONED old subscription id still carries the same notes.splex_user_id
+// (Razorpay preserves notes verbatim) and would otherwise resolve straight
+// to this user via the fallback below, even though the local row has since
+// moved on to a different subscription. Guarding on "the notes-resolved
+// user's CURRENT row, if any, must not already point at a different
+// subscription id" closes that — it's what stops a stale event about an
+// abandoned subscription from clobbering the one the user actually has
+// now (wrong status, wrong dates, or worse, wrong entitlement).
 async function resolveUserId(fastify: FastifyInstance, entity: RazorpaySubscriptionEntity): Promise<string | null> {
   const { data: existingByRzp } = await fastify.supabaseAdmin
     .from("subscriptions")
@@ -238,5 +250,16 @@ async function resolveUserId(fastify: FastifyInstance, entity: RazorpaySubscript
   if (typeof notedUserId !== "string" || notedUserId.length === 0) return null;
 
   const { data: user } = await fastify.supabaseAdmin.from("users").select("id").eq("id", notedUserId).maybeSingle();
-  return user?.id ?? null;
+  if (!user?.id) return null;
+
+  const { data: currentRow } = await fastify.supabaseAdmin
+    .from("subscriptions")
+    .select("razorpay_subscription_id")
+    .eq("user_id", user.id)
+    .maybeSingle();
+  if (currentRow?.razorpay_subscription_id && currentRow.razorpay_subscription_id !== entity.id) {
+    return null; // stale event for a subscription this user has since replaced — refuse, don't clobber
+  }
+
+  return user.id;
 }

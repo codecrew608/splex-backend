@@ -55,8 +55,12 @@ function makeFakeFastify(db: FakeDb, secret: string | undefined) {
         const api: Record<string, unknown> = {};
         let eqCol = "";
         let eqVal = "";
+        let selectedCol = "";
         Object.assign(api, {
-          select: () => api,
+          select: (col: string) => {
+            selectedCol = col;
+            return api;
+          },
           eq: (col: string, val: string) => {
             eqCol = col;
             eqVal = val;
@@ -66,7 +70,16 @@ function makeFakeFastify(db: FakeDb, secret: string | undefined) {
             thenable(() => {
               if (eqCol === "user_id") {
                 const row = db.subscriptions.get(eqVal);
-                return { data: row ? { last_event_at: row.last_event_at ?? null } : null, error: null };
+                if (!row) return { data: null, error: null };
+                // Two different callers select by user_id: the main flow
+                // wants last_event_at (out-of-order guard), resolveUserId's
+                // new stale-subscription guard wants razorpay_subscription_id
+                // — branch on what was actually asked for, same as the
+                // real supabase-js client would return only that column.
+                if (selectedCol === "razorpay_subscription_id") {
+                  return { data: { razorpay_subscription_id: row.razorpay_subscription_id ?? null }, error: null };
+                }
+                return { data: { last_event_at: row.last_event_at ?? null }, error: null };
               }
               if (eqCol === "razorpay_subscription_id") {
                 for (const [userId, row] of db.subscriptions) {
@@ -302,6 +315,37 @@ describe("processRazorpayWebhook — user association (Section 9)", () => {
     );
     expect(db.subscriptions.has("u2")).toBe(false);
     expect(db.subscriptions.get("u1")?.status).toBe("active");
+  });
+
+  it("refuses a stale event for a subscription the user has since replaced, even though notes correctly name them", async () => {
+    const db = makeDb(["u1"]);
+    // u1 subscribes, cancels, then resubscribes under a NEW subscription id
+    // (createSubscription's claim_subscription_slot reassigns the same
+    // local row to sub_new — see migration 0049).
+    await deliver(
+      db,
+      makeBody({ event: "subscription.activated", status: "active", subscriptionId: "sub_old", notes: { splex_user_id: "u1" }, createdAt: 100 }),
+      { eventId: "evt_a" },
+    );
+    await deliver(
+      db,
+      makeBody({ event: "subscription.cancelled", status: "cancelled", subscriptionId: "sub_old", notes: { splex_user_id: "u1" }, createdAt: 200 }),
+      { eventId: "evt_b" },
+    );
+    db.subscriptions.set("u1", { ...db.subscriptions.get("u1"), razorpay_subscription_id: "sub_new", status: "created" });
+
+    // A late/duplicate-but-distinct event for the ABANDONED sub_old still
+    // carries u1's own real notes — must NOT be applied to u1's row, which
+    // has since moved on to sub_new.
+    const result = await deliver(
+      db,
+      makeBody({ event: "subscription.charged", status: "active", subscriptionId: "sub_old", notes: { splex_user_id: "u1" }, createdAt: 300 }),
+      { eventId: "evt_c" },
+    );
+
+    expect(result.ok).toBe(true); // acknowledged, not an error — just not applied
+    expect(db.subscriptions.get("u1")?.razorpay_subscription_id).toBe("sub_new");
+    expect(db.subscriptions.get("u1")?.status).toBe("created"); // NOT clobbered back to sub_old's "active"
   });
 });
 
