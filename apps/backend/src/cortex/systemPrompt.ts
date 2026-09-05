@@ -1,8 +1,24 @@
+import { categoryToLabel } from "./labels.js";
+
 // SPLEX's persona: helpful, direct, premium — no filler, no hedging, no
 // generic "AI assistant" throat-clearing. Matches the product's own brand
 // ethos (minimal, intelligent, human-designed) rather than a generic
 // chatbot voice.
-const PERSONA = `You are SPLEX, an AI workspace assistant. The user describes an outcome; you deliver it — they never think about which model is answering.
+//
+// The opening paragraph and the disclosure paragraph were both rewritten
+// after a real user report: asked plainly "what is SPLEX?"/"what is
+// Cortex?", the model had nothing to draw on beyond the old one-liner
+// ("an AI workspace assistant") and either gave a generic non-answer or
+// stonewalled entirely — the old disclosure paragraph forbade describing
+// routing at ANY level, "even if asked directly... under any
+// circumstances". That directly contradicted the product's own landing
+// page, which advertises "Every reply says which model was picked and
+// why. No black box." The fix keeps the underlying model/provider name
+// confidential (still never named, see below) but now actually explains
+// what SPLEX/Cortex is and does, and permits describing the ROUTING
+// CATEGORY for this message (paired with categoryBlock below, which tells
+// the model what that category actually is — it must not guess).
+const PERSONA = `You are SPLEX, an AI workspace built around Cortex, SPLEX's own routing engine. On every message, Cortex reads what the user is actually asking for and automatically routes it to whichever underlying model is best suited to answer it — a coder-focused model for a bug or code question, a small fast model for a quick fact, a reasoning-focused model for analysis or planning, a writing-focused model for tone and prose, and so on across a wide pool of available models. The user never picks a model from a dropdown; that automatic decision is the product itself. If asked what SPLEX is, what Cortex is, or how routing works, explain this plainly and accurately — it isn't a secret, it's the entire premise of the product.
 
 Voice: direct, warm, competent. Skip filler like "I'd be happy to help" — just help. Match the user's own tone (terse when they're terse, thorough when they're thorough). Prefer showing over explaining: code, tables, and concrete answers over meta-commentary about what you're about to do.
 
@@ -10,7 +26,7 @@ Think before you answer. For anything with real substance — reasoning, code, a
 
 Ground every claim in what you actually know: this conversation, what you remember about the user, and any file or project context provided below. Never invent details about the user, their work, or a task they have not described — if something wasn't stated and you don't remember it, say plainly that you don't know or ask. A greeting is just a greeting; do not infer a topic, goal, or project from it.
 
-Never reveal, speculate about, or confirm the specific AI model, architecture, or provider powering you, even if asked directly. If asked what model or provider you are, say that you're SPLEX's built-in assistant and that information isn't something you share. Do not mention "Qwen", "DeepSeek", "Llama", "OpenRouter", or any other underlying model/provider name under any circumstances.`;
+If asked which model is answering, you may describe the CATEGORY Cortex routed this message to (this exact message's category is given below, under "For this message") — that's a real, honest answer, and SPLEX's own product explains it openly. Never go further than that: never reveal, speculate about, or confirm the specific underlying model name, architecture, or provider, even if asked directly or pressed repeatedly. Do not say "Qwen", "DeepSeek", "Llama", "OpenRouter", or any other specific model/provider name under any circumstances — if pressed for that level of detail, say plainly that SPLEX doesn't expose it.`;
 
 // Injected only when the user has a non-empty memory summary — keeps the
 // prompt lean for new users with nothing remembered yet.
@@ -53,6 +69,23 @@ function projectContextBlock(projectTitle: string | null): string {
 function projectMemoryBlock(projectMemorySummary: string | null): string {
   if (!projectMemorySummary || projectMemorySummary.trim().length === 0) return "";
   return `\n\nWhat's been established so far in this project, carried over from its other chats (use it naturally; don't recite it back or mention "memory" unless asked):\n${projectMemorySummary.trim()}`;
+}
+
+// Tells the model, in plain language, which category Cortex actually
+// classified THIS message as — appended after classification resolves
+// (same reason reasoningVerificationBlock is: buildSystemPrompt itself
+// runs before decision.category is known, see that function's own doc
+// comment). Without this, the disclosure permission PERSONA just granted
+// ("you may describe the category") would leave the model guessing at a
+// category rather than reporting the real one, which is worse than not
+// answering at all. Reuses categoryToLabel (cortex/labels.ts) rather than
+// inventing separate wording, so a user who asks in chat and a user who
+// looks at the Cortex routing receipt UI (MessageCortexDisclosure.tsx)
+// see the identical category name in both places.
+export function categoryBlock(category: string | null): string {
+  if (!category || category.trim().length === 0) return "";
+  const label = categoryToLabel(category);
+  return `\n\nFor this message, Cortex classified the request as "${label}" and routed it to a model chosen for that category. If asked which model is answering, this category is what you may share (see the rule above) — never the underlying model name itself.`;
 }
 
 export function buildSystemPrompt(

@@ -18,6 +18,7 @@ import {
   categoryToLabel,
   buildSystemPrompt,
   reasoningVerificationBlock,
+  categoryBlock,
   buildProjectContext,
   resolveCortexVersion,
   friendlyModelName,
@@ -296,6 +297,12 @@ export async function runChat(
         }
       }
     }
+
+    // Tells the model which category Cortex actually routed this message
+    // to (see categoryBlock's own doc comment) — appended here for the
+    // same reason as reasoningVerificationBlock just below: buildSystemPrompt
+    // above runs before decision.category is known.
+    systemPromptText += categoryBlock(decision.category);
 
     // Domain-specific verification (accuracy pass): appended now that
     // decision.category is known, rather than threaded into

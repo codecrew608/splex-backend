@@ -5,7 +5,7 @@ import { RATE_LIMITS } from "../src/handlers/rateLimits.js";
 import { ok, fail, noContent } from "../src/handlers/result.js";
 import { sendResult } from "../src/routes/sendResult.js";
 import { classifyIntent } from "../src/cortex/classify.js";
-import { buildSystemPrompt } from "../src/cortex/systemPrompt.js";
+import { buildSystemPrompt, categoryBlock } from "../src/cortex/systemPrompt.js";
 import { makeState, makeFastify } from "./helpers/fakeFastify.js";
 
 describe("shared handler validation (was duplicated in both stacks)", () => {
@@ -111,12 +111,43 @@ describe("system prompt grounding", () => {
     expect(buildSystemPrompt(null, null, "Q3 Marketing Site")).toContain('"Q3 Marketing Site"');
   });
 
-  it("never names the underlying provider", () => {
+  it("never names the underlying provider, even though it now explains SPLEX/Cortex and may name the routing category", () => {
     const p = buildSystemPrompt(null, null, null);
     for (const banned of ["Qwen", "DeepSeek", "Llama", "OpenRouter"]) {
       // Named only in the instruction telling the model NOT to reveal them.
-      expect(p).toContain("Do not mention");
-      expect(p.split("Do not mention")[0]).not.toContain(banned);
+      expect(p).toContain('Do not say "Qwen"');
+      expect(p.split('Do not say "Qwen"')[0]).not.toContain(banned);
+    }
+    // The identity gap a real user hit: asked "what is SPLEX/Cortex", the
+    // old persona had nothing beyond "an AI workspace assistant". Now it
+    // actually explains the routing premise.
+    expect(p).toContain("Cortex");
+    expect(p).toMatch(/routes it to whichever underlying model is best suited/i);
+  });
+
+  it("permits describing the routing CATEGORY if asked which model is answering, but not the model itself", () => {
+    const p = buildSystemPrompt(null, null, null);
+    expect(p).toMatch(/you may describe the category cortex routed this message to/i);
+    expect(p).toMatch(/never go further than that/i);
+  });
+});
+
+describe("categoryBlock — tells the model which category THIS message was routed as", () => {
+  it("is empty for no category", () => {
+    expect(categoryBlock(null)).toBe("");
+    expect(categoryBlock("")).toBe("");
+  });
+
+  it("names the exact category label the routing-receipt UI already shows (categoryToLabel), so chat and the receipt never disagree", () => {
+    expect(categoryBlock("coding")).toContain('"Software Development"');
+    expect(categoryBlock("reasoning")).toContain('"Advanced Reasoning"');
+    expect(categoryBlock("general")).toContain('"General Assistance"');
+  });
+
+  it("never names the underlying model, only the category", () => {
+    const block = categoryBlock("coding");
+    for (const banned of ["Qwen", "DeepSeek", "Llama", "OpenRouter"]) {
+      expect(block).not.toContain(banned);
     }
   });
 });
