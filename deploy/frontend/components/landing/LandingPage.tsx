@@ -14,9 +14,13 @@ import { RoutingDemo } from "./RoutingDemo";
 // motion should read as composed rather than attention-seeking.
 const EASE = [0.16, 1, 0.3, 1] as const;
 
+// The group itself now zooms in a touch as it enters (on top of whatever
+// its own children do via `rise`/`riseCard`) — a cheap way to make every
+// section's entrance read as a bigger event, not just its individual
+// words and cards.
 const container: Variants = {
-  hidden: {},
-  visible: { transition: { staggerChildren: 0.08, delayChildren: 0.04 } },
+  hidden: { scale: 0.97 },
+  visible: { scale: 1, transition: { staggerChildren: 0.08, delayChildren: 0.04, duration: 0.6, ease: EASE } },
 };
 
 const rise: Variants = {
@@ -189,13 +193,13 @@ export function LandingPage() {
     target: heroRef,
     offset: ["start start", "end start"],
   });
-  const glowY = useTransform(heroProgress, [0, 1], [0, 28]);
-  const ringY = useTransform(heroProgress, [0, 1], [0, -36]);
-  const ringRotate = useTransform(heroProgress, [0, 1], [0, 22]);
-  const nodeY1 = useTransform(heroProgress, [0, 1], [0, 34]);
-  const nodeY2 = useTransform(heroProgress, [0, 1], [0, 52]);
-  const nodeY3 = useTransform(heroProgress, [0, 1], [0, 40]);
-  const nodeY4 = useTransform(heroProgress, [0, 1], [0, 58]);
+  const glowY = useTransform(heroProgress, [0, 1], [0, 42]);
+  const ringY = useTransform(heroProgress, [0, 1], [0, -54]);
+  const ringRotate = useTransform(heroProgress, [0, 1], [0, 34]);
+  const nodeY1 = useTransform(heroProgress, [0, 1], [0, 48]);
+  const nodeY2 = useTransform(heroProgress, [0, 1], [0, 76]);
+  const nodeY3 = useTransform(heroProgress, [0, 1], [0, 58]);
+  const nodeY4 = useTransform(heroProgress, [0, 1], [0, 86]);
 
   // The routing demo card's own 3D presence — a genuine perspective tilt
   // (rotateY/rotateX), not a flat 2D transform, split across two NESTED
@@ -212,8 +216,8 @@ export function LandingPage() {
   // reached the DOM's rendered transform, so the card looked inert to
   // the cursor. Two independent, directly-bound springs — proven to work
   // by <TiltCard> — sidestep whatever that was.)
-  const demoRotateY = useTransform(heroProgress, [0, 1], [-14, 4]);
-  const demoRotateX = useTransform(heroProgress, [0, 1], [5, -2]);
+  const demoRotateY = useTransform(heroProgress, [0, 1], [-18, 6]);
+  const demoRotateX = useTransform(heroProgress, [0, 1], [7, -3]);
   const demoMouseRotateY = useSpring(0, { stiffness: 240, damping: 22, mass: 0.6 });
   const demoMouseRotateX = useSpring(0, { stiffness: 240, damping: 22, mass: 0.6 });
   const demoGlareX = useSpring(50, { stiffness: 240, damping: 26 });
@@ -234,6 +238,31 @@ export function LandingPage() {
     demoMouseRotateX.set(0);
     demoMouseRotateY.set(0);
   }
+
+  // Each section below gets its OWN glow, keyed to its OWN scroll pass
+  // (not the hero's) — offset ["start end", "end start"] tracks a
+  // section across its entire time in the viewport, so the effect is
+  // already moving by the time someone scrolls it into view rather than
+  // starting from a dead stop. This is what makes scrolling past the
+  // pillars/pricing/final-CTA sections feel like a continuation of the
+  // hero's depth, not a hero-only flourish.
+  const pillarsRef = useRef<HTMLElement>(null);
+  const { scrollYProgress: pillarsProgress } = useScroll({ target: pillarsRef, offset: ["start end", "end start"] });
+  const pillarsGlowY = useTransform(pillarsProgress, [0, 1], [70, -70]);
+  const pillarsGlowScale = useTransform(pillarsProgress, [0, 0.5, 1], [0.85, 1.08, 0.85]);
+
+  const pricingRef = useRef<HTMLElement>(null);
+  const { scrollYProgress: pricingProgress } = useScroll({ target: pricingRef, offset: ["start end", "end start"] });
+  const pricingGlowY = useTransform(pricingProgress, [0, 1], [-60, 60]);
+  const pricingGlowScale = useTransform(pricingProgress, [0, 0.5, 1], [0.9, 1.1, 0.9]);
+
+  // The closing section's glow behaves differently on purpose: it GROWS
+  // and brightens as the CTA arrives (rather than drifting past), so the
+  // page's last moment reads as arrival rather than one more panel.
+  const ctaRef = useRef<HTMLElement>(null);
+  const { scrollYProgress: ctaProgress } = useScroll({ target: ctaRef, offset: ["start end", "end center"] });
+  const ctaGlowScale = useTransform(ctaProgress, [0, 1], [0.7, 1.35]);
+  const ctaGlowOpacity = useTransform(ctaProgress, [0, 1], [0.05, 0.18]);
 
   return (
     <div className="min-h-screen bg-background">
@@ -261,10 +290,18 @@ export function LandingPage() {
         </nav>
         {/* Reading-progress bar. scaleX on a transform-only element so it
             never triggers layout, and transform-origin left so it grows
-            from the start of the line rather than the centre. */}
+            from the start of the line rather than the centre. The one
+            element on the page that's visibly scroll-linked from the very
+            first pixel to the very last, so it carries the gradient (not
+            flat accent) and a soft glow to read as more than a loading
+            bar. */}
         <motion.div
-          className="absolute inset-x-0 bottom-0 h-[2px] origin-left bg-accent"
-          style={{ scaleX: reduceMotion ? 1 : progress }}
+          className="absolute inset-x-0 bottom-0 h-[3px] origin-left"
+          style={{
+            scaleX: reduceMotion ? 1 : progress,
+            background: "var(--accent-gradient)",
+            boxShadow: "0 0 10px 0 var(--accent)",
+          }}
           aria-hidden
         />
       </header>
@@ -422,8 +459,19 @@ export function LandingPage() {
       </section>
 
       {/* ---------------------------------------------------------- The pillars */}
-      <section id="how" className="border-t border-border bg-surface/40 scroll-mt-16">
-        <div className="mx-auto max-w-6xl px-4 py-16 sm:px-6 sm:py-24">
+      <section
+        id="how"
+        ref={pillarsRef}
+        className="relative overflow-hidden border-t border-border bg-surface/40 scroll-mt-16"
+      >
+        <motion.div
+          aria-hidden
+          style={reduceMotion ? undefined : { y: pillarsGlowY, scale: pillarsGlowScale }}
+          className="pointer-events-none absolute -right-32 top-0 h-[320px] w-[320px] rounded-full opacity-[0.11] blur-[100px]"
+        >
+          <div className="h-full w-full rounded-full" style={{ background: "var(--accent-gradient)" }} />
+        </motion.div>
+        <div className="relative mx-auto max-w-6xl px-4 py-16 sm:px-6 sm:py-24">
           <motion.div variants={container} {...inView}>
             <motion.h2
               variants={rise}
@@ -466,8 +514,15 @@ export function LandingPage() {
       </section>
 
       {/* -------------------------------------------------------------- Pricing */}
-      <section className="border-t border-border">
-        <div className="mx-auto max-w-4xl px-4 py-16 sm:px-6 sm:py-24">
+      <section ref={pricingRef} className="relative overflow-hidden border-t border-border">
+        <motion.div
+          aria-hidden
+          style={reduceMotion ? undefined : { y: pricingGlowY, scale: pricingGlowScale }}
+          className="pointer-events-none absolute -left-32 bottom-0 h-[320px] w-[320px] rounded-full opacity-[0.1] blur-[100px]"
+        >
+          <div className="h-full w-full rounded-full" style={{ background: "var(--accent-gradient)" }} />
+        </motion.div>
+        <div className="relative mx-auto max-w-4xl px-4 py-16 sm:px-6 sm:py-24">
           <motion.div variants={container} {...inView}>
             <motion.h2
               variants={rise}
@@ -525,8 +580,23 @@ export function LandingPage() {
       </section>
 
       {/* ------------------------------------------------------------ Final CTA */}
-      <section className="border-t border-border bg-surface/40">
-        <motion.div variants={container} {...inView} className="mx-auto max-w-3xl px-4 py-16 text-center sm:px-6 sm:py-24">
+      <section ref={ctaRef} className="relative overflow-hidden border-t border-border bg-surface/40">
+        {/* Unlike the other sections' glows (which drift past), this one
+            grows and brightens as the CTA arrives — the page's last
+            decorative beat reads as arrival, not one more panel drifting
+            by. */}
+        <motion.div
+          aria-hidden
+          style={reduceMotion ? undefined : { scale: ctaGlowScale, opacity: ctaGlowOpacity }}
+          className="pointer-events-none absolute left-1/2 top-1/2 h-[380px] w-[600px] max-w-[140vw] -translate-x-1/2 -translate-y-1/2 rounded-full blur-[100px]"
+        >
+          <div className="h-full w-full rounded-full" style={{ background: "var(--accent-gradient)" }} />
+        </motion.div>
+        <motion.div
+          variants={container}
+          {...inView}
+          className="relative mx-auto max-w-3xl px-4 py-16 text-center sm:px-6 sm:py-24"
+        >
           <motion.h2
             variants={rise}
             className="mx-auto max-w-[20ch] text-balance font-display text-[27px] tracking-[-0.015em] text-foreground sm:text-4xl"
