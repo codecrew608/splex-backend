@@ -8,6 +8,7 @@ import { useUserPlanTier } from "@/hooks/useUserPlanTier";
 import { FILE_SIZE_LIMITS, formatBytes } from "@/lib/fileLimits";
 import { AttachmentChip } from "./AttachmentChip";
 import { ComposerMenu } from "./ComposerMenu";
+import { CameraCaptureModal } from "./CameraCaptureModal";
 import { BACKEND_URL } from "@/lib/backendUrl";
 const MAX_ATTACHMENTS = 5;
 const ACCEPT =
@@ -132,6 +133,7 @@ export function Composer({ onSend, onStop, isStreaming, disabled }: ComposerProp
   const [value, setValue] = useState("");
   const [attachments, setAttachments] = useState<StagedAttachment[]>([]);
   const [listening, setListening] = useState(false);
+  const [cameraOpen, setCameraOpen] = useState(false);
   const [voiceSupported, setVoiceSupported] = useState(false);
   const [voiceError, setVoiceError] = useState<string | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -323,9 +325,13 @@ export function Composer({ onSend, onStop, isStreaming, disabled }: ComposerProp
     setListening(true);
   }
 
-  async function handleFilesPicked(fileList: FileList | null) {
-    if (!fileList || fileList.length === 0) return;
-    const files = Array.from(fileList).slice(0, MAX_ATTACHMENTS - attachments.length);
+  // Takes a plain File[] (not FileList) so both the hidden <input> and the
+  // camera capture modal — a single File, no picker involved — can share
+  // this one upload/process pipeline instead of the camera needing its
+  // own copy of it.
+  async function handleFilesPicked(fileList: File[]) {
+    if (fileList.length === 0) return;
+    const files = fileList.slice(0, MAX_ATTACHMENTS - attachments.length);
     const sizeLimit = FILE_SIZE_LIMITS[planTier];
 
     const supabase = createClient();
@@ -470,7 +476,7 @@ export function Composer({ onSend, onStop, isStreaming, disabled }: ComposerProp
           accept={ACCEPT}
           hidden
           onChange={(e) => {
-            handleFilesPicked(e.target.files);
+            handleFilesPicked(Array.from(e.target.files ?? []));
             e.target.value = "";
           }}
         />
@@ -495,6 +501,7 @@ export function Composer({ onSend, onStop, isStreaming, disabled }: ComposerProp
         <div className="flex items-center gap-1">
           <ComposerMenu
             onUploadFile={() => fileInputRef.current?.click()}
+            onOpenCamera={() => setCameraOpen(true)}
             onPrefill={handlePrefill}
             disabled={disabled || attachments.length >= MAX_ATTACHMENTS}
           />
@@ -563,6 +570,15 @@ export function Composer({ onSend, onStop, isStreaming, disabled }: ComposerProp
       <p className="mt-2.5 text-center text-[11px] text-muted-foreground">
         SPLEX can make mistakes. Consider checking important information.
       </p>
+      {cameraOpen && (
+        <CameraCaptureModal
+          onCapture={(file) => {
+            setCameraOpen(false);
+            handleFilesPicked([file]);
+          }}
+          onClose={() => setCameraOpen(false)}
+        />
+      )}
     </div>
   );
 }

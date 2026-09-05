@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { Plus, FileUp, ImagePlus, Sparkles, Volume2, Video, Presentation, Telescope, Lock } from "lucide-react";
+import { Plus, FileUp, ImagePlus, Camera, Sparkles, Volume2, Video, Presentation, Telescope, Lock } from "lucide-react";
 import { useEntitlements } from "@/hooks/useEntitlements";
 import { cn } from "@/lib/cn";
 import type { Capability } from "@splex/shared-types";
@@ -21,6 +21,7 @@ interface MenuAction {
 
 interface ComposerMenuProps {
   onUploadFile: () => void;
+  onOpenCamera: () => void;
   // Prefills the composer with a natural-language lead-in for the given
   // capability and focuses it — Cortex still classifies and routes the
   // actual request server-side once sent, same as if the user had typed
@@ -42,7 +43,7 @@ const CAPABILITY_ACTIONS: Array<Omit<MenuAction, "onSelect"> & { prefill: string
   { key: "deep_research", label: "Deep Research", icon: Telescope, capability: "deep_research", prefill: "Do a deep research report on " },
 ];
 
-export function ComposerMenu({ onUploadFile, onPrefill, disabled }: ComposerMenuProps) {
+export function ComposerMenu({ onUploadFile, onOpenCamera, onPrefill, disabled }: ComposerMenuProps) {
   const [open, setOpen] = useState(false);
   const [activeIndex, setActiveIndex] = useState(0);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -64,6 +65,7 @@ export function ComposerMenu({ onUploadFile, onPrefill, disabled }: ComposerMenu
   const actions: MenuAction[] = [
     { key: "upload_file", label: "Upload file", icon: FileUp, onSelect: onUploadFile },
     { key: "upload_image", label: "Upload image", icon: ImagePlus, onSelect: onUploadFile },
+    { key: "camera", label: "Take a photo", icon: Camera, onSelect: onOpenCamera },
     ...CAPABILITY_ACTIONS.map((a) => ({
       key: a.key,
       label: a.label,
