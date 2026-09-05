@@ -277,6 +277,10 @@ cat > "$OUT/wrangler.jsonc" <<'EOF'
     "OPENROUTER_APP_NAME": "SPLEX",
     "CORTEX_CLASSIFIER_MODEL_ID": "qwen/qwen-2.5-72b-instruct",
     "CREDITS_PER_USD": "120000",
+    // Not secret — a plan identifier. RAZORPAY_WEBHOOK_SECRET stays
+    // `wrangler secret put` only, same rule as SUPABASE_SERVICE_ROLE_KEY
+    // above — never add it here.
+    "RAZORPAY_STARTER_PLAN_ID": "plan_TYEBWcXvja8WRM",
     "LOG_LEVEL": "info"
   }
 }

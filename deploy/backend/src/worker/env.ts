@@ -42,6 +42,10 @@ const workerEnvSchema = z.object({
   RESEND_API_KEY: z.string().min(1).optional(),
   FEEDBACK_EMAIL_FROM: z.string().default("SPLEX Feedback <feedback@splex.app>"),
   FEEDBACK_NOTIFICATION_EMAIL: z.string().email().default("openspace681@gmail.com"),
+  // Same schema as plugins/env.ts's identical fields — kept in sync by
+  // hand, see this file's own top-of-file comment.
+  RAZORPAY_WEBHOOK_SECRET: z.string().min(1).optional(),
+  RAZORPAY_STARTER_PLAN_ID: z.string().min(1).default("plan_TYEBWcXvja8WRM"),
   LOG_LEVEL: z.string().default("info"),
 });
 

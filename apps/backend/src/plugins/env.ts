@@ -54,6 +54,18 @@ const envSchema = z.object({
   FEEDBACK_EMAIL_FROM: z.string().default("SPLEX Feedback <feedback@splex.app>"),
   // Recipient — never returned in any API response (see routes/feedback.ts).
   FEEDBACK_NOTIFICATION_EMAIL: z.string().email().default("openspace681@gmail.com"),
+  // Razorpay webhook signature secret (handlers/razorpay.ts). Optional here
+  // deliberately: it doesn't exist yet at implementation time (configured
+  // later via `wrangler secret put` / local .env, never committed) and a
+  // backend that refuses to boot without it would break local dev and every
+  // other route in the meantime. The webhook handler itself fails closed —
+  // rejects every request — when this is unset, rather than skipping
+  // verification. Never confuse with RAZORPAY_KEY_SECRET (a different
+  // secret, not used by this webhook at all).
+  RAZORPAY_WEBHOOK_SECRET: z.string().min(1).optional(),
+  // Not secret (a plan identifier, not a credential) — safe as a real
+  // default. Must come from server config, never a client-submitted value.
+  RAZORPAY_STARTER_PLAN_ID: z.string().min(1).default("plan_TYEBWcXvja8WRM"),
   LOG_LEVEL: z.string().default("info"),
 });
 
