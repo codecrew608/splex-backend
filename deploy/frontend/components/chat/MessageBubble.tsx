@@ -1,20 +1,29 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Check, Copy, Pencil, RotateCcw } from "lucide-react";
 import type { LocalChatMessage } from "@/hooks/useChatStream";
 import { cn } from "@/lib/cn";
+import { extractArtifacts, type ExtractedArtifact } from "@/lib/extractArtifacts";
 import { MarkdownRenderer } from "./MarkdownRenderer";
 import { MessageCortexDisclosure } from "./MessageCortexDisclosure";
 import { CitationsList } from "./CitationsList";
 import { AttachmentChip } from "./AttachmentChip";
 import { MessageFeedback } from "./MessageFeedback";
+import { ArtifactCard } from "./ArtifactCard";
 
 interface MessageBubbleProps {
   message: LocalChatMessage;
   showRegenerate?: boolean;
   onRegenerate?: () => void;
   onEditSubmit?: (newContent: string) => void;
+  // Substantial code blocks (extractArtifacts) render as a file-like card
+  // here and open in ChatThread's shared side panel instead — activeArtifactId
+  // is which one (if any) belonging to THIS message is currently open, so its
+  // card can show as selected.
+  onArtifactsChange?: (messageId: string, artifacts: ExtractedArtifact[]) => void;
+  onOpenArtifact?: (artifact: ExtractedArtifact) => void;
+  activeArtifactId?: string | null;
 }
 
 function formatTime(iso: string): string {
@@ -36,11 +45,34 @@ function formatTime(iso: string): string {
 const ACTIONS_REVEAL =
   "opacity-0 transition-opacity duration-150 group-hover:opacity-100 group-focus-within:opacity-100 [@media(hover:none)]:opacity-100";
 
-export function MessageBubble({ message, showRegenerate, onRegenerate, onEditSubmit }: MessageBubbleProps) {
+export function MessageBubble({
+  message,
+  showRegenerate,
+  onRegenerate,
+  onEditSubmit,
+  onArtifactsChange,
+  onOpenArtifact,
+  activeArtifactId,
+}: MessageBubbleProps) {
   const [copied, setCopied] = useState(false);
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(message.content);
   const isUser = message.role === "user";
+
+  // Recomputed on every content change (streaming re-runs this on each
+  // token) — cheap enough for a single chat message, and it's what makes
+  // the artifact panel fill in live rather than only appearing once a
+  // fenced block closes. Skipped entirely for user messages (isUser check
+  // in the render below) — a user's own message is never code-artifact-ed.
+  const { strippedContent, artifacts } = useMemo(
+    () => (isUser ? { strippedContent: message.content, artifacts: [] } : extractArtifacts(message.content, message.id)),
+    [isUser, message.content, message.id],
+  );
+
+  useEffect(() => {
+    if (!isUser) onArtifactsChange?.(message.id, artifacts);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- reporting is keyed on the artifacts array itself, not the callback identity
+  }, [artifacts]);
 
   async function handleCopy() {
     // navigator.clipboard is undefined outside a secure context (plain
@@ -164,7 +196,17 @@ export function MessageBubble({ message, showRegenerate, onRegenerate, onEditSub
 
       <div className="min-w-0 w-full">
         {message.content ? (
-          <MarkdownRenderer content={message.content} />
+          <>
+            <MarkdownRenderer content={strippedContent} />
+            {artifacts.map((artifact) => (
+              <ArtifactCard
+                key={artifact.id}
+                artifact={artifact}
+                active={activeArtifactId === artifact.id}
+                onOpen={() => onOpenArtifact?.(artifact)}
+              />
+            ))}
+          </>
         ) : isPending ? (
           <span className="inline-flex gap-1.5 py-1">
             <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-accent [animation-delay:-0.3s]" />

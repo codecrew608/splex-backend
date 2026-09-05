@@ -15,7 +15,7 @@ interface CodeBlockProps {
 // is dark-only and clashed hard against the new warm light palette, and
 // unlike a static color set, these tokens already branch for light/dark
 // via the same [data-theme] mechanism every other color in the app uses.
-const style: PrismAsyncLight["props"]["style"] = {
+export const SYNTAX_HIGHLIGHT_STYLE: PrismAsyncLight["props"]["style"] = {
   comment: { color: "var(--syn-comment)", fontStyle: "italic" },
   prolog: { color: "var(--syn-comment)" },
   doctype: { color: "var(--syn-comment)" },
@@ -69,7 +69,7 @@ export function CodeBlock({ language, code }: CodeBlockProps) {
       </div>
       <SyntaxHighlighter
         language={language || "text"}
-        style={style}
+        style={SYNTAX_HIGHLIGHT_STYLE}
         customStyle={{
           margin: 0,
           background: "var(--code-background)",

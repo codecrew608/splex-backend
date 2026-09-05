@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Link2, MoreHorizontal, Trash2, Check, ArrowDown } from "lucide-react";
 import type { ChatMessage } from "@/shared-types";
@@ -8,11 +8,13 @@ import { useChatStream, type WorkflowView } from "@/hooks/useChatStream";
 import { useSidebarStore } from "@/state/sidebarStore";
 import { cn } from "@/lib/cn";
 import { createClient } from "@/lib/supabase/client";
+import type { ExtractedArtifact } from "@/lib/extractArtifacts";
 import { MessageBubble } from "./MessageBubble";
 import { CortexRoutingFlow } from "./CortexRoutingFlow";
 import { WorkflowPanel } from "./WorkflowPanel";
 import { ResearchPanel } from "./ResearchPanel";
 import { Composer } from "./Composer";
+import { ArtifactPanel } from "./ArtifactPanel";
 import { BACKEND_URL } from "@/lib/backendUrl";
 
 interface ChatThreadProps {
@@ -73,6 +75,42 @@ export function ChatThread({
   // costs nothing while the sidebar is open. Matters most on mobile, where
   // the sidebar defaults to closed on every load.
   const sidebarOpen = useSidebarStore((s) => s.open);
+
+  // Code artifacts (see lib/extractArtifacts.ts + ArtifactPanel). Keyed by
+  // message id so each message's own list can be replaced wholesale as it
+  // re-extracts on every token; the active artifact is resolved by id below
+  // rather than stored as its own snapshot, so its content keeps updating
+  // live while streaming even after the panel is already open.
+  const [artifactsByMessage, setArtifactsByMessage] = useState<Map<string, ExtractedArtifact[]>>(new Map());
+  const [activeArtifactId, setActiveArtifactId] = useState<string | null>(null);
+  // Which artifact ids have ever been seen — auto-opens the panel the
+  // FIRST time a given artifact appears (so code generation is visible as
+  // it happens), but never forces it back open after the user closes it,
+  // even as more tokens keep streaming into that same id.
+  const seenArtifactIdsRef = useRef<Set<string>>(new Set());
+
+  const handleArtifactsChange = useCallback((messageId: string, artifacts: ExtractedArtifact[]) => {
+    setArtifactsByMessage((prev) => {
+      const next = new Map(prev);
+      next.set(messageId, artifacts);
+      return next;
+    });
+    for (const artifact of artifacts) {
+      if (!seenArtifactIdsRef.current.has(artifact.id)) {
+        seenArtifactIdsRef.current.add(artifact.id);
+        setActiveArtifactId(artifact.id);
+      }
+    }
+  }, []);
+
+  const activeArtifact = useMemo(() => {
+    if (!activeArtifactId) return null;
+    for (const artifacts of artifactsByMessage.values()) {
+      const found = artifacts.find((a) => a.id === activeArtifactId);
+      if (found) return found;
+    }
+    return null;
+  }, [activeArtifactId, artifactsByMessage]);
 
   useEffect(() => {
     // Don't yank the user back down if they've deliberately scrolled up to
@@ -153,7 +191,8 @@ export function ChatThread({
   const titleMeta = lastMessage ? `Updated ${formatTime(lastMessage.createdAt)}` : "New";
 
   return (
-    <div className="flex h-dvh flex-col">
+    <div className="flex h-dvh">
+    <div className="flex h-dvh min-w-0 flex-1 flex-col">
       <header
         className={cn(
           "flex h-[58px] shrink-0 items-center gap-2 border-b border-border px-3 sm:gap-3 sm:px-5",
@@ -248,6 +287,9 @@ export function ChatThread({
                   onEditSubmit={
                     message.role === "user" ? (newContent) => handleEditSubmit(message.id, newContent) : undefined
                   }
+                  onArtifactsChange={handleArtifactsChange}
+                  onOpenArtifact={(artifact) => setActiveArtifactId(artifact.id)}
+                  activeArtifactId={activeArtifactId}
                 />
               ))}
 
@@ -287,6 +329,19 @@ export function ChatThread({
           <Composer onSend={sendMessage} isStreaming={isStreaming} onStop={stop} />
         </>
       )}
+    </div>
+    {activeArtifact && (
+      <>
+        <div
+          className="fixed inset-0 z-30 bg-black/[0.34] sm:hidden"
+          onClick={() => setActiveArtifactId(null)}
+          aria-hidden
+        />
+        <div className="fixed inset-y-0 right-0 z-30 h-dvh w-full sm:relative sm:inset-auto sm:z-auto sm:w-auto">
+          <ArtifactPanel artifact={activeArtifact} onClose={() => setActiveArtifactId(null)} />
+        </div>
+      </>
+    )}
     </div>
   );
 }
