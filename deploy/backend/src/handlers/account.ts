@@ -43,6 +43,22 @@ export const profileBodySchema = z.object({
 
 const timezoneBodySchema = z.object({ timezone: timezoneField });
 
+const displayNameBodySchema = z.object({ fullName: z.string().trim().min(1).max(200) });
+
+// Storage path only, never a full URL — see migration 0052's own comment
+// for why. Just enough shape validation to reject something nonsensical
+// before it's persisted; the real authorization (this path is actually
+// this user's own file) is storage.objects' avatars_owner_* RLS, which the
+// client already had to satisfy to upload it in the first place.
+const avatarPathBodySchema = z.object({
+  avatarPath: z
+    .string()
+    .trim()
+    .min(1)
+    .max(300)
+    .regex(/^[^/]+\/[^/]+$/, "Invalid avatar path"),
+});
+
 // Real IANA-name validation, not just "is a non-empty string": an invalid
 // zone reaching users.timezone would be caught by the DB's own
 // pg_timezone_names safety net (migration 0044's user_timezone()) and just
@@ -126,6 +142,50 @@ export async function syncTimezone(fastify: FastifyInstance, userId: string, raw
   if (error) {
     fastify.log.error({ error }, "failed to sync timezone");
     return fail("Couldn't save your timezone. Please try again.", 500);
+  }
+
+  return noContent();
+}
+
+// Post-onboarding rename (Settings) — saveProfile above stays the
+// onboarding-only path (it also requires dateOfBirth, which a simple
+// rename shouldn't need to resupply every time).
+export async function updateDisplayName(fastify: FastifyInstance, userId: string, rawBody: unknown): Promise<HandlerResult> {
+  const parsed = displayNameBodySchema.safeParse(rawBody);
+  if (!parsed.success) {
+    return fail("Please enter a valid name.", 400);
+  }
+
+  const { error } = await fastify.supabaseAdmin.from("users").update({ full_name: parsed.data.fullName }).eq("id", userId);
+  if (error) {
+    fastify.log.error({ error }, "failed to update display name");
+    return fail("Couldn't save your name. Please try again.", 500);
+  }
+
+  return noContent();
+}
+
+// The client uploads the image bytes directly to Storage (avatars_owner_*
+// RLS already scopes that to the caller's own folder — see migration
+// 0052) and only calls this to record which path is now current. Still
+// re-checked here, not just trusted: a client could otherwise submit any
+// string, including a path under a DIFFERENT user's folder that happens
+// to exist for some unrelated reason — requiring the path's own folder
+// segment to equal the caller's id is the same "never trust a client-
+// submitted association" rule applied everywhere else in this codebase.
+export async function updateAvatarPath(fastify: FastifyInstance, userId: string, rawBody: unknown): Promise<HandlerResult> {
+  const parsed = avatarPathBodySchema.safeParse(rawBody);
+  if (!parsed.success) {
+    return fail("Invalid avatar.", 400);
+  }
+  if (parsed.data.avatarPath.split("/")[0] !== userId) {
+    return fail("Invalid avatar.", 403);
+  }
+
+  const { error } = await fastify.supabaseAdmin.from("users").update({ avatar_path: parsed.data.avatarPath }).eq("id", userId);
+  if (error) {
+    fastify.log.error({ error }, "failed to update avatar");
+    return fail("Couldn't save your profile picture. Please try again.", 500);
   }
 
   return noContent();

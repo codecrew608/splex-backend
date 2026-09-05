@@ -40,11 +40,12 @@ export default async function AppLayout({ children }: { children: React.ReactNod
   // Only a lookup that genuinely succeeds and genuinely has no name may
   // gate the app.
   let needsOnboarding = false;
+  let avatarUrl: string | null = null;
   try {
     const supabase = await createClient();
     const { data: profile, error } = await supabase
       .from("users")
-      .select("full_name")
+      .select("full_name, avatar_path")
       .eq("id", user.id)
       .maybeSingle();
 
@@ -52,6 +53,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
       console.error("[(app)/layout] full_name lookup failed, skipping onboarding gate for this request:", error);
     } else {
       needsOnboarding = !profile?.full_name;
+      if (profile?.avatar_path) avatarUrl = supabase.storage.from("avatars").getPublicUrl(profile.avatar_path).data.publicUrl;
     }
   } catch (err) {
     if (isNextInternalControlFlowError(err)) throw err;
@@ -60,7 +62,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
 
   return (
     <div className="flex h-dvh overflow-hidden bg-background">
-      <Sidebar email={user.email ?? ""} />
+      <Sidebar email={user.email ?? ""} avatarUrl={avatarUrl} />
       <SidebarReopenButton />
       <main className="min-w-0 flex-1">{children}</main>
       {needsOnboarding && <OnboardingModal />}

@@ -15,6 +15,8 @@ export const RATE_LIMITS = {
   chat_truncate: { max: 30, windowMs: 60_000 },
   account_profile: { max: 5, windowMs: 60_000 },
   account_timezone: { max: 5, windowMs: 60_000 },
+  account_display_name: { max: 5, windowMs: 60_000 },
+  account_avatar: { max: 5, windowMs: 60_000 },
   files_process: { max: 10, windowMs: 60_000 },
   projects_create: { max: 10, windowMs: 60_000 },
   billing_checkout: { max: 5, windowMs: 60_000 },

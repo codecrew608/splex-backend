@@ -18,11 +18,12 @@ import { UsagePanel } from "./UsagePanel";
 
 interface SidebarProps {
   email: string;
+  avatarUrl?: string | null;
 }
 
 const MOBILE_QUERY = "(max-width: 900px)";
 
-export function Sidebar({ email }: SidebarProps) {
+export function Sidebar({ email, avatarUrl }: SidebarProps) {
   const router = useRouter();
   const open = useSidebarStore((s) => s.open);
   const toggleOpen = useSidebarStore((s) => s.toggleOpen);
@@ -207,8 +208,13 @@ export function Sidebar({ email }: SidebarProps) {
 
           <div className="mt-[9px] flex flex-col gap-[11px] rounded-lg border border-border bg-surface-raised px-[13px] py-3">
             <div className="flex items-center gap-[10px]">
-              <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-accent-soft text-[11px] font-semibold tracking-[0.04em] text-accent">
-                {email.slice(0, 1).toUpperCase()}
+              <span className="flex h-7 w-7 shrink-0 items-center justify-center overflow-hidden rounded-full bg-accent-soft text-[11px] font-semibold tracking-[0.04em] text-accent">
+                {avatarUrl ? (
+                  // eslint-disable-next-line @next/next/no-img-element -- external Supabase Storage URL, not a local/optimizable asset
+                  <img src={avatarUrl} alt="" className="h-full w-full object-cover" />
+                ) : (
+                  email.slice(0, 1).toUpperCase()
+                )}
               </span>
               <span className="flex min-w-0 flex-1 flex-col leading-[1.3]">
                 <span className="truncate text-[13px] font-medium text-foreground">{email}</span>

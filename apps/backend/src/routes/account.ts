@@ -1,5 +1,5 @@
 import type { FastifyPluginAsync } from "fastify";
-import { deleteAccount, saveProfile, syncTimezone } from "../handlers/account.js";
+import { deleteAccount, saveProfile, syncTimezone, updateDisplayName, updateAvatarPath } from "../handlers/account.js";
 import { RATE_LIMITS } from "../handlers/rateLimits.js";
 import { sendResult } from "./sendResult.js";
 
@@ -42,6 +42,36 @@ const accountRoutes: FastifyPluginAsync = async (fastify) => {
     },
     async (request, reply) => {
       return sendResult(reply, await syncTimezone(fastify, request.user.id, request.body));
+    },
+  );
+
+  fastify.patch(
+    "/account/display-name",
+    {
+      preHandler: [
+        fastify.authenticate,
+        fastify.rateLimitByUser(
+          "account_display_name",
+          RATE_LIMITS.account_display_name.max,
+          RATE_LIMITS.account_display_name.windowMs,
+        ),
+      ],
+    },
+    async (request, reply) => {
+      return sendResult(reply, await updateDisplayName(fastify, request.user.id, request.body));
+    },
+  );
+
+  fastify.patch(
+    "/account/avatar",
+    {
+      preHandler: [
+        fastify.authenticate,
+        fastify.rateLimitByUser("account_avatar", RATE_LIMITS.account_avatar.max, RATE_LIMITS.account_avatar.windowMs),
+      ],
+    },
+    async (request, reply) => {
+      return sendResult(reply, await updateAvatarPath(fastify, request.user.id, request.body));
     },
   );
 };

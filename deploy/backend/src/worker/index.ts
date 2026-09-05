@@ -11,7 +11,13 @@ import { handleProcessFile } from "./routes/files.js";
 import { handleCreateProject } from "./routes/projects.js";
 import { handleFakeCheckout, handleFakeCancel, handleCreateSubscription } from "./routes/billing.js";
 import { handleRazorpayWebhook } from "./routes/razorpay.js";
-import { handleDeleteAccount, handleSaveProfile, handleSyncTimezone } from "./routes/account.js";
+import {
+  handleDeleteAccount,
+  handleSaveProfile,
+  handleSyncTimezone,
+  handleUpdateDisplayName,
+  handleUpdateAvatarPath,
+} from "./routes/account.js";
 import { handleMediaStatus } from "./routes/media.js";
 import { handleGetEntitlements } from "./routes/entitlements.js";
 import { handleSubmitFeedback } from "./routes/feedback.js";
@@ -152,6 +158,22 @@ async function route(request: Request, ctx: WorkerCtx, execCtx: ExecutionContext
     const limited = await requireRateLimit(ctx, "account_timezone", auth.id);
     if (limited) return limited;
     return handleSyncTimezone(request, ctx, auth);
+  }
+
+  if (method === "PATCH" && pathname === "/account/display-name") {
+    const auth = await requireAuth(request, ctx);
+    if (auth instanceof Response) return auth;
+    const limited = await requireRateLimit(ctx, "account_display_name", auth.id);
+    if (limited) return limited;
+    return handleUpdateDisplayName(request, ctx, auth);
+  }
+
+  if (method === "PATCH" && pathname === "/account/avatar") {
+    const auth = await requireAuth(request, ctx);
+    if (auth instanceof Response) return auth;
+    const limited = await requireRateLimit(ctx, "account_avatar", auth.id);
+    if (limited) return limited;
+    return handleUpdateAvatarPath(request, ctx, auth);
   }
 
   const mediaStatusMatch = pathname.match(/^\/media\/([^/]+)\/status$/);

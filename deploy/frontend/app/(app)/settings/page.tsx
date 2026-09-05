@@ -2,6 +2,7 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import { SecuritySection } from "@/components/settings/SecuritySection";
+import { ProfileSection } from "@/components/settings/ProfileSection";
 import { DangerZoneSection } from "@/components/settings/DangerZoneSection";
 import { CancelSubscriptionButton } from "@/components/settings/CancelSubscriptionButton";
 import { MemoryEditor } from "@/components/memory/MemoryEditor";
@@ -24,8 +25,9 @@ export default async function SettingsPage() {
 
   if (!user) redirect("/login");
 
-  const { data: profile } = await supabase.from("users").select("plan_tier").eq("id", user.id).single();
+  const { data: profile } = await supabase.from("users").select("plan_tier, full_name, avatar_path").eq("id", user.id).single();
   const planTier = (profile?.plan_tier ?? "free") as PlanTier;
+  const avatarUrl = profile?.avatar_path ? supabase.storage.from("avatars").getPublicUrl(profile.avatar_path).data.publicUrl : null;
 
   const [{ data: factRows }, { data: memoryRow }, { data: memorySettings }] = await Promise.all([
     supabase.from("user_memories").select("id, fact").eq("user_id", user.id).order("created_at", { ascending: false }),
@@ -41,6 +43,8 @@ export default async function SettingsPage() {
         <p className="text-xs uppercase tracking-wide text-muted-foreground">Email</p>
         <p className="text-sm text-foreground">{user.email}</p>
       </div>
+
+      <ProfileSection userId={user.id} initialFullName={profile?.full_name ?? ""} initialAvatarUrl={avatarUrl} />
 
       <div className="mt-4 rounded-[22px] border border-border bg-surface p-5">
         <p className="text-xs uppercase tracking-wide text-muted-foreground">Plan &amp; billing</p>
