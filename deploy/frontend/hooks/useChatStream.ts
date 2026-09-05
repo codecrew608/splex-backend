@@ -210,7 +210,18 @@ export function useChatStream(
         {
           onConversationCreated: ({ conversationId: newId }) => {
             setConversationId(newId);
-            upsertConversation({ id: newId, projectId: "", title: text.slice(0, 60) || "New chat", createdAt: new Date().toISOString() });
+            // Only add this to the sidebar's flat Conversations list when it's
+            // a genuine standalone chat. ConversationList's own mount-time
+            // query explicitly excludes anything whose project isn't
+            // type='chat' (see its own comment) — a chat started inside a
+            // real project must never appear there at all, not even briefly.
+            // The previous version of this call unconditionally upserted
+            // every new conversation with a hardcoded projectId: "", which is
+            // exactly what made a project chat flash into the flat list the
+            // instant its first message was sent (fixed live, 2026-09-05).
+            if (!initialProjectId) {
+              upsertConversation({ id: newId, projectId: "", title: text.slice(0, 60) || "New chat", createdAt: new Date().toISOString() });
+            }
             // window.history, NOT router.replace/push: a real Next.js App Router
             // navigation here would swap in a fresh server-rendered /chat/[id]
             // page — remounting this whole component mid-stream and silently
