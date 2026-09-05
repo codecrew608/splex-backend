@@ -1,9 +1,9 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { Trash2 } from "lucide-react";
+import { Trash2, Pencil } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
 import { useSidebarStore } from "@/state/sidebarStore";
 import { SidebarSearch } from "./SidebarSearch";
@@ -26,11 +26,15 @@ export function ConversationList() {
   const router = useRouter();
   const conversations = useSidebarStore((s) => s.conversations);
   const setConversations = useSidebarStore((s) => s.setConversations);
+  const upsertConversation = useSidebarStore((s) => s.upsertConversation);
   const removeConversation = useSidebarStore((s) => s.removeConversation);
   const [query, setQuery] = useState("");
   const [loading, setLoading] = useState(true);
   const [confirmingId, setConfirmingId] = useState<string | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editValue, setEditValue] = useState("");
+  const editInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -106,6 +110,39 @@ export function ConversationList() {
     [pathname, removeConversation, router],
   );
 
+  // Direct client write, same reasoning as handleDelete above:
+  // conversations_owner_all (RLS) already scopes this to the caller's own
+  // row, so a backend route would only duplicate that check.
+  const startEditing = useCallback((conversation: (typeof conversations)[number]) => {
+    setEditingId(conversation.id);
+    setEditValue(conversation.title);
+  }, []);
+
+  const cancelEditing = useCallback(() => {
+    setEditingId(null);
+    setEditValue("");
+  }, []);
+
+  const commitEditing = useCallback(async () => {
+    const id = editingId;
+    const conversation = conversations.find((c) => c.id === id);
+    const trimmed = editValue.trim();
+    setEditingId(null);
+    if (!id || !conversation || !trimmed || trimmed === conversation.title) return;
+
+    const supabase = createClient();
+    const { error } = await supabase.from("conversations").update({ title: trimmed }).eq("id", id);
+    if (error) {
+      console.error("[ConversationList] failed to rename conversation:", error);
+      return;
+    }
+    upsertConversation({ ...conversation, title: trimmed });
+  }, [editingId, editValue, conversations, upsertConversation]);
+
+  useEffect(() => {
+    if (editingId) editInputRef.current?.select();
+  }, [editingId]);
+
   return (
     <div className="flex flex-col gap-3">
       <div className="px-1">
@@ -125,6 +162,28 @@ export function ConversationList() {
           const active = pathname === href;
           const confirming = confirmingId === conversation.id;
           const deleting = deletingId === conversation.id;
+          const editing = editingId === conversation.id;
+
+          if (editing) {
+            return (
+              <div key={conversation.id} className="flex items-center gap-[9px] rounded-[7px] py-1.5 pl-3 pr-2">
+                <span className="h-[5px] w-[5px] shrink-0 rounded-full" style={{ background: "transparent" }} />
+                <input
+                  ref={editInputRef}
+                  value={editValue}
+                  onChange={(e) => setEditValue(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") commitEditing();
+                    if (e.key === "Escape") cancelEditing();
+                  }}
+                  onBlur={commitEditing}
+                  autoFocus
+                  className="min-w-0 flex-1 rounded-[5px] border border-accent bg-surface px-1.5 py-0.5 text-[13.5px] text-foreground outline-none"
+                />
+              </div>
+            );
+          }
+
           return (
             <div key={conversation.id} className="group/row relative">
               <Link
@@ -142,19 +201,19 @@ export function ConversationList() {
                 {/* Reserves room on the right for whichever control is
                     showing, so the title truncates instead of being
                     overlaid by it. Confirm mode needs noticeably more
-                    space than the single trash icon — caught live, where
+                    space than the edit+trash icon pair — caught live, where
                     "Delete / Cancel" sat on top of the title text. */}
                 <span
                   className={cn(
                     "min-w-0 flex-1 truncate transition-[padding]",
-                    confirming ? "pr-[92px]" : "group-hover/row:pr-6",
+                    confirming ? "pr-[92px]" : "group-hover/row:pr-[52px]",
                   )}
                 >
                   {conversation.title}
                 </span>
 
-                {/* The timestamp yields to the delete control on hover so
-                    the row never grows or reflows. */}
+                {/* The timestamp yields to the edit/delete controls on
+                    hover so the row never grows or reflows. */}
                 <span
                   className={cn(
                     "shrink-0 font-mono text-[10px] text-muted-foreground transition-opacity",
@@ -167,7 +226,7 @@ export function ConversationList() {
 
               <span
                 className={cn(
-                  "absolute right-1.5 top-1/2 flex -translate-y-1/2 items-center transition-opacity",
+                  "absolute right-1.5 top-1/2 flex -translate-y-1/2 items-center gap-[3px] transition-opacity",
                   confirming ? "opacity-100" : "opacity-0 focus-within:opacity-100 group-hover/row:opacity-100",
                 )}
               >
@@ -191,15 +250,26 @@ export function ConversationList() {
                     </button>
                   </span>
                 ) : (
-                  <button
-                    type="button"
-                    onClick={() => setConfirmingId(conversation.id)}
-                    aria-label={`Delete chat: ${conversation.title}`}
-                    title="Delete chat"
-                    className="flex h-6 w-6 items-center justify-center rounded-[5px] text-muted-foreground transition-colors hover:bg-surface-raised hover:text-danger"
-                  >
-                    <Trash2 size={13} strokeWidth={1.6} />
-                  </button>
+                  <>
+                    <button
+                      type="button"
+                      onClick={() => startEditing(conversation)}
+                      aria-label={`Rename chat: ${conversation.title}`}
+                      title="Rename chat"
+                      className="flex h-6 w-6 items-center justify-center rounded-[5px] text-muted-foreground transition-colors hover:bg-surface-raised hover:text-accent"
+                    >
+                      <Pencil size={12} strokeWidth={1.6} />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setConfirmingId(conversation.id)}
+                      aria-label={`Delete chat: ${conversation.title}`}
+                      title="Delete chat"
+                      className="flex h-6 w-6 items-center justify-center rounded-[5px] text-muted-foreground transition-colors hover:bg-surface-raised hover:text-danger"
+                    >
+                      <Trash2 size={13} strokeWidth={1.6} />
+                    </button>
+                  </>
                 )}
               </span>
             </div>

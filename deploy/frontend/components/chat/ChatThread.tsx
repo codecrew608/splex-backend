@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { Link2, MoreHorizontal, Trash2, Check } from "lucide-react";
+import { Link2, MoreHorizontal, Trash2, Check, ArrowDown } from "lucide-react";
 import type { ChatMessage } from "@/shared-types";
 import { useChatStream, type WorkflowView } from "@/hooks/useChatStream";
 import { useSidebarStore } from "@/state/sidebarStore";
@@ -56,8 +56,15 @@ export function ChatThread({
   } = useChatStream(initialConversationId, initialMessages, projectId, initialWorkflow ?? null);
 
   const bottomRef = useRef<HTMLDivElement>(null);
+  const scrollContainerRef = useRef<HTMLDivElement>(null);
   const [copiedLink, setCopiedLink] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
+  // "Jump to latest" affordance: invisible while the conversation already
+  // fits on screen or the user is already at the bottom (nothing to jump
+  // to), visible once they've scrolled up far enough that the newest
+  // content is genuinely out of view — e.g. scrolled up to re-read
+  // something while a long answer is still streaming in below.
+  const [showScrollButton, setShowScrollButton] = useState(false);
   // SidebarReopenButton is position:fixed at left-3/top-3 and only exists
   // while the sidebar is closed — which put it directly on top of this
   // header's title (reported live: the chat name renders underneath the
@@ -68,8 +75,40 @@ export function ChatThread({
   const sidebarOpen = useSidebarStore((s) => s.open);
 
   useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
+    // Don't yank the user back down if they've deliberately scrolled up to
+    // re-read something while a response is still streaming in below —
+    // only auto-follow while they're already at (or near) the bottom.
+    if (!showScrollButton) bottomRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
+  }, [messages, statusLabel, showScrollButton]);
+
+  // 120px: enough slack that the button doesn't flicker on tiny sub-pixel
+  // scroll deltas right at the bottom, small enough that it still shows up
+  // promptly once the user has genuinely scrolled away from the latest
+  // content.
+  const NEAR_BOTTOM_THRESHOLD_PX = 120;
+
+  useEffect(() => {
+    const el = scrollContainerRef.current;
+    if (!el) return;
+
+    function updateFromScrollPosition() {
+      if (!el) return;
+      const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
+      setShowScrollButton(distanceFromBottom > NEAR_BOTTOM_THRESHOLD_PX);
+    }
+
+    updateFromScrollPosition();
+    el.addEventListener("scroll", updateFromScrollPosition, { passive: true });
+    // Content growing while streaming in (no scroll event fires for that on
+    // its own) can also change whether the user is "near the bottom" —
+    // re-check on every render this effect's own deps change, not just on
+    // an actual scroll gesture.
+    return () => el.removeEventListener("scroll", updateFromScrollPosition);
   }, [messages, statusLabel]);
+
+  function scrollToBottom() {
+    bottomRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
+  }
 
   async function handleEditSubmit(messageId: string, newContent: string) {
     if (!conversationId) return;
@@ -197,7 +236,8 @@ export function ChatThread({
         </div>
       ) : (
         <>
-          <div className="flex-1 overflow-y-auto px-3 pb-2 pt-5 sm:px-6 sm:pt-[30px]">
+          <div className="relative flex-1 min-h-0">
+            <div ref={scrollContainerRef} className="h-full overflow-y-auto px-3 pb-2 pt-5 sm:px-6 sm:pt-[30px]">
             <div className="mx-auto flex w-full max-w-[720px] flex-col gap-[30px]">
               {messages.map((message) => (
                 <MessageBubble
@@ -229,6 +269,19 @@ export function ChatThread({
               )}
               <div ref={bottomRef} />
             </div>
+            </div>
+
+            {showScrollButton && (
+              <button
+                type="button"
+                onClick={scrollToBottom}
+                aria-label="Scroll to latest message"
+                title="Scroll to latest message"
+                className="absolute bottom-3 left-1/2 flex h-9 w-9 -translate-x-1/2 animate-fade-in items-center justify-center rounded-full border border-border-strong bg-surface-raised text-foreground shadow-[var(--shadow-card)] transition-colors hover:border-accent hover:text-accent"
+              >
+                <ArrowDown size={16} strokeWidth={1.8} />
+              </button>
+            )}
           </div>
 
           <Composer onSend={sendMessage} isStreaming={isStreaming} onStop={stop} />
