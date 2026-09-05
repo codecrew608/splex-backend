@@ -121,6 +121,14 @@ export interface DoneEventData {
   // no disclosure": there's nothing genuine to disclose about a turn that
   // never actually generated anything.
   routing?: CortexRoutingInfo;
+  // 2-3 short, clickable next-question suggestions grounded in this
+  // specific exchange (see backend followUpSuggestions.ts) — a natural
+  // nudge to keep the conversation going, not a notification. Absent (not
+  // empty array) for anything other than a successful ordinary chat turn:
+  // media/workflow/deep_research/web_search turns, and any turn where
+  // generating them failed or timed out, simply don't have any — the
+  // frontend must never render an empty suggestions row.
+  suggestions?: string[];
 }
 
 // url/title/snippet only — never the raw OpenRouter annotation object

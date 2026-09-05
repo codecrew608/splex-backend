@@ -290,6 +290,7 @@ export function ChatThread({
                   onArtifactsChange={handleArtifactsChange}
                   onOpenArtifact={(artifact) => setActiveArtifactId(artifact.id)}
                   activeArtifactId={activeArtifactId}
+                  onSuggestionClick={sendMessage}
                 />
               ))}
 

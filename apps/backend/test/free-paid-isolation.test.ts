@@ -119,6 +119,7 @@ describe("every provider call site derives its model from a tier-guarded source"
       ["cortex/classify.ts", "classifierCandidates"],
       ["cortex/workflow/plan.ts", "plannerCandidates"],
       ["memory/extractMemory.ts", "memoryModelCandidates"],
+      ["cortex/followUpSuggestions.ts", "candidates"],
     ] as const;
 
     for (const [file, varName] of KNOWN_CALLERS) {

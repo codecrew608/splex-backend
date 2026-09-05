@@ -64,6 +64,9 @@ export interface LocalChatMessage extends ChatMessage {
   // WorkflowView's own cortexVersion at the moment this message's `done`
   // event arrives — same snapshot pattern already used for workflowSteps.
   cortexVersion?: CortexVersion | null;
+  // Snapshotted from done.suggestions exactly like citations/routing above
+  // — absent (not []) for anything but a successful ordinary chat turn.
+  suggestions?: string[];
 }
 
 export interface WorkflowStepView {
@@ -253,7 +256,7 @@ export function useChatStream(
               prev.map((m) => (m.id === assistantLocalId ? { ...m, content: m.content || message, streaming: false } : m)),
             );
           },
-          onDone: ({ messageId, userMessageId, awaitingClarification, pendingMediaId, citations, routing }) => {
+          onDone: ({ messageId, userMessageId, awaitingClarification, pendingMediaId, citations, routing, suggestions }) => {
             setMessages((prev) =>
               prev.map((m) => {
                 if (m.id === assistantLocalId) {
@@ -273,6 +276,7 @@ export function useChatStream(
                     cortexVersion: workflowRef.current?.cortexVersion ?? null,
                     citations,
                     routing: routing ?? null,
+                    suggestions,
                   };
                 }
                 // Swap the user message's client-generated placeholder id

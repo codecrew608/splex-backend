@@ -24,6 +24,11 @@ interface MessageBubbleProps {
   onArtifactsChange?: (messageId: string, artifacts: ExtractedArtifact[]) => void;
   onOpenArtifact?: (artifact: ExtractedArtifact) => void;
   activeArtifactId?: string | null;
+  // Follow-up suggestion pills (see done.suggestions) — only ever rendered
+  // when showRegenerate is also true (i.e. this is the latest assistant
+  // message): a stale suggestion from earlier in the conversation, still
+  // sitting there after the user has already moved on, isn't useful.
+  onSuggestionClick?: (text: string) => void;
 }
 
 function formatTime(iso: string): string {
@@ -53,6 +58,7 @@ export function MessageBubble({
   onArtifactsChange,
   onOpenArtifact,
   activeArtifactId,
+  onSuggestionClick,
 }: MessageBubbleProps) {
   const [copied, setCopied] = useState(false);
   const [editing, setEditing] = useState(false);
@@ -220,6 +226,20 @@ export function MessageBubble({
         {!message.streaming && message.citations && message.citations.length > 0 && (
           <div className="mt-3">
             <CitationsList citations={message.citations} />
+          </div>
+        )}
+        {!message.streaming && showRegenerate && message.suggestions && message.suggestions.length > 0 && (
+          <div className="mt-3 flex flex-wrap gap-2">
+            {message.suggestions.map((suggestion) => (
+              <button
+                key={suggestion}
+                type="button"
+                onClick={() => onSuggestionClick?.(suggestion)}
+                className="rounded-full border border-border bg-surface px-3.5 py-2 text-left text-[13px] text-foreground transition-colors hover:border-accent hover:text-accent"
+              >
+                {suggestion}
+              </button>
+            ))}
           </div>
         )}
       </div>

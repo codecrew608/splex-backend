@@ -43,6 +43,7 @@ import { retrieveFileContext } from "../intelligence/retrieve.js";
 import { shouldUseWorkflow } from "../cortex/workflow/trigger.js";
 import { getActiveWorkflow, cancelActiveWorkflow, startWorkflow, resumeWorkflow } from "../cortex/workflow/orchestrator.js";
 import { recordModelOutcome, recordModelFailure } from "../cortex/modelHealth.js";
+import { generateFollowUpSuggestions } from "../cortex/followUpSuggestions.js";
 import { generateImage } from "../images/generate.js";
 import { generateSpeech, estimateAudioRequestMinutes, MAX_AUDIO_MINUTES_PER_REQUEST } from "../audio/generate.js";
 import { checkDualPeriodQuota } from "../entitlements/index.js";
@@ -593,6 +594,14 @@ export async function runChat(
       skipDaily: true,
     });
 
+    // Awaited (not scheduleBackground'd like memory extraction below) —
+    // this needs to reach THIS response's done event to render now, not
+    // next turn. Kept cheap and fast: free-tier-eligible models only, a
+    // short max_tokens ceiling, and it never throws (see its own
+    // try/catch) — a failure here silently means no suggestions, never a
+    // broken or delayed response.
+    const suggestions = await generateFollowUpSuggestions(fastify, user.planTier, classifierInputMessage, fullText);
+
     // realCost.creditsCharged is real, persisted (consumeCredits above) —
     // never sent to the client, on either field. SPLEX credits are an
     // internal metering unit, not a product-facing number.
@@ -608,6 +617,7 @@ export async function runChat(
         reason: explainModelSelection(decision.category, decision.complexity, cortexVersion),
         responseTimeMs: Date.now() - requestStartedAt,
       },
+      suggestions: suggestions.length > 0 ? suggestions : undefined,
     });
     sse.end();
 
