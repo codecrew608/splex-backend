@@ -1,7 +1,8 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { MessageSquare, Plus } from "lucide-react";
+import { Plus } from "lucide-react";
 import { createClient } from "@/lib/supabase/server";
+import { ProjectConversationList } from "@/components/projects/ProjectConversationList";
 
 interface PageProps {
   params: Promise<{ projectId: string }>;
@@ -47,27 +48,7 @@ export default async function ProjectDetailPage({ params }: PageProps) {
       </div>
       {project.description && <p className="mt-2 text-sm text-muted-foreground">{project.description}</p>}
 
-      <ul className="mt-6 divide-y divide-border overflow-hidden rounded-[22px] border border-border bg-surface">
-        {(conversations ?? []).map((conversation) => (
-          <li key={conversation.id}>
-            <Link
-              href={`/chat/${conversation.id}`}
-              className="flex items-center gap-3 px-4 py-3 text-sm text-foreground transition-colors hover:bg-surface-raised"
-            >
-              <MessageSquare size={16} className="shrink-0 text-muted-foreground" />
-              <span className="truncate">{conversation.title}</span>
-              <span className="ml-auto shrink-0 text-xs text-muted-foreground">
-                {new Date(conversation.created_at as string).toLocaleDateString()}
-              </span>
-            </Link>
-          </li>
-        ))}
-        {(!conversations || conversations.length === 0) && (
-          <li className="px-4 py-6 text-center text-sm text-muted-foreground">
-            No chats in this project yet — start one above.
-          </li>
-        )}
-      </ul>
+      <ProjectConversationList initialConversations={conversations ?? []} />
     </div>
   );
 }
