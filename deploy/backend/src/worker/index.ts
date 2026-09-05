@@ -10,6 +10,7 @@ import { handleChatRequest, handleTruncateMessage } from "./routes/chat.js";
 import { handleProcessFile } from "./routes/files.js";
 import { handleCreateProject } from "./routes/projects.js";
 import { handleFakeCheckout, handleFakeCancel } from "./routes/billing.js";
+import { handleRazorpayWebhook } from "./routes/razorpay.js";
 import { handleDeleteAccount, handleSaveProfile, handleSyncTimezone } from "./routes/account.js";
 import { handleMediaStatus } from "./routes/media.js";
 import { handleGetEntitlements } from "./routes/entitlements.js";
@@ -113,6 +114,14 @@ async function route(request: Request, ctx: WorkerCtx, execCtx: ExecutionContext
     const limited = await requireRateLimit(ctx, "billing_cancel", auth.id);
     if (limited) return limited;
     return handleFakeCancel(ctx, auth);
+  }
+
+  // No requireAuth/requireRateLimit — Razorpay authenticates this request
+  // via HMAC signature (verified inside handleRazorpayWebhook), not a SPLEX
+  // user session. Cloudflare's edge network + the signature check itself
+  // are the gates against abuse, same reasoning as /health above.
+  if (method === "POST" && pathname === "/webhooks/razorpay") {
+    return handleRazorpayWebhook(request, ctx);
   }
 
   if (method === "DELETE" && pathname === "/account") {

@@ -11,6 +11,7 @@ import chatRoutes from "./routes/chat.js";
 import filesRoutes from "./routes/files.js";
 import projectsRoutes from "./routes/projects.js";
 import billingRoutes from "./routes/billing.js";
+import razorpayRoutes from "./routes/razorpay.js";
 import accountRoutes from "./routes/account.js";
 import mediaRoutes from "./routes/media.js";
 import entitlementsRoutes from "./routes/entitlements.js";
@@ -56,6 +57,7 @@ async function main() {
   await fastify.register(filesRoutes);
   await fastify.register(projectsRoutes);
   await fastify.register(billingRoutes);
+  await fastify.register(razorpayRoutes);
   await fastify.register(accountRoutes);
   await fastify.register(mediaRoutes);
   await fastify.register(entitlementsRoutes);
