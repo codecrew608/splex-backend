@@ -1,8 +1,8 @@
 "use client";
 
-import { useRef } from "react";
+import { useRef, type MouseEvent, type ReactNode } from "react";
 import Link from "next/link";
-import { motion, useReducedMotion, useScroll, useSpring, useTransform, type Variants } from "framer-motion";
+import { motion, useMotionTemplate, useReducedMotion, useScroll, useSpring, useTransform, type Variants } from "framer-motion";
 import { ArrowRight, Check, Cpu, GitBranch, Receipt, Wallet } from "lucide-react";
 import { Logo } from "@/components/ui/Logo";
 import { ThemeToggle } from "@/components/ui/ThemeToggle";
@@ -24,16 +24,15 @@ const rise: Variants = {
   visible: { opacity: 1, y: 0, transition: { duration: 0.55, ease: EASE } },
 };
 
-// Card-only variant: settles in from a slight backward 3D tilt rather than
-// just rising — needs `perspective` set on the parent grid (see its own
-// className below) for rotateX to actually read as depth instead of a flat
-// vertical squash. Deliberately NOT used for headline/body text or CTAs —
-// tilting something meant to be read is a readability/motion-sickness
-// problem (the same reason the hero's own parallax stays confined to its
-// decorative glow layer); this is reserved for card-shaped objects only.
+// Card-only variant: settles in with a bit more weight than `rise` (a
+// small forward scale/lift). The 3D rotation deliberately does NOT live
+// here — it lives on the nested <TiltCard>, which owns rotateX/rotateY as
+// live MotionValues so the same values can carry both the mount tilt and
+// the later cursor-tracking tilt without two mechanisms (variants vs.
+// live style) fighting over the same transform property.
 const riseCard: Variants = {
-  hidden: { opacity: 0, y: 28, rotateX: -14, scale: 0.96 },
-  visible: { opacity: 1, y: 0, rotateX: 0, scale: 1, transition: { duration: 0.7, ease: EASE } },
+  hidden: { opacity: 0, y: 28, scale: 0.96 },
+  visible: { opacity: 1, y: 0, scale: 1, transition: { duration: 0.7, ease: EASE } },
 };
 
 // Scroll-triggered sections share these props. `once` matters: re-playing
@@ -104,6 +103,69 @@ const PLANS = [
   },
 ];
 
+// Mouse-tracking 3D tilt + a moving specular highlight — the "holographic
+// card" treatment used on every pillar and pricing card below. rotateX/
+// rotateY are springs this component owns outright: they start in a
+// tilted "-14°" resting pose, ease to flat the first time the card
+// scrolls into view (so it still gets an entrance tilt), and after that
+// respond continuously to cursor position. Keeping both the entrance and
+// the hover behavior on the same pair of MotionValues — rather than an
+// entrance via `variants` and hover via `style` — avoids the two fighting
+// over the same transform property. Skipped entirely under
+// prefers-reduced-motion, matching every other effect on this page.
+function TiltCard({
+  maxDeg,
+  restRotateX = -14,
+  className,
+  children,
+}: {
+  maxDeg: number;
+  restRotateX?: number;
+  className?: string;
+  children: ReactNode;
+}) {
+  const reduceMotion = useReducedMotion();
+  const rotateX = useSpring(reduceMotion ? 0 : restRotateX, { stiffness: 240, damping: 22, mass: 0.6 });
+  const rotateY = useSpring(0, { stiffness: 240, damping: 22, mass: 0.6 });
+  const glareX = useSpring(50, { stiffness: 240, damping: 26 });
+  const glareY = useSpring(50, { stiffness: 240, damping: 26 });
+  const glare = useMotionTemplate`radial-gradient(420px circle at ${glareX}% ${glareY}%, rgba(255,255,255,0.14), transparent 65%)`;
+
+  function onViewportEnter() {
+    if (!reduceMotion) rotateX.set(0);
+  }
+  function onMouseMove(e: MouseEvent<HTMLDivElement>) {
+    if (reduceMotion) return;
+    const rect = e.currentTarget.getBoundingClientRect();
+    const px = (e.clientX - rect.left) / rect.width;
+    const py = (e.clientY - rect.top) / rect.height;
+    rotateY.set((px - 0.5) * maxDeg * 2);
+    rotateX.set(-(py - 0.5) * maxDeg * 2);
+    glareX.set(px * 100);
+    glareY.set(py * 100);
+  }
+  function onMouseLeave() {
+    rotateX.set(0);
+    rotateY.set(0);
+  }
+
+  return (
+    <motion.div
+      onViewportEnter={onViewportEnter}
+      viewport={{ once: true, amount: 0.4 }}
+      onMouseMove={onMouseMove}
+      onMouseLeave={onMouseLeave}
+      style={reduceMotion ? undefined : { rotateX, rotateY, transformPerspective: 700 }}
+      className={`relative ${className ?? ""}`}
+    >
+      {children}
+      {!reduceMotion && (
+        <motion.span aria-hidden className="pointer-events-none absolute inset-0" style={{ background: glare }} />
+      )}
+    </motion.div>
+  );
+}
+
 export function LandingPage() {
   const reduceMotion = useReducedMotion();
   const heroRef = useRef<HTMLElement>(null);
@@ -114,23 +176,64 @@ export function LandingPage() {
   const { scrollYProgress } = useScroll();
   const progress = useSpring(scrollYProgress, { stiffness: 120, damping: 28, restDelta: 0.001 });
 
-  // Hero parallax, applied ONLY to the decorative glow layer — never to
-  // the headline, body copy, or CTAs. Parallaxing text is a documented
+  // Hero parallax: three depth planes behind the headline, each moving at
+  // its own speed so the scene reads as genuinely layered rather than one
+  // flat blob. Farthest (the glow) moves least; the four small "nodes" —
+  // a deliberate callback to the product's own subject, Cortex routing
+  // between models, not generic decoration — move fastest, as the
+  // nearest plane. None of this ever touches the headline, body copy, or
+  // CTAs: parallaxing text people are meant to read is a documented
   // readability and motion-sickness problem, and the CTA is the one thing
   // on this page that must never drift away from where someone aimed.
   const { scrollYProgress: heroProgress } = useScroll({
     target: heroRef,
     offset: ["start start", "end start"],
   });
-  const glowY = useTransform(heroProgress, [0, 1], [0, 60]);
+  const glowY = useTransform(heroProgress, [0, 1], [0, 28]);
+  const ringY = useTransform(heroProgress, [0, 1], [0, -36]);
+  const ringRotate = useTransform(heroProgress, [0, 1], [0, 22]);
+  const nodeY1 = useTransform(heroProgress, [0, 1], [0, 34]);
+  const nodeY2 = useTransform(heroProgress, [0, 1], [0, 52]);
+  const nodeY3 = useTransform(heroProgress, [0, 1], [0, 40]);
+  const nodeY4 = useTransform(heroProgress, [0, 1], [0, 58]);
+
   // The routing demo card's own 3D presence — a genuine perspective tilt
-  // (rotateY/rotateX), not a flat 2D transform, that eases toward facing
-  // the viewer straight-on as they scroll down through the hero. Small
-  // angles on purpose: enough to read as a physical, tilted object with
-  // real depth, not enough to feel like a gimmick or strain reading the
-  // card's own text mid-transition.
-  const demoRotateY = useTransform(heroProgress, [0, 1], [-6, 2]);
-  const demoRotateX = useTransform(heroProgress, [0, 1], [3, -1]);
+  // (rotateY/rotateX), not a flat 2D transform, split across two NESTED
+  // elements rather than summed into one pair of values: the outer carries
+  // a scroll-linked base tilt that eases the card toward facing the viewer
+  // straight-on while the hero scrolls past, and the inner carries an
+  // independent cursor-tracking tilt (the same "holographic card"
+  // treatment as <TiltCard>) that takes over once a pointer is over the
+  // card. transformStyle: "preserve-3d" on the outer is what makes the
+  // inner's own rotation compose with the outer's instead of being
+  // flattened to 2D. (An earlier version tried to sum both into one
+  // rotateX/rotateY pair via useTransform([a, b], ...) — the combined
+  // value computed correctly by its own .get(), but never actually
+  // reached the DOM's rendered transform, so the card looked inert to
+  // the cursor. Two independent, directly-bound springs — proven to work
+  // by <TiltCard> — sidestep whatever that was.)
+  const demoRotateY = useTransform(heroProgress, [0, 1], [-14, 4]);
+  const demoRotateX = useTransform(heroProgress, [0, 1], [5, -2]);
+  const demoMouseRotateY = useSpring(0, { stiffness: 240, damping: 22, mass: 0.6 });
+  const demoMouseRotateX = useSpring(0, { stiffness: 240, damping: 22, mass: 0.6 });
+  const demoGlareX = useSpring(50, { stiffness: 240, damping: 26 });
+  const demoGlareY = useSpring(50, { stiffness: 240, damping: 26 });
+  const demoGlare = useMotionTemplate`radial-gradient(560px circle at ${demoGlareX}% ${demoGlareY}%, rgba(255,255,255,0.12), transparent 65%)`;
+
+  function onDemoMouseMove(e: MouseEvent<HTMLDivElement>) {
+    if (reduceMotion) return;
+    const rect = e.currentTarget.getBoundingClientRect();
+    const px = (e.clientX - rect.left) / rect.width;
+    const py = (e.clientY - rect.top) / rect.height;
+    demoMouseRotateY.set((px - 0.5) * 20);
+    demoMouseRotateX.set(-(py - 0.5) * 20);
+    demoGlareX.set(px * 100);
+    demoGlareY.set(py * 100);
+  }
+  function onDemoMouseLeave() {
+    demoMouseRotateX.set(0);
+    demoMouseRotateY.set(0);
+  }
 
   return (
     <div className="min-h-screen bg-background">
@@ -190,6 +293,34 @@ export function LandingPage() {
         >
           <div className="h-full w-full rounded-full" style={{ background: "var(--accent-gradient)" }} />
         </motion.div>
+        {/* Orbit ring + four routing "nodes" — the second and third depth
+            planes. Hidden below sm: the hero stacks to one column there
+            and these would otherwise float across the headline. */}
+        <motion.div
+          aria-hidden
+          style={reduceMotion ? undefined : { y: ringY, rotate: ringRotate }}
+          className="pointer-events-none absolute -top-6 right-[4%] hidden h-72 w-72 rounded-full border border-accent/25 opacity-60 sm:block sm:h-80 sm:w-80"
+        />
+        <motion.span
+          aria-hidden
+          style={reduceMotion ? undefined : { y: nodeY1 }}
+          className="pointer-events-none absolute left-[6%] top-[20%] hidden h-2.5 w-2.5 rounded-full bg-accent/50 sm:block"
+        />
+        <motion.span
+          aria-hidden
+          style={reduceMotion ? undefined : { y: nodeY2 }}
+          className="pointer-events-none absolute left-[15%] top-[68%] hidden h-1.5 w-1.5 rounded-full bg-accent/40 sm:block"
+        />
+        <motion.span
+          aria-hidden
+          style={reduceMotion ? undefined : { y: nodeY3 }}
+          className="pointer-events-none absolute right-[9%] top-[32%] hidden h-2 w-2 rounded-full bg-accent/45 sm:block"
+        />
+        <motion.span
+          aria-hidden
+          style={reduceMotion ? undefined : { y: nodeY4 }}
+          className="pointer-events-none absolute right-[20%] top-[74%] hidden h-1 w-1 rounded-full bg-accent/35 sm:block"
+        />
         <motion.div
           variants={container}
           initial="hidden"
@@ -259,10 +390,33 @@ export function LandingPage() {
             style={
               reduceMotion
                 ? undefined
-                : { rotateY: demoRotateY, rotateX: demoRotateX, transformPerspective: 1200 }
+                : {
+                    rotateY: demoRotateY,
+                    rotateX: demoRotateX,
+                    transformPerspective: 1200,
+                    transformStyle: "preserve-3d",
+                  }
             }
           >
-            <RoutingDemo />
+            <motion.div
+              onMouseMove={onDemoMouseMove}
+              onMouseLeave={onDemoMouseLeave}
+              className="relative"
+              style={
+                reduceMotion
+                  ? undefined
+                  : { rotateY: demoMouseRotateY, rotateX: demoMouseRotateX, transformPerspective: 1200 }
+              }
+            >
+              <RoutingDemo />
+              {!reduceMotion && (
+                <motion.span
+                  aria-hidden
+                  className="pointer-events-none absolute inset-0 rounded-2xl"
+                  style={{ background: demoGlare }}
+                />
+              )}
+            </motion.div>
           </motion.div>
         </motion.div>
       </section>
@@ -289,18 +443,21 @@ export function LandingPage() {
                   variants={riseCard}
                   // Lifts toward the pointer. -3px is enough to register as
                   // a response without the card appearing to detach from
-                  // the grid; skipped entirely under reduced motion.
+                  // the grid; skipped entirely under reduced motion. The 3D
+                  // tilt itself lives on the nested TiltCard, not here.
                   whileHover={reduceMotion ? undefined : { y: -3 }}
                   transition={{ duration: 0.2, ease: EASE }}
-                  className="group rounded-2xl border border-border bg-surface-raised p-5 transition-colors hover:border-accent sm:p-6"
+                  className="group overflow-hidden rounded-2xl border border-border bg-surface-raised transition-colors hover:border-accent"
                 >
-                  <span className="inline-flex h-9 w-9 items-center justify-center rounded-lg bg-accent-soft text-accent transition-transform duration-200 group-hover:scale-105">
-                    <Icon size={17} strokeWidth={1.6} />
-                  </span>
-                  <h3 className="mt-4 font-display text-[19px] tracking-[-0.01em] text-foreground">
-                    {title}
-                  </h3>
-                  <p className="mt-2 text-[14px] leading-relaxed text-muted-foreground">{body}</p>
+                  <TiltCard maxDeg={9} className="p-5 sm:p-6">
+                    <span className="inline-flex h-9 w-9 items-center justify-center rounded-lg bg-accent-soft text-accent transition-transform duration-200 group-hover:scale-105">
+                      <Icon size={17} strokeWidth={1.6} />
+                    </span>
+                    <h3 className="mt-4 font-display text-[19px] tracking-[-0.01em] text-foreground">
+                      {title}
+                    </h3>
+                    <p className="mt-2 text-[14px] leading-relaxed text-muted-foreground">{body}</p>
+                  </TiltCard>
                 </motion.div>
               ))}
             </div>
@@ -331,33 +488,35 @@ export function LandingPage() {
                   transition={{ duration: 0.2, ease: EASE }}
                   className={
                     plan.highlighted
-                      ? "rounded-2xl border border-accent bg-accent-soft p-6"
-                      : "rounded-2xl border border-border bg-surface p-6 transition-colors hover:border-border-strong"
+                      ? "overflow-hidden rounded-2xl border border-accent bg-accent-soft"
+                      : "overflow-hidden rounded-2xl border border-border bg-surface transition-colors hover:border-border-strong"
                   }
                 >
-                  <h3 className="font-display text-xl text-foreground">{plan.name}</h3>
-                  <p className="mt-2">
-                    <span className="font-display text-3xl text-foreground sm:text-4xl">{plan.price}</span>
-                    {plan.period && <span className="text-sm text-muted-foreground">{plan.period}</span>}
-                  </p>
-                  <ul className="mt-5 space-y-2.5">
-                    {plan.features.map((f) => (
-                      <li key={f} className="flex items-start gap-2 text-[13.5px] text-foreground">
-                        <Check size={15} className="mt-0.5 shrink-0 text-accent" />
-                        <span>{f}</span>
-                      </li>
-                    ))}
-                  </ul>
-                  <Link
-                    href="/login"
-                    className={
-                      plan.highlighted
-                        ? "mt-6 flex w-full items-center justify-center rounded-xl bg-accent px-4 py-2.5 text-sm font-semibold text-accent-foreground transition-colors hover:bg-accent-hover"
-                        : "mt-6 flex w-full items-center justify-center rounded-xl border border-border-strong px-4 py-2.5 text-sm font-medium text-foreground transition-colors hover:border-accent hover:text-accent"
-                    }
-                  >
-                    {plan.highlighted ? "Start with Starter" : "Start free"}
-                  </Link>
+                  <TiltCard maxDeg={9} className="p-6">
+                    <h3 className="font-display text-xl text-foreground">{plan.name}</h3>
+                    <p className="mt-2">
+                      <span className="font-display text-3xl text-foreground sm:text-4xl">{plan.price}</span>
+                      {plan.period && <span className="text-sm text-muted-foreground">{plan.period}</span>}
+                    </p>
+                    <ul className="mt-5 space-y-2.5">
+                      {plan.features.map((f) => (
+                        <li key={f} className="flex items-start gap-2 text-[13.5px] text-foreground">
+                          <Check size={15} className="mt-0.5 shrink-0 text-accent" />
+                          <span>{f}</span>
+                        </li>
+                      ))}
+                    </ul>
+                    <Link
+                      href="/login"
+                      className={
+                        plan.highlighted
+                          ? "mt-6 flex w-full items-center justify-center rounded-xl bg-accent px-4 py-2.5 text-sm font-semibold text-accent-foreground transition-colors hover:bg-accent-hover"
+                          : "mt-6 flex w-full items-center justify-center rounded-xl border border-border-strong px-4 py-2.5 text-sm font-medium text-foreground transition-colors hover:border-accent hover:text-accent"
+                      }
+                    >
+                      {plan.highlighted ? "Start with Starter" : "Start free"}
+                    </Link>
+                  </TiltCard>
                 </motion.div>
               ))}
             </div>
