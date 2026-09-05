@@ -281,6 +281,11 @@ cat > "$OUT/wrangler.jsonc" <<'EOF'
     // `wrangler secret put` only, same rule as SUPABASE_SERVICE_ROLE_KEY
     // above — never add it here.
     "RAZORPAY_STARTER_PLAN_ID": "plan_TYEBWcXvja8WRM",
+    // Razorpay's publishable key id — meant to be used client-side
+    // (Checkout.js), not a credential. RAZORPAY_KEY_SECRET is the actual
+    // secret counterpart and, like the two above, is `wrangler secret put`
+    // only — never added here.
+    "RAZORPAY_KEY_ID": "rzp_live_TYEJHvqDjac6UU",
     "LOG_LEVEL": "info"
   }
 }
