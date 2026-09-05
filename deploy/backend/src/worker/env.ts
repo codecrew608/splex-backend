@@ -46,6 +46,8 @@ const workerEnvSchema = z.object({
   // hand, see this file's own top-of-file comment.
   RAZORPAY_WEBHOOK_SECRET: z.string().min(1).optional(),
   RAZORPAY_STARTER_PLAN_ID: z.string().min(1).default("plan_TYEBWcXvja8WRM"),
+  RAZORPAY_KEY_ID: z.string().min(1).optional(),
+  RAZORPAY_KEY_SECRET: z.string().min(1).optional(),
   LOG_LEVEL: z.string().default("info"),
 });
 

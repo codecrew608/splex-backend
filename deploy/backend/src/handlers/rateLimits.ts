@@ -19,6 +19,7 @@ export const RATE_LIMITS = {
   projects_create: { max: 10, windowMs: 60_000 },
   billing_checkout: { max: 5, windowMs: 60_000 },
   billing_cancel: { max: 5, windowMs: 60_000 },
+  billing_create_subscription: { max: 5, windowMs: 60_000 },
   media_status: { max: 30, windowMs: 60_000 },
   feedback_submit: { max: 10, windowMs: 60_000 },
 } as const;

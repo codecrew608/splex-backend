@@ -1,5 +1,5 @@
 import type { FastifyPluginAsync } from "fastify";
-import { fakeCheckout, fakeCancel } from "../handlers/billing.js";
+import { fakeCheckout, fakeCancel, createSubscription } from "../handlers/billing.js";
 import { RATE_LIMITS } from "../handlers/rateLimits.js";
 import { sendResult } from "./sendResult.js";
 
@@ -26,6 +26,21 @@ const billingRoutes: FastifyPluginAsync = async (fastify) => {
       ],
     },
     async (request, reply) => sendResult(reply, await fakeCancel(fastify, request.user.id)),
+  );
+
+  fastify.post(
+    "/billing/create-subscription",
+    {
+      preHandler: [
+        fastify.authenticate,
+        fastify.rateLimitByUser(
+          "billing_create_subscription",
+          RATE_LIMITS.billing_create_subscription.max,
+          RATE_LIMITS.billing_create_subscription.windowMs,
+        ),
+      ],
+    },
+    async (request, reply) => sendResult(reply, await createSubscription(fastify, request.user.id)),
   );
 };
 

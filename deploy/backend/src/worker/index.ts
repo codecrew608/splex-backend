@@ -9,7 +9,7 @@ import { handleHealth } from "./routes/health.js";
 import { handleChatRequest, handleTruncateMessage } from "./routes/chat.js";
 import { handleProcessFile } from "./routes/files.js";
 import { handleCreateProject } from "./routes/projects.js";
-import { handleFakeCheckout, handleFakeCancel } from "./routes/billing.js";
+import { handleFakeCheckout, handleFakeCancel, handleCreateSubscription } from "./routes/billing.js";
 import { handleRazorpayWebhook } from "./routes/razorpay.js";
 import { handleDeleteAccount, handleSaveProfile, handleSyncTimezone } from "./routes/account.js";
 import { handleMediaStatus } from "./routes/media.js";
@@ -114,6 +114,14 @@ async function route(request: Request, ctx: WorkerCtx, execCtx: ExecutionContext
     const limited = await requireRateLimit(ctx, "billing_cancel", auth.id);
     if (limited) return limited;
     return handleFakeCancel(ctx, auth);
+  }
+
+  if (method === "POST" && pathname === "/billing/create-subscription") {
+    const auth = await requireAuth(request, ctx);
+    if (auth instanceof Response) return auth;
+    const limited = await requireRateLimit(ctx, "billing_create_subscription", auth.id);
+    if (limited) return limited;
+    return handleCreateSubscription(ctx, auth);
   }
 
   // No requireAuth/requireRateLimit — Razorpay authenticates this request
