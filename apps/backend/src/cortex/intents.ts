@@ -13,7 +13,40 @@ export interface IntentDefinition {
   capabilities: string[];
   strongKeywords: RegExp[];
   weakKeywords: RegExp[];
+  /**
+   * How much evidence a match here actually carries. 1 = a domain intent
+   * (default); 0 = the catch-all.
+   *
+   * Used only to break ties between intents with an EQUAL number of weak
+   * hits, where "general" losing to a domain intent is the right call.
+   * It is deliberately not applied to strong hits: after the fix below,
+   * general_qa has no strong keywords at all, so two competing strong hits
+   * now genuinely mean two domains disagree — which is exactly when the
+   * LLM classifier should be paid for.
+   */
+  specificity?: number;
 }
+
+// --- shared building blocks for the maths patterns -------------------------
+//
+// A measurement unit vocabulary, so "15 km in meters" is recognised as a
+// conversion while "3 days in Paris" is not. Written once and reused: a unit
+// list that drifts between two patterns is a bug waiting to happen.
+const UNIT =
+  "km|kilomet(?:er|re)s?|m|met(?:er|re)s?|cm|centimet(?:er|re)s?|mm|millimet(?:er|re)s?" +
+  "|mi|miles?|ft|feet|foot|in|inch(?:es)?|yd|yards?" +
+  "|kg|kilograms?|g|grams?|mg|milligrams?|lbs?|pounds?|oz|ounces?|tonnes?|tons?" +
+  "|l|lit(?:er|re)s?|ml|millilit(?:er|re)s?|gal|gallons?|pints?|cups?" +
+  "|s|secs?|seconds?|min|mins?|minutes?|h|hr|hrs?|hours?|days?|weeks?|months?|years?" +
+  "|c|celsius|f|fahrenheit|k|kelvin|mph|kph|km\\/h|m\\/s" +
+  "|bytes?|kb|mb|gb|tb|hz|khz|mhz|ghz|volts?|watts?|joules?|newtons?";
+
+// Physical-measurement units only. Time words are excluded on purpose:
+// "how many years did the war last" is a history question, not a sum.
+const PHYSICAL_UNIT =
+  "gram(?:me)?s?|kilogram(?:me)?s?|kg|mg|met(?:er|re)s?|kilomet(?:er|re)s?|km|cm|mm" +
+  "|miles?|feet|foot|inch(?:es)?|yards?|lit(?:er|re)s?|ml|gallons?|ounces?|pounds?|lbs?" +
+  "|bytes?|kb|mb|gb|tb";
 
 export const INTENTS: IntentDefinition[] = [
   {
@@ -37,7 +70,7 @@ export const INTENTS: IntentDefinition[] = [
       /\b(write|build|create|design)\b[\s\S]{0,25}\bimplementation\b/i,
       /```[a-z]*\n/,
     ],
-    weakKeywords: [/\bcode\b/i, /\bfunction\b/i, /\bscript\b/i],
+    weakKeywords: [/\bcode\b/i, /\bfunction\b/i, /\bscript\b/i, /\balgorithm\b/i, /\bdata structure\b/i],
   },
   {
     id: "debugging",
@@ -52,6 +85,22 @@ export const INTENTS: IntentDefinition[] = [
     weakKeywords: [/\bbug\b/i, /\berror\b/i, /\bexception\b/i, /\bcrash(es|ing)?\b/i],
   },
   {
+    // Computer-science questions ("what is the time complexity of quicksort")
+    // previously matched nothing but general_qa's question-form patterns, so
+    // they were answered by a general model. They belong with coding, whose
+    // pool is selected for technical reasoning.
+    id: "cs_concepts",
+    category: "coding",
+    capabilities: ["technical_context", "reasoning"],
+    strongKeywords: [
+      /\b(?:time|space)\s+complexity\b/i,
+      /\bbig[- ]?o\b/i,
+      /\b(?:asymptotic|amortis?zed)\b/i,
+      /\bhow does (?:the )?\w+ (?:algorithm|sort|search|protocol) work\b/i,
+    ],
+    weakKeywords: [/\bcomplexity\b/i, /\brecursion\b/i, /\bcompiler\b/i],
+  },
+  {
     id: "math_reasoning",
     category: "math",
     capabilities: ["math_reasoning", "reasoning"],
@@ -61,8 +110,76 @@ export const INTENTS: IntentDefinition[] = [
       /\bwhat is the (derivative|integral|probability)\b/i,
       /\bprove that\b/i,
       /\bequation\b/i,
+
+      // --- arithmetic actually written down --------------------------------
+      // The single largest routing gap measured by SIB v1.0: 97 of the
+      // corpus's 125 maths items were routed to `general`, because the only
+      // maths signals recognised were a handful of formal verbs. Most people
+      // do not write "calculate 17 times 23"; they write "17 × 23".
+      //
+      // Unambiguous operators may be written tight ("48*7") or spaced.
+      /\d\s*[+*/^×÷]\s*-?\d/,
+      // Minus is the exception: it MUST be spaced on both sides, otherwise
+      // "2026-09-07" and "pages 10-20" would read as subtraction.
+      /\d\s+[-−]\s+\d/,
+      /\d\s*\b(?:plus|minus|times|multiplied by|divided by)\b\s*\d/i,
+
+      /\b\d+(?:\.\d+)?\s*(?:%|percent)\s+(?:of|off)\b/i,
+      /\b(?:square|cube|cubed|nth)\s+roots?\b/i,
+      /√/,
+      /\b\d+\s*(?:squared|cubed)\b/i,
+
+      // Unit conversion: a number, a unit, then another unit. Requiring a
+      // unit on BOTH sides is what stops "3 days in Paris" matching.
+      new RegExp(`\\b\\d+(?:\\.\\d+)?\\s*(?:${UNIT})\\b\\s+(?:in|to|into|as)\\s+(?:${UNIT})\\b`, "i"),
+      new RegExp(`\\bhow many\\s+(?:${PHYSICAL_UNIT})\\b`, "i"),
+      // "convert" needs a number so it cannot steal "convert this to speech",
+      // which is an audio-generation request.
+      /\bconvert\s+[\d.]/i,
+
+      // Operate-on-an-expression verbs, each requiring something expression
+      // shaped nearby so "expand on that idea" and "evaluate the candidate"
+      // do not match.
+      /\b(?:simplify|factor(?:i[sz]e)?|expand|evaluate|compute)\b[^.?!]{0,30}?(?:\d|\bx\b|\(|\bexpression\b|\bequation\b|\bintegral\b|\bderivative\b)/i,
+
+      // Aggregates, but only over something numeric.
+      /\b(?:average|mean|median|sum|product|total)\s+of\b[^.?!]{0,40}\d/i,
+      /\b(?:average|constant)\s+(?:speed|velocity|acceleration|rate)\b/i,
+
+      /\b(?:logarithm|factorial|permutations?|combinations?|standard deviation|gcd|lcm|hypotenuse|circumference|perimeter|quadratic)\b/i,
+
+      // Percentage questions that are not written in the "N% of M" shape —
+      // "what percentage of 250 is 40", "percentage increase", "margin as a
+      // percentage". A digit is required nearby so the word alone does not
+      // capture ordinary prose.
+      /\bpercentage\b[^.?!]{0,60}\d|\d[^.?!]{0,60}\bpercentage\b/i,
+      /\bpercent(?:age)?\s+(?:change|increase|decrease|difference|error)\b/i,
+      /\baverages?\b[^.?!]{0,40}\d/i,
+
+      // Analytic geometry: a coordinate pair is unmistakable on its own;
+      // the named quantities need a number nearby.
+      /\(\s*-?\d+(?:\.\d+)?\s*,\s*-?\d+(?:\.\d+)?\s*\)/,
+      /\b(?:slope|midpoint|intercept|radius|diameter|area|volume)\b[^.?!]{0,60}\d/i,
+      /\bdistance between\b/i,
+
+      /\blog(?:arithm)?\s+base\s+\d/i,
+      /\b[CP]\(\s*\d+\s*,\s*\d+\s*\)/,
+      /\bby what factor\b/i,
+
+      // Word problems: a quantity question with a number in the SAME
+      // sentence. Sentence-bounded on purpose — an earlier version looked
+      // for two numbers anywhere in the message, which made every
+      // long document containing digits match as soon as it ended in
+      // "how many …?", dragging document-comprehension tasks into maths.
+      /\bhow (?:much|many|long|far|fast)\b[\s\S]{0,100}\d/i,
+      /\d[\s\S]{0,150}\bhow (?:much|many|long|far|fast)\b/i,
     ],
-    weakKeywords: [/\bmath\b/i, /\bnumber\b/i, /\bsum\b/i],
+    // Content words only. "number" and "digit" were tried here and removed:
+    // they are how people phrase INSTRUCTIONS ("give only the number",
+    // "contains no digits", a JSON field of type number), not what a maths
+    // question is about, and they pulled JSON-formatting and
+    // instruction-following tasks into the maths pool.
+    weakKeywords: [/\bmath(?:s|ematics)?\b/i, /\barithmetic\b/i, /\bsum\b/i, /\balgebra\b/i],
   },
   {
     id: "creative_writing",
@@ -72,6 +189,7 @@ export const INTENTS: IntentDefinition[] = [
       /\bwrite (a|an) (story|poem|essay|blog post|script|song)\b/i,
       /\bcompose (a|an)\b/i,
       /\bcreative writing\b/i,
+      /\b(?:draft|write|compose|rewrite)\s+(?:me\s+)?(?:a|an)\s+(?:\w+\s+){0,2}(?:email|e-mail|letter|message|memo|reply|response|note)\b/i,
     ],
     weakKeywords: [/\bstory\b/i, /\bpoem\b/i, /\bessay\b/i],
   },
@@ -105,6 +223,13 @@ export const INTENTS: IntentDefinition[] = [
     strongKeywords: [
       /\banaly[sz]e (this|my) data\b/i,
       /\bfind (patterns|trends|insights)\b/i,
+      // Explicit requests to show working. These name the KIND of answer
+      // wanted rather than a subject, which is exactly what the reasoning
+      // pool is selected for, and nothing else in the taxonomy claimed them.
+      /\bexplain your (?:reasoning|thinking|working|logic)\b/i,
+      /\bstep[- ]by[- ]step\b/i,
+      /\bshow your work(?:ing)?\b/i,
+      /\breason (?:through|about) (?:this|it)\b/i,
       /\bcsv\b/i,
       /\bdataset\b/i,
     ],
@@ -188,7 +313,7 @@ export const INTENTS: IntentDefinition[] = [
     category: "audio",
     capabilities: ["audio_generation", "text_to_speech"],
     strongKeywords: [
-      /\b(read|say) (this|that|it) (aloud|out loud)\b/i,
+      /\b(?:read|say)\s+(?:this|that|it|the)\b[^.?!]{0,40}?\b(?:aloud|out loud)\b/i,
       /\btext[- ]to[- ]speech\b/i,
       /\bconvert (this|that|it) to (speech|audio|voice)\b/i,
       /\b(generate|create|make) (an? )?(audio|voiceover|narration)\b/i,
@@ -222,8 +347,41 @@ export const INTENTS: IntentDefinition[] = [
     id: "general_qa",
     category: "general",
     capabilities: ["general_knowledge"],
-    strongKeywords: [/\bwhat is\b/i, /\bwho (is|was)\b/i, /\bexplain\b/i, /\bhow does .* work\b/i],
-    weakKeywords: [/\bwhy\b/i, /\bhow\b/i, /\bwhat\b/i],
+
+    // NO STRONG KEYWORDS — and this is the fix, not an oversight.
+    //
+    // This intent previously listed /\bwhat is\b/i, /\bwho (is|was)\b/i,
+    // /\bexplain\b/i and /\bhow does .* work\b/i as STRONG. Those are
+    // question-FORM patterns: they tell you the message is a question, not
+    // what it is about. Because a single strong hit short-circuits
+    // classification, "What is 17 × 23?" matched general_qa alone and was
+    // routed to the general pool deterministically — never reaching the
+    // maths model, and never even reaching the LLM classifier that would
+    // have corrected it. SIB v1.0 measured the damage: 97 of 125 maths
+    // items routed to `general`, and 57 of 62 live requests were served by
+    // one general model.
+    //
+    // The same pattern was already known to misroute time-sensitive
+    // questions — see the web_search intent's comment about
+    // "what is the price of btc now" — and had been patched there case by
+    // case. This removes the cause instead.
+    //
+    // As the catch-all, general_qa should win when nothing more specific
+    // matches, which is exactly what weak keywords express.
+    strongKeywords: [],
+    weakKeywords: [
+      /\bwhy\b/i, /\bhow\b/i, /\bwhat\b/i,
+      // Open-ended prompts that name no domain at all. Without these the
+      // classifier had zero signal for "tell me about X" and paid for an
+      // LLM round-trip on one of the most ordinary things a user can type.
+      /\btell me about\b/i, /\bwhat are\b/i, /\bwho are\b/i,
+      /\bgive me an overview\b/i, /\bhistory of\b/i,
+      // Demoted from strong, deliberately kept: they are still real
+      // evidence that a message is a general question, just not evidence
+      // strong enough to beat a domain match.
+      /\bwhat is\b/i, /\bwho (is|was)\b/i, /\bexplain\b/i, /\bhow does .* work\b/i,
+    ],
+    specificity: 0,
   },
 ];
 

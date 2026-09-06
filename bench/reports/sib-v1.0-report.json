@@ -1,0 +1,496 @@
+{
+  "benchmark": "SIB v1.0",
+  "system_benchmark": "SSB v1.0",
+  "sib": {
+    "splex": {
+      "categories": {
+        "mathematics": {
+          "n_sampled": 10,
+          "n_scored": 9,
+          "n_review": 0,
+          "n_failed": 1,
+          "credit": 9.0,
+          "score": 100.0,
+          "ci": [
+            70.08549514820552,
+            100.0
+          ]
+        },
+        "reasoning": {
+          "n_sampled": 10,
+          "n_scored": 9,
+          "n_review": 1,
+          "n_failed": 0,
+          "credit": 9.0,
+          "score": 100.0,
+          "ci": [
+            70.08549514820552,
+            100.0
+          ]
+        },
+        "coding": {
+          "n_sampled": 8,
+          "n_scored": 4,
+          "n_review": 0,
+          "n_failed": 4,
+          "credit": 4.0,
+          "score": 100.0,
+          "ci": [
+            51.01091634281154,
+            100.0
+          ]
+        },
+        "knowledge": {
+          "n_sampled": 8,
+          "n_scored": 8,
+          "n_review": 0,
+          "n_failed": 0,
+          "credit": 8.0,
+          "score": 100.0,
+          "ci": [
+            67.55924350132557,
+            100.0
+          ]
+        },
+        "instruction_following": {
+          "n_sampled": 7,
+          "n_scored": 6,
+          "n_review": 0,
+          "n_failed": 1,
+          "credit": 4.0,
+          "score": 66.66666666666666,
+          "ci": [
+            29.99933150746166,
+            90.32285889207645
+          ]
+        },
+        "hallucination_resistance": {
+          "n_sampled": 7,
+          "n_scored": 0,
+          "n_review": 6,
+          "n_failed": 1,
+          "credit": 0,
+          "score": null,
+          "ci": null
+        },
+        "long_context": {
+          "n_sampled": 6,
+          "n_scored": 3,
+          "n_review": 2,
+          "n_failed": 1,
+          "credit": 3.0,
+          "score": 100.0,
+          "ci": [
+            43.85029681293942,
+            100.0
+          ]
+        },
+        "multilingual": {
+          "n_sampled": 6,
+          "n_scored": 4,
+          "n_review": 0,
+          "n_failed": 2,
+          "credit": 4.0,
+          "score": 100.0,
+          "ci": [
+            51.01091634281154,
+            100.0
+          ]
+        },
+        "safety": {
+          "n_sampled": 4,
+          "n_scored": 2,
+          "n_review": 1,
+          "n_failed": 1,
+          "credit": 2.0,
+          "score": 100.0,
+          "ci": [
+            34.23802274009781,
+            100.0
+          ]
+        },
+        "structured_output": {
+          "n_sampled": 4,
+          "n_scored": 1,
+          "n_review": 2,
+          "n_failed": 1,
+          "credit": 0.0,
+          "score": 0.0,
+          "ci": [
+            0.0,
+            79.34506856996815
+          ]
+        }
+      },
+      "overall": 89.62962962962963,
+      "weight_covered": 0.8999999999999999,
+      "n_total": 70,
+      "n_scored": 46,
+      "n_review": 12,
+      "n_failed": 12
+    },
+    "baselines": {
+      "or:nvidia/nemotron-3-ultra-550b-a55b:free": {
+        "categories": {
+          "mathematics": {
+            "n_sampled": 7,
+            "n_scored": 0,
+            "n_review": 0,
+            "n_failed": 7,
+            "credit": 0,
+            "score": null,
+            "ci": null
+          },
+          "reasoning": {
+            "n_sampled": 2,
+            "n_scored": 0,
+            "n_review": 0,
+            "n_failed": 2,
+            "credit": 0,
+            "score": null,
+            "ci": null
+          },
+          "coding": {
+            "n_sampled": 0,
+            "n_scored": 0,
+            "n_review": 0,
+            "n_failed": 0,
+            "credit": 0,
+            "score": null,
+            "ci": null
+          },
+          "knowledge": {
+            "n_sampled": 1,
+            "n_scored": 0,
+            "n_review": 0,
+            "n_failed": 1,
+            "credit": 0,
+            "score": null,
+            "ci": null
+          },
+          "instruction_following": {
+            "n_sampled": 0,
+            "n_scored": 0,
+            "n_review": 0,
+            "n_failed": 0,
+            "credit": 0,
+            "score": null,
+            "ci": null
+          },
+          "hallucination_resistance": {
+            "n_sampled": 0,
+            "n_scored": 0,
+            "n_review": 0,
+            "n_failed": 0,
+            "credit": 0,
+            "score": null,
+            "ci": null
+          },
+          "long_context": {
+            "n_sampled": 0,
+            "n_scored": 0,
+            "n_review": 0,
+            "n_failed": 0,
+            "credit": 0,
+            "score": null,
+            "ci": null
+          },
+          "multilingual": {
+            "n_sampled": 1,
+            "n_scored": 0,
+            "n_review": 0,
+            "n_failed": 1,
+            "credit": 0,
+            "score": null,
+            "ci": null
+          },
+          "safety": {
+            "n_sampled": 0,
+            "n_scored": 0,
+            "n_review": 0,
+            "n_failed": 0,
+            "credit": 0,
+            "score": null,
+            "ci": null
+          },
+          "structured_output": {
+            "n_sampled": 0,
+            "n_scored": 0,
+            "n_review": 0,
+            "n_failed": 0,
+            "credit": 0,
+            "score": null,
+            "ci": null
+          }
+        },
+        "overall": null,
+        "weight_covered": 0.0,
+        "n_total": 11,
+        "n_scored": 0,
+        "n_review": 0,
+        "n_failed": 11
+      }
+    }
+  },
+  "ssb": {
+    "components": {
+      "routing_accuracy": 92.7536231884058,
+      "task_success": 82.85714285714286,
+      "reliability": 100.0,
+      "capability_selection": 42.028985507246375,
+      "failure_recovery": 100.0,
+      "cost_efficiency": 100.0,
+      "latency": 50,
+      "safety_isolation": 100.0
+    },
+    "overall": 84.32505175983437,
+    "weight_covered": 1.0,
+    "routing_detail": {
+      "n": 69,
+      "strict_pct": 42.028985507246375,
+      "acceptable_pct": 92.7536231884058,
+      "strict_ci": [
+        31.106115338786733,
+        53.79259457474584
+      ],
+      "acceptable_ci": [
+        84.13260578800585,
+        96.86522285759214
+      ],
+      "confusion": {
+        "math -> general": 21,
+        "general -> general": 20,
+        "reasoning -> general": 5,
+        "coding -> coding": 5,
+        "general -> math": 4,
+        "documents -> general": 4,
+        "math -> math": 3,
+        "coding -> general": 2,
+        "writing -> general": 1,
+        "general -> documents": 1,
+        "general -> reasoning": 1,
+        "documents -> documents": 1,
+        "reasoning -> math": 1
+      },
+      "unknown_labels": []
+    },
+    "task_success_detail": {
+      "n": 70,
+      "delivered": 58,
+      "pct": 82.85714285714286,
+      "ci": [
+        72.38335196507012,
+        89.91227536073416
+      ],
+      "failures": {
+        "PROVIDER_UNAVAILABLE": 11,
+        "SPLEX_ERROR": 1
+      }
+    },
+    "latency_detail": {
+      "n": 70,
+      "p50_ms": 10663,
+      "p90_ms": 15977,
+      "max_ms": 51329,
+      "ttft_p50_ms": 5356,
+      "score": 50
+    },
+    "isolation_detail": {
+      "distinct_models_used": [
+        "minimax/minimax-m2.7:free",
+        "minimax/minimax-m3:free",
+        "nvidia/nemotron-3-super-120b-a12b:free"
+      ],
+      "violations": [],
+      "pct": 100.0
+    },
+    "cost_detail": {
+      "n": 73,
+      "correctly_charged": 73,
+      "pct": 100.0,
+      "charged_for_failed_generation": [],
+      "completed_but_unbilled": [],
+      "total_credits_charged": 347,
+      "real_provider_spend_usd": 0.0
+    },
+    "failure_probes": {
+      "total": 8,
+      "passed": 8,
+      "results": [
+        {
+          "probe_id": "cap-image",
+          "what": "asks for image generation on a tier with 0 image quota",
+          "passed": true,
+          "why": "declined honestly (matched 'plan')",
+          "http": 200,
+          "latency_ms": 443,
+          "excerpt": "Image generation isn't available on your plan.",
+          "note": "Free tier has image_generations=0 AND no free/image registry row. Correct behaviour is an honest refusal; returning a URL or a fabricated image reference is the failure this checks for."
+        },
+        {
+          "probe_id": "cap-websearch",
+          "what": "asks for a live web search on a tier with 0 search quota",
+          "passed": true,
+          "why": "declined honestly (matched 'plan')",
+          "http": 200,
+          "latency_ms": 357,
+          "excerpt": "Web search isn't available on your plan.",
+          "note": "web_searches=0 for free. A confidently fabricated headline is the failure mode; admitting no live access is the pass."
+        },
+        {
+          "probe_id": "cap-video",
+          "what": "asks for video generation, which no free model can perform",
+          "passed": true,
+          "why": "declined honestly (matched 'upgrade')",
+          "http": 200,
+          "latency_ms": 345,
+          "excerpt": "Video generation is a Starter feature \u2014 upgrade to unlock it.",
+          "note": "NO_GENERAL_FALLBACK must stop this reaching a text model."
+        },
+        {
+          "probe_id": "bad-empty",
+          "what": "sends an empty message",
+          "passed": true,
+          "why": "expected HTTP 400, got 400",
+          "http": 400,
+          "latency_ms": 217,
+          "excerpt": "",
+          "note": "chatBodySchema requires min(1); a clean 400 is correct."
+        },
+        {
+          "probe_id": "bad-oversize",
+          "what": "sends a message past the 8000-char cap",
+          "passed": true,
+          "why": "expected HTTP 400, got 400",
+          "http": 400,
+          "latency_ms": 250,
+          "excerpt": "",
+          "note": "Boundary of chatBodySchema.max(8000)."
+        },
+        {
+          "probe_id": "bad-conv-id",
+          "what": "references a conversation id that is not a uuid",
+          "passed": true,
+          "why": "expected HTTP 400, got 400",
+          "http": 400,
+          "latency_ms": 206,
+          "excerpt": "",
+          "note": "Malformed input must be rejected before any model call is paid for."
+        },
+        {
+          "probe_id": "auth-none",
+          "what": "no Authorization header",
+          "passed": true,
+          "why": "expected HTTP 401, got 401",
+          "http": 401,
+          "latency_ms": 181,
+          "excerpt": "",
+          "note": "unauthenticated requests must never reach a model"
+        },
+        {
+          "probe_id": "auth-garbage",
+          "what": "a syntactically invalid bearer token",
+          "passed": true,
+          "why": "expected HTTP 401, got 401",
+          "http": 401,
+          "latency_ms": 260,
+          "excerpt": "",
+          "note": "unauthenticated requests must never reach a model"
+        }
+      ]
+    }
+  },
+  "db": {
+    "models": [
+      "minimax/minimax-m2.7:free",
+      "minimax/minimax-m2.7:free",
+      "minimax/minimax-m2.7:free",
+      "minimax/minimax-m2.7:free",
+      "minimax/minimax-m2.7:free",
+      "minimax/minimax-m2.7:free",
+      "minimax/minimax-m2.7:free",
+      "minimax/minimax-m2.7:free",
+      "minimax/minimax-m2.7:free",
+      "minimax/minimax-m2.7:free",
+      "minimax/minimax-m2.7:free",
+      "minimax/minimax-m2.7:free",
+      "minimax/minimax-m2.7:free",
+      "minimax/minimax-m2.7:free",
+      "minimax/minimax-m2.7:free",
+      "minimax/minimax-m2.7:free",
+      "minimax/minimax-m2.7:free",
+      "minimax/minimax-m2.7:free",
+      "minimax/minimax-m2.7:free",
+      "minimax/minimax-m2.7:free",
+      "minimax/minimax-m2.7:free",
+      "minimax/minimax-m2.7:free",
+      "minimax/minimax-m2.7:free",
+      "nvidia/nemotron-3-super-120b-a12b:free",
+      "minimax/minimax-m2.7:free",
+      "nvidia/nemotron-3-super-120b-a12b:free",
+      "minimax/minimax-m2.7:free",
+      "minimax/minimax-m2.7:free",
+      "minimax/minimax-m2.7:free",
+      "minimax/minimax-m2.7:free",
+      "minimax/minimax-m2.7:free",
+      "minimax/minimax-m2.7:free",
+      "minimax/minimax-m2.7:free",
+      "nvidia/nemotron-3-super-120b-a12b:free",
+      "minimax/minimax-m2.7:free",
+      "minimax/minimax-m2.7:free",
+      "minimax/minimax-m2.7:free",
+      "minimax/minimax-m2.7:free",
+      "minimax/minimax-m2.7:free",
+      "minimax/minimax-m2.7:free",
+      "minimax/minimax-m2.7:free",
+      "minimax/minimax-m3:free",
+      "minimax/minimax-m2.7:free",
+      "minimax/minimax-m2.7:free",
+      "minimax/minimax-m2.7:free",
+      "minimax/minimax-m2.7:free",
+      "minimax/minimax-m2.7:free",
+      "minimax/minimax-m2.7:free",
+      "minimax/minimax-m2.7:free",
+      "minimax/minimax-m3:free",
+      "minimax/minimax-m2.7:free",
+      "minimax/minimax-m2.7:free",
+      "minimax/minimax-m2.7:free",
+      "minimax/minimax-m2.7:free",
+      "minimax/minimax-m2.7:free",
+      "minimax/minimax-m2.7:free",
+      "minimax/minimax-m2.7:free",
+      "minimax/minimax-m2.7:free",
+      "minimax/minimax-m2.7:free",
+      "minimax/minimax-m2.7:free",
+      "minimax/minimax-m2.7:free",
+      "minimax/minimax-m2.7:free"
+    ],
+    "model_counts": {
+      "minimax/minimax-m2.7:free": 57,
+      "nvidia/nemotron-3-super-120b-a12b:free": 3,
+      "minimax/minimax-m3:free": 2
+    },
+    "credits_total": 347,
+    "status_counts": {
+      "failed": 11,
+      "complete": 138
+    }
+  },
+  "comparisons": {
+    "or:nvidia/nemotron-3-ultra-550b-a55b:free": {
+      "a": "splex",
+      "b": "or:nvidia/nemotron-3-ultra-550b-a55b:free",
+      "categories": {},
+      "overall": {
+        "a_score": 89.62962962962963,
+        "b_score": null,
+        "a_n": 46,
+        "b_n": 0,
+        "percentage_point_diff": null,
+        "relative_pct_diff": null,
+        "comparable": false,
+        "reason": "or:nvidia/nemotron-3-ultra-550b-a55b:free produced 0 scored items (11 provider failures) \u2014 no comparison is possible."
+      }
+    }
+  }
+}

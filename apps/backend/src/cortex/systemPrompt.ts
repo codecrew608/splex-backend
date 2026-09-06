@@ -181,3 +181,56 @@ export function reasoningVerificationBlock(category: string): string {
       return "";
   }
 }
+
+// --- hard format constraints ------------------------------------------------
+//
+// SIB v1.0 measured instruction following at 66.7% (n=6) — the only category
+// where SPLEX had a genuine, repeated quality weakness rather than a scorer
+// artefact. Both real failures were the same shape: the user stated a HARD
+// constraint and the answer quietly broke it. "Describe the ocean in exactly
+// 5 words" came back with four; "answer without using the letter e" came back
+// full of them.
+//
+// That is not a knowledge failure and no amount of category routing fixes it.
+// It is a self-check failure, and the codebase already has the right tool for
+// self-check failures: a short verification block appended after
+// classification (see REASONING_VERIFICATION above).
+//
+// Applied CONDITIONALLY, on evidence in the user's own message, for two
+// reasons. Every token here is paid for on latency in a product whose p50
+// time-to-first-token is already 5.4s, so it must not ride along on messages
+// that state no constraint at all; and an instruction to obsess over format
+// would actively degrade ordinary open-ended answers.
+const FORMAT_CONSTRAINT_PATTERNS: RegExp[] = [
+  /\bexactly\s+\w+\s+(?:words?|lines?|sentences?|bullets?|items?|characters?|paragraphs?)\b/i,
+  /\b(?:no more than|at most|fewer than|under)\s+\w+\s+(?:words?|lines?|sentences?|characters?)\b/i,
+  /\bwithout using\b/i,
+  /\b(?:must not|do not|don't)\s+(?:use|include|contain|mention)\b/i,
+  /\b(?:reply|respond|answer|output|return)\s+(?:with\s+)?only\b/i,
+  /\bonly\s+(?:the\s+)?(?:number|word|json|letter|answer)\b/i,
+  /\bvalid json\b|\bjson only\b|\bonly json\b/i,
+  // A request to PRODUCE json, distinct from a question about it —
+  // "what is JSON?" must not trip this.
+  /\b(?:return|output|respond with|reply with|give me|produce)\s+(?:a\s+|an\s+|valid\s+)?json\b/i,
+  /\ball (?:lower|upper)\s?case\b/i,
+  /\bno (?:digits|numbers|punctuation|letter\b)/i,
+  /\b(?:starts?|begins?|ends?)\s+with\s+['"“]/i,
+  /\bin\s+exactly\b/i,
+];
+
+export function hasHardFormatConstraint(message: string): boolean {
+  return FORMAT_CONSTRAINT_PATTERNS.some((re) => re.test(message));
+}
+
+const FORMAT_CONSTRAINT_CHECK = `\n\nThis message states an explicit format constraint. Before you finalize the response, silently check the text you are about to send against every stated constraint — count the words or lines if a count was given, and re-read for any character, word or pattern you were told to avoid. If it does not comply, rewrite it until it does. A response that is well written but breaks a stated constraint is a failed response. Do not mention this check, do not explain the constraint back, and do not add a note about compliance — just satisfy it.`;
+
+/**
+ * A verification block for hard, checkable output constraints, or "" when
+ * the message states none. Same append-after-classification pattern as
+ * reasoningVerificationBlock, and deliberately independent of category:
+ * "reply with only the number" is just as binding on a maths answer as on
+ * a creative one.
+ */
+export function formatConstraintBlock(message: string): string {
+  return hasHardFormatConstraint(message) ? FORMAT_CONSTRAINT_CHECK : "";
+}

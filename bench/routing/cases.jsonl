@@ -1,0 +1,47 @@
+{"id":"math-arith-01","prompt":"What is 17 × 23?","expect":"math","note":"multiplication sign, question form"}
+{"id":"math-arith-02","prompt":"What is 2 + 2?","expect":"math","note":"trivial arithmetic"}
+{"id":"math-arith-03","prompt":"what is 144 / 12","expect":"math","note":"no punctuation, lowercase"}
+{"id":"math-arith-04","prompt":"48 * 7","expect":"math","note":"bare expression, no question at all"}
+{"id":"math-arith-05","prompt":"How much is 340 minus 85?","expect":"math","note":"word operator"}
+{"id":"math-arith-06","prompt":"What is 2^10?","expect":"math","note":"exponent"}
+{"id":"math-pct-01","prompt":"What is 25% of 800?","expect":"math","note":"percentage of"}
+{"id":"math-pct-02","prompt":"If a jacket costs 60 and is 30% off, what do I pay?","expect":"math","note":"percentage in a word problem"}
+{"id":"math-root-01","prompt":"What is the square root of 144?","expect":"math","note":"named root"}
+{"id":"math-root-02","prompt":"What is √81?","expect":"math","note":"root symbol"}
+{"id":"math-unit-01","prompt":"What is 15 km in meters?","expect":"math","note":"unit conversion, both sides units"}
+{"id":"math-unit-02","prompt":"Convert 98.6 F to Celsius","expect":"math","note":"convert verb"}
+{"id":"math-unit-03","prompt":"How many grams are in 2.5 kg?","expect":"math","note":"how many + units"}
+{"id":"math-verb-01","prompt":"Solve for x: 3x + 7 = 22","expect":"math","note":"already covered before the fix"}
+{"id":"math-verb-02","prompt":"Simplify (x+3)(x-3)","expect":"math","note":"simplify"}
+{"id":"math-verb-03","prompt":"Factor x^2 - 5x + 6","expect":"math","note":"factor"}
+{"id":"math-verb-04","prompt":"Evaluate the integral of x^2 from 0 to 1","expect":"math","note":"evaluate + integral"}
+{"id":"math-verb-05","prompt":"What is the average of 4, 8, 15, 16, 23 and 42?","expect":"math","note":"average of a list"}
+{"id":"math-verb-06","prompt":"What is the derivative of sin(x)?","expect":"math","note":"already covered before the fix"}
+{"id":"math-word-01","prompt":"A train travels 240 km in 3 hours. What is its average speed?","expect":"math","note":"word problem with units"}
+{"id":"math-word-02","prompt":"If I save 250 a month for 18 months, how much will I have?","expect":"math","note":"arithmetic word problem, no operator symbol"}
+{"id":"gen-fact-01","prompt":"What is the capital of France?","expect":"general","note":"NEGATIVE: 'what is' must not imply maths"}
+{"id":"gen-fact-02","prompt":"What is photosynthesis?","expect":"general","note":"NEGATIVE: definitional question"}
+{"id":"gen-fact-03","prompt":"Who is Ada Lovelace?","expect":"general","note":"NEGATIVE: person lookup"}
+{"id":"gen-fact-04","prompt":"Explain how a jet engine works","expect":"general","note":"NEGATIVE: explanation request"}
+{"id":"gen-fact-05","prompt":"What is the meaning of the word 'ephemeral'?","expect":"general","note":"NEGATIVE: vocabulary"}
+{"id":"gen-fact-06","prompt":"What is React and why do people use it?","expect":"general","note":"NEGATIVE: technology overview, not a coding task"}
+{"id":"gen-fact-07","prompt":"I have 3 meetings tomorrow and 2 deadlines. What should I prioritise?","expect":"general","note":"NEGATIVE: digits present but no computation asked"}
+{"id":"gen-fact-08","prompt":"What is the tallest mountain in the world?","expect":"general","note":"NEGATIVE: superlative fact"}
+{"id":"gen-fact-09","prompt":"Tell me about the history of the Roman empire","expect":"general","note":"NEGATIVE: open-ended"}
+{"id":"gen-fact-10","prompt":"What is 1984 about?","expect":"general","note":"NEGATIVE ADVERSARIAL: a bare number that is a title, not arithmetic"}
+{"id":"code-01","prompt":"Write a Python function that reverses a linked list","expect":"coding","note":"explicit code request"}
+{"id":"code-02","prompt":"Fix this bug in my code: TypeError: cannot read property 'x' of undefined","expect":"coding","note":"debugging"}
+{"id":"code-03","prompt":"What is the time complexity of quicksort?","expect":"coding","note":"CS concept phrased with 'what is'"}
+{"id":"code-04","prompt":"Refactor this function to use async/await","expect":"coding","note":"code transformation"}
+{"id":"write-01","prompt":"Write a short poem about the sea","expect":"writing","note":"creative writing"}
+{"id":"write-02","prompt":"Draft a polite email declining a meeting invitation","expect":"writing","note":"drafting"}
+{"id":"doc-01","prompt":"Summarise the attached document in five bullet points","expect":"documents","note":"summarisation; the digit must not pull it to maths"}
+{"id":"doc-02","prompt":"What are the key points of this report?","expect":"documents","note":"document question"}
+{"id":"vision-01","prompt":"What is in this image?","expect":"vision","note":"image understanding, phrased with 'what is'"}
+{"id":"vision-02","prompt":"Describe the photo I uploaded","expect":"vision","note":"image description"}
+{"id":"image-01","prompt":"Generate an image of a red bicycle on a beach","expect":"image","note":"media generation must stay exact"}
+{"id":"video-01","prompt":"Create a 5 second video of a sunrise","expect":"video","note":"digit must not pull it to maths"}
+{"id":"audio-01","prompt":"Read this paragraph aloud as an audio file","expect":"audio","note":"text to speech"}
+{"id":"ppt-01","prompt":"Make a 10 slide presentation about renewable energy","expect":"ppt","note":"digit must not pull it to maths"}
+{"id":"search-01","prompt":"What is the latest news about the Mars rover?","expect":"web_search","note":"current information"}
+{"id":"reason-01","prompt":"Three friends split a bill unevenly. Work out who owes what and explain your reasoning.","expect":"reasoning","note":"multi-step reasoning; maths-adjacent but reasoning-led"}

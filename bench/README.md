@@ -121,3 +121,67 @@ Requires `SPLEX_BENCH_TOKEN` for a genuine **Free-tier** account, and a fresh
 `model_registry` dump for the L2 drift check. Without `--confirm-live` it
 refuses to start. Cortex chooses the model — the harness never selects one,
 because model selection is part of what is being measured.
+
+---
+
+# SIB v1.0 / SSB v1.0 (2026-09-06)
+
+The Phase 2 run described above was executed on 2026-09-06, and the harness
+was extended into two versioned benchmarks. See `SIB-v1.0-SPEC.md` for the
+pre-registered specification, weights and amendment log.
+
+```
+bench/
+  SIB-v1.0-SPEC.md          pre-registered spec: categories, weights, stats rules
+  corpus/
+    sib_ext.jsonl           GENERATED. multilingual / long-context / instruction items
+    build_ext.py            builds + validates the extension set
+    generators/sib_ext.py   the extension items themselves
+  harness/
+    provision.py            creates the isolated Free-tier benchmark account
+    quota_probe.py          measures the two request ceilings before sampling
+    smoke.py                one live request, prints every SSE event
+    sib.py                  weights, category map, sampling, Wilson intervals
+    sib_runner.py           executes a sample against SPLEX or a baseline
+    rescore.py              re-scores every stored result with one scorer version
+    route_sim.mjs           replays production INTENTS offline over all 432 items
+    route_validate.py       proves the simulator matches live decisions
+    failure_probe.py        capability / input / auth failure behaviour
+    ssb.py                  system-benchmark components and weights
+    sib_report.py           aggregation, comparison, report generation
+```
+
+Run order:
+
+```bash
+python3 -m bench.harness.provision --out-dir <dir outside the repo>
+python3 -m bench.harness.quota_probe --user-id <id>
+python3 -m bench.harness.sib_runner --target splex --budget 70 --confirm-live \
+  --base-url <worker url> --token-file <dir>/bench_token \
+  --out bench/reports/sib-v1.0-splex.jsonl
+python3 -m bench.harness.sib_runner --target or:<model> --budget 70 --confirm-live \
+  --out bench/reports/sib-v1.0-splex.jsonl
+node --experimental-strip-types bench/harness/route_sim.mjs \
+  bench/corpus/corpus.jsonl bench/corpus/sib_ext.jsonl > <dir>/route_sim.jsonl
+python3 -m bench.harness.route_validate --sim <dir>/route_sim.jsonl \
+  --live bench/reports/sib-v1.0-splex.jsonl --out <dir>/routing.json
+python3 -m bench.harness.rescore --in bench/reports/sib-v1.0-splex.jsonl \
+  --out bench/reports/sib-v1.0-rescored.jsonl
+python3 -m bench.harness.sib_report --results bench/reports/sib-v1.0-rescored.jsonl ...
+```
+
+Two request ceilings bound the live run, and the smaller one decides the
+sample size: SPLEX's own `plan_limits.daily_requests` for a Free user (100/day)
+and OpenRouter's free-model allowance. `quota_probe.py` reads both.
+
+**The benchmark account.** `provision.py` creates exactly one account
+(`sib-bench-v1@splex-benchmark.invalid`), asserts `plan_tier='free'` by
+reading the row rather than assuming the default, writes a short-lived token
+to a 0600 file outside the repository, and can delete the account and
+everything it wrote with `--cleanup`. No real user's data is read or written.
+
+**Two headers are mandatory** against the deployed Worker, and both were found
+the hard way: a request with no allowed `Origin` is 403'd, and Cloudflare
+403s the default `Python-urllib/x.y` User-Agent before the request reaches any
+SPLEX code. The harness identifies itself as `SPLEX-Benchmark/1.0`; it does
+not impersonate a browser.

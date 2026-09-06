@@ -16,6 +16,7 @@ Two principles run through this file:
 
 from __future__ import annotations
 
+import json
 import math
 import re
 from dataclasses import dataclass, field
@@ -42,6 +43,51 @@ def _parse_math(text: str):
         return parse_expr(text, transformations=_TRANSFORMS, evaluate=True)
     except Exception:
         return None
+
+
+# --- notation normalisation (SIB v1.0) --------------------------------------
+# Added after the first live run surfaced three answers marked INCORRECT that
+# were mathematically right and only notationally different: "O(n²)" against a
+# gold of "O(n^2)", and correct expressions wrapped in LaTeX display maths.
+#
+# This is a NORMALISATION fix, not a tuning fix, and the distinction matters:
+# it encodes no knowledge of any particular question or any particular
+# system's habits, it is applied by the single shared scorer to every target
+# identically, and every result in the report is produced by the same scorer
+# version. It corrects the benchmark measuring formatting when it meant to
+# measure correctness. Logged as an amendment in SIB-v1.0-SPEC.md §8.
+
+_SUPERSCRIPTS = str.maketrans({
+    "⁰": "^0", "¹": "^1", "²": "^2", "³": "^3", "⁴": "^4",
+    "⁵": "^5", "⁶": "^6", "⁷": "^7", "⁸": "^8", "⁹": "^9",
+    "⁻": "^-", "×": "*", "÷": "/", "−": "-", "–": "-",
+})
+
+_LATEX_SUBS = [
+    (re.compile(r"\\d?frac\s*\{([^{}]+)\}\s*\{([^{}]+)\}"), r"((\1)/(\2))"),
+    (re.compile(r"\\(?:times|cdot)\b"), "*"),
+    (re.compile(r"\\div\b"), "/"),
+    (re.compile(r"\\(?:left|right|displaystyle|,|;|!)"), ""),
+    (re.compile(r"\\text\s*\{([^{}]*)\}"), r"\1"),
+    (re.compile(r"\\sqrt\s*\{([^{}]+)\}"), r"sqrt(\1)"),
+    (re.compile(r"\\pi\b"), "pi"),
+    (re.compile(r"[$]{1,2}"), " "),
+    (re.compile(r"\\\[|\\\]|\\\(|\\\)"), " "),
+]
+
+
+def normalise_notation(text: str) -> str:
+    """Rewrite equivalent notations into one form.
+
+    Deliberately conservative: it rewrites how a value is written, never what
+    the value is. A wrong answer stays wrong through every rule here.
+    """
+    if not text:
+        return text
+    out = text.translate(_SUPERSCRIPTS)
+    for pattern, repl in _LATEX_SUBS:
+        out = pattern.sub(repl, out)
+    return out
 
 
 # The outcome taxonomy. The split that matters most is ACCURACY vs
@@ -108,9 +154,27 @@ class Score:
 _NUM_RE = re.compile(r"-?\d[\d,]*\.?\d*(?:[eE][-+]?\d+)?")
 
 
+# Parentheses are optional because LaTeX normalisation emits "((2)/(3))"
+# from \frac{2}{3}, while a model writing plain text emits "2/3".
+_FRACTION_RE = re.compile(
+    r"\(?\s*(-?\d+(?:\.\d+)?)\s*\)?\s*/\s*\(?\s*(-?\d+(?:\.\d+)?)\s*\)?")
+
+
 def _extract_numbers(text: str) -> list[float]:
+    cleaned = text.replace(",", "")
     out = []
-    for m in _NUM_RE.finditer(text.replace(",", "")):
+    # A fraction is a number. Models answer "2/3" (and, after LaTeX
+    # normalisation, "((2)/(3))") at least as often as "0.667", and reading
+    # only the literal digits would score both halves of a correct fraction
+    # as two wrong answers.
+    for m in _FRACTION_RE.finditer(cleaned):
+        try:
+            denom = float(m.group(2))
+            if denom != 0:
+                out.append(float(m.group(1)) / denom)
+        except ValueError:
+            pass
+    for m in _NUM_RE.finditer(cleaned):
         try:
             out.append(float(m.group()))
         except ValueError:
@@ -136,10 +200,18 @@ def score_numeric(response: str, gold: float, tolerance: float) -> Score:
     return Score(INCORRECT, f"expected {gold} (+/-{tolerance}), got {nums[-1]!r} (all: {nums[:5]})")
 
 
+def _exact_norm(text: str) -> str:
+    out = re.sub(r"[^\w\s^]", " ", str(text).lower())
+    return re.sub(r"\s+", " ", out).strip()
+
+
 def score_exact(response: str, gold: str) -> Score:
-    norm = re.sub(r"[^\w\s^]", " ", response.lower())
-    norm = re.sub(r"\s+", " ", norm).strip()
-    g = str(gold).lower().strip()
+    # The gold must go through the SAME normalisation as the response.
+    # It previously did not, so any gold containing punctuation could never
+    # match: gold "O(n^2)" stayed "o(n^2)" while the response was rewritten
+    # to "o n^2", and a correct answer was scored wrong on every occasion.
+    norm = _exact_norm(response)
+    g = _exact_norm(gold)
     if g in norm.split() or g in norm:
         return Score(CORRECT, f"found {gold!r}")
     return Score(INCORRECT, f"expected {gold!r}; response did not contain it")
@@ -264,6 +336,38 @@ def score_structure(response: str, criteria: list[str]) -> Score:
             checks.append((c, not low.endswith(".")))
         elif "three comma-separated" in cl:
             checks.append((c, len(low.split(",")) == 3))
+        # --- SIB v1.0 instruction-following additions -----------------------
+        # Each is a constraint whose satisfaction is a fact about the string,
+        # not a judgement about it — which is the only kind of instruction
+        # following that can be scored without a human or a judge model.
+        elif (m := re.fullmatch(r"exactly (\d+) words?", cl)):
+            checks.append((c, len(low.split()) == int(m.group(1))))
+        elif (m := re.fullmatch(r"exactly (\d+) lines?", cl)):
+            checks.append((c, len([l for l in low.splitlines() if l.strip()]) == int(m.group(1))))
+        elif (m := re.fullmatch(r"at most (\d+) words?", cl)):
+            checks.append((c, len(low.split()) <= int(m.group(1))))
+        elif (m := re.fullmatch(r"starts with '(.+)'", cl)):
+            checks.append((c, low.lower().startswith(m.group(1).lower())))
+        elif (m := re.fullmatch(r"ends with '(.+)'", cl)):
+            checks.append((c, low.lower().rstrip().endswith(m.group(1).lower())))
+        elif (m := re.fullmatch(r"does not contain '(.+)'", cl)):
+            checks.append((c, m.group(1).lower() not in low.lower()))
+        elif "no digits" in cl:
+            checks.append((c, not any(ch.isdigit() for ch in low)))
+        elif "all uppercase" in cl:
+            checks.append((c, low == low.upper()))
+        elif "valid json" in cl:
+            # Tolerates a fenced block, since a model wrapping JSON in ```
+            # is a formatting habit rather than a failure to produce JSON.
+            body = low
+            fence = re.match(r"^```(?:json)?\s*(.*?)\s*```$", body, re.S)
+            if fence:
+                body = fence.group(1)
+            try:
+                json.loads(body)
+                checks.append((c, True))
+            except Exception:  # noqa: BLE001 — any parse failure is a failure
+                checks.append((c, False))
         # anything else: not mechanically checkable here
 
     if not checks:
@@ -334,12 +438,19 @@ def score(question: dict, response: str | None, provider_error: str | None = Non
         return Score(PROVIDER_UNAVAILABLE, "empty response body")
 
     m = question["evaluation_method"]
+    # Notation normalisation applies ONLY to the value-comparing methods.
+    # STRUCTURE and REFUSAL judge the literal string the user would see —
+    # "contains no dollar sign" and "all lowercase" are claims about the raw
+    # text, and normalising it first would quietly answer a different
+    # question than the one the item asks.
     if m == "NUMERIC":
-        return score_numeric(response, float(question["gold_answer"]), float(question["tolerance"]))
+        return score_numeric(normalise_notation(response),
+                             float(question["gold_answer"]), float(question["tolerance"]))
     if m == "EXACT":
-        return score_exact(response, question["gold_answer"])
+        return score_exact(normalise_notation(response),
+                           normalise_notation(str(question["gold_answer"])))
     if m == "SYMBOLIC":
-        return score_symbolic(response, question["gold_answer"])
+        return score_symbolic(normalise_notation(response), question["gold_answer"])
     if m == "PROGRAMMATIC":
         r = grade_programmatic(response, question["hidden_tests"])
         if r.passed:

@@ -100,7 +100,16 @@ async function classifyWithFallbackModel(fastify: FastifyInstance, message: stri
   }
 }
 
-export async function classifyIntent(fastify: FastifyInstance, message: string, planTier: PlanTier): Promise<ClassificationResult> {
+/**
+ * The deterministic half of classification, as a pure function.
+ *
+ * Returns null to mean "genuinely ambiguous — pay for the classifier". It is
+ * exported so the routing regression suite exercises THIS code rather than a
+ * transcription of it: a suite that tests a copy proves only that the copy
+ * agrees with itself, and routing is now covered by a large offline corpus
+ * run where that distinction decides whether the number means anything.
+ */
+export function classifyDeterministic(message: string): ClassificationResult | null {
   // Greetings resolve deterministically — no classifier round-trip.
   //
   // This is the single biggest latency win available on short messages,
@@ -148,8 +157,26 @@ export async function classifyIntent(fastify: FastifyInstance, message: string, 
   }
 
   if (withStrongHits.length === 0) {
-    const withWeakHits = scored.filter((s) => s.weakHits > 0).sort((a, b) => b.weakHits - a.weakHits);
-    if (withWeakHits.length === 1 || (withWeakHits.length > 1 && withWeakHits[0].weakHits > withWeakHits[1].weakHits)) {
+    // Weak hits are ranked by count, then by specificity. Count first
+    // because weak keywords are weak evidence and more of them is the
+    // stronger signal; specificity second so an exact tie between a domain
+    // intent and the catch-all resolves to the domain rather than paying
+    // for a classifier round-trip. Ordering these the other way round would
+    // let a single incidental weak hit outrank a genuine pile of them.
+    const withWeakHits = scored
+      .filter((s) => s.weakHits > 0)
+      .sort((a, b) =>
+        b.weakHits - a.weakHits ||
+        (b.intent.specificity ?? 1) - (a.intent.specificity ?? 1));
+
+    const decisive =
+      withWeakHits.length === 1 ||
+      (withWeakHits.length > 1 &&
+        (withWeakHits[0].weakHits > withWeakHits[1].weakHits ||
+          (withWeakHits[0].weakHits === withWeakHits[1].weakHits &&
+            (withWeakHits[0].intent.specificity ?? 1) > (withWeakHits[1].intent.specificity ?? 1))));
+
+    if (decisive) {
       const { intent } = withWeakHits[0];
       return {
         intentId: intent.id,
@@ -161,10 +188,17 @@ export async function classifyIntent(fastify: FastifyInstance, message: string, 
     }
   }
 
-  // Zero matches, ≥2 competing strong matches, or a short message with no
-  // keyword signal — genuinely ambiguous, so pay for the classifier.
-  // isTooShortOrGeneric is still consulted (not dead) as a readability
-  // marker for why a message with no hits reached here.
+  // Zero matches, or a genuine tie between equally specific intents.
+  return null;
+}
+
+export async function classifyIntent(fastify: FastifyInstance, message: string, planTier: PlanTier): Promise<ClassificationResult> {
+  const deterministic = classifyDeterministic(message);
+  if (deterministic) return deterministic;
+
+  // Genuinely ambiguous, so pay for the classifier. isTooShortOrGeneric is
+  // still consulted (not dead) as a readability marker for why a message
+  // with no hits reached here.
   if (isTooShortOrGeneric(message)) {
     fastify.log.debug({ wordCount: message.trim().split(/\s+/).length }, "short message with no keyword signal — using classifier");
   }

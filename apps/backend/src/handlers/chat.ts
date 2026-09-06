@@ -19,6 +19,7 @@ import {
   buildSystemPrompt,
   reasoningVerificationBlock,
   categoryBlock,
+  formatConstraintBlock,
   buildProjectContext,
   resolveCortexVersion,
   friendlyModelName,
@@ -108,6 +109,17 @@ export async function runChat(
   // instead of leaving it stuck at 'streaming' forever. See the durable-
   // persistence fix's own comment at the insert site for the full story.
   let assistantMessageId: string | undefined;
+  // Every model this turn actually dispatched to, in order, so a failure
+  // can say WHICH model failed.
+  //
+  // Before this existed, a turn where every candidate failed finalized its
+  // row with routed_model = null: the outer catch is the only place that
+  // can finalize such a turn, and the loop variable holding the model is
+  // out of scope by then. SIB v1.0 measured the cost — all 11 failed
+  // generations in that run recorded no model at all, so a provider
+  // incident left nothing to diagnose it with. Declared out here for the
+  // same reason assistantMessageId is.
+  const attemptedModelIds: string[] = [];
   // Same server-side-only resolution as routes/chat.ts — both entry
   // points call the identical resolveCortexVersion function imported from
   // the same cortex/version.ts module, so Fastify and the Worker can never
@@ -311,6 +323,12 @@ export async function runChat(
     // reasoning/math/coding, and for every media/tool branch below that
     // never reaches completionMessages at all.
     systemPromptText += reasoningVerificationBlock(decision.category);
+    // Category-independent, and conditional on the user's own wording: a
+    // stated hard constraint ("exactly 5 words", "reply with only the
+    // number", "without using the letter e") binds whatever the request is
+    // about. Adds nothing to a message that states no constraint, which is
+    // most of them.
+    systemPromptText += formatConstraintBlock(classifierInputMessage);
 
     sse.cortexStatus({ stage: "detecting_requirements", label: "Detecting requirements..." });
 
@@ -528,6 +546,7 @@ export async function runChat(
     let generation: Awaited<ReturnType<typeof streamCompletion>> | undefined;
     for (let i = 0; i < modelCandidates.length; i++) {
       model = modelCandidates[i];
+      attemptedModelIds.push(model.openrouter_model_id);
       const startedAt = Date.now();
       try {
         generation = await streamCompletion({
@@ -568,7 +587,14 @@ export async function runChat(
 
     if (fullText.trim().length === 0) {
       const message = "The response was interrupted, please try again.";
-      await updateMessageResult(fastify, assistantMessageId, { content: message, status: "failed" });
+      await updateMessageResult(fastify, assistantMessageId, {
+        content: message,
+        // The model produced nothing, but it is still the model that
+        // produced nothing — recording it is what makes "this model
+        // returns empty responses" a discoverable pattern.
+        routedModel: model.openrouter_model_id,
+        status: "failed",
+      });
       sse.error({ message });
       sse.done({ partial: true, conversationId, userMessageId });
       sse.end();
@@ -697,8 +723,20 @@ export async function runChat(
     if (assistantMessageId) {
       await updateMessageResult(fastify, assistantMessageId, {
         content: "Something went wrong while generating this. Please try again.",
+        // The LAST model dispatched to — i.e. the one whose failure was
+        // fatal, since earlier candidates were retried past. The full
+        // chain goes to the log below, because a single text column
+        // cannot hold it and the column's meaning ("what served this
+        // turn") should stay stable.
+        routedModel: attemptedModelIds.at(-1),
         status: "failed",
       }).catch(() => {});
+    }
+    if (attemptedModelIds.length > 0) {
+      fastify.log.error(
+        { attemptedModelIds, attempts: attemptedModelIds.length, messageId: assistantMessageId },
+        "generation failed after exhausting every candidate model",
+      );
     }
   }
 }
