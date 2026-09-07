@@ -5,7 +5,7 @@ Read-only. Answers the operational question this feature exists to make
 answerable: today, right now, how much of the tracked capacity has actually
 been used, per model and in aggregate, and how many users are how close to
 their own fair-share cap. Run this before deciding whether to raise
-OPENROUTER_FREE_DAILY_CAPACITY (or GROQ_FREE_DAILY_CAPACITY), and after, to
+OPENROUTER_FREE_DAILY_CAPACITY (or GROQ_TOTAL_DAILY_CAPACITY), and after, to
 confirm the change took effect.
 
 The Groq section below answers the specific question the failover feature
@@ -65,17 +65,51 @@ def main() -> int:
     for r in rows:
         print(f"  {r['user_id']}  used={r['used']:<4} period={r['period_start']}")
 
-    print("\n=== Groq fallback: per-model capacity used today (UTC) ===")
+    # Reproduces groq/capacity.ts's resolveTierBudget math exactly, so this
+    # utilization %/warning is computed against the SAME numbers the live
+    # admission gate actually enforces, not a guess. If that function's
+    # formula ever changes, update this block to match — the two drifting
+    # apart is worse than deleting this section, since a wrong "still fine"
+    # reading is worse than no reading.
+    total_cap = int(env.get("GROQ_TOTAL_DAILY_CAPACITY", "1000"))
+    buffer_pct = float(env.get("GROQ_SAFETY_BUFFER_PCT", "20"))
+    paid_share_pct = float(env.get("GROQ_PAID_SHARE_PCT", "35"))
+    buffered_total = max(1, int(total_cap * (1 - buffer_pct / 100)))
+    if buffered_total >= 2:
+        raw_paid = int(buffered_total * (paid_share_pct / 100))
+        paid_slice = min(max(raw_paid, 1), buffered_total - 1)
+    else:
+        paid_slice = min(int(buffered_total * (paid_share_pct / 100)), buffered_total)
+    free_slice = buffered_total - paid_slice
+
+    print(f"\n=== Groq fallback: configured tier budgets (from resolveTierBudget's own formula) ===")
+    print(f"  buffered total : {buffered_total} / day  (real account limit {total_cap}, {buffer_pct:.0f}% safety buffer)")
+    print(f"  Free slice     : {free_slice} / day")
+    print(f"  Paid slice     : {paid_slice} / day")
+
+    print("\n=== Groq fallback: per-model capacity used today (UTC) — tier-split, by bookkeeping key ===")
     rows = rest(
         "provider_groq_capacity?select=model_id,period_start,used,updated_at"
         "&order=used.desc&limit=50"
     )
     if not rows:
         print("  (no rows yet — Groq fallback has not served any request since this migration deployed)")
+    # WARNING threshold below is deliberately conservative (80%, not 100%) —
+    # the whole point of surfacing this is catching pressure BEFORE a real
+    # user gets denied, not after. This is the concrete fix for "capacity
+    # pressure is only ever discoverable via a manual SQL query" — still a
+    # manual run, but now with an unmissable, self-interpreting warning
+    # instead of a bare number the reader has to know how to judge.
     for r in rows:
-        print(f"  {r['model_id']:<52} used={r['used']:<6} period={r['period_start']}  updated={r['updated_at']}")
+        cap = paid_slice if r["model_id"].endswith("#paid-tier") else free_slice if r["model_id"].endswith("#free-tier") else None
+        if cap:
+            pct = 100 * r["used"] / cap
+            flag = "  <-- WARNING: over 80% of today's slice used" if pct >= 80 else ""
+            print(f"  {r['model_id']:<40} used={r['used']:<6} / {cap:<6} ({pct:5.1f}%)  updated={r['updated_at']}{flag}")
+        else:
+            print(f"  {r['model_id']:<52} used={r['used']:<6} period={r['period_start']}  updated={r['updated_at']}")
 
-    print("\n=== Groq fallback: per-user usage today ===")
+    print("\n=== Groq fallback: per-user usage today (both tiers share this counter_type; cross-reference users.plan_tier to split) ===")
     rows = rest(
         "usage_counters?select=user_id,period_start,used"
         "&counter_type=eq.groq_free_requests&order=used.desc&limit=20"
@@ -88,7 +122,7 @@ def main() -> int:
     print("\n=== current config (from the deployed worker's own vars) ===")
     print("  read via: wrangler tail, or the values in deploy/backend/wrangler.jsonc")
     print("  OPENROUTER_FREE_DAILY_CAPACITY / OPENROUTER_FREE_SAFETY_BUFFER_PCT / OPENROUTER_PER_USER_SHARE_PCT")
-    print("  GROQ_API_KEY (secret, presence-only) / GROQ_FREE_DAILY_CAPACITY / GROQ_FREE_SAFETY_BUFFER_PCT / GROQ_PER_USER_SHARE_PCT")
+    print("  GROQ_API_KEY (secret, presence-only) / GROQ_TOTAL_DAILY_CAPACITY / GROQ_SAFETY_BUFFER_PCT / GROQ_PAID_SHARE_PCT / GROQ_PER_USER_SHARE_PCT / GROQ_PER_USER_SHARE_PCT_PAID")
     return 0
 
 

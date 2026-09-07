@@ -212,4 +212,30 @@ describe("attemptGroqFallback — Groq itself unavailable (both tiers)", () => {
     });
     expect(result).toBeNull();
   });
+
+  it("Groq's key is revoked/invalid (401) -> degrades cleanly, no throw, no hang, original error still surfaces", async () => {
+    // A real, worth-taking-seriously dependency risk: Groq's own free-tier
+    // terms could change, or this key could be revoked/rotated externally,
+    // with no warning. This proves the FAILURE MODE is safe even though the
+    // underlying business risk (no contract, no SLA) isn't something code
+    // can eliminate — a revoked key must degrade to "the original OpenRouter
+    // error, unchanged", never crash the request or hang it.
+    const fastify = withKey(makeFastify(makeState({ groqAdmitResult: "ok" })));
+    mockFetchOnce({ ok: false, status: 401, text: "Invalid API Key" });
+    const result = await attemptGroqFallback({
+      fastify, triggeringError: new OpenRouterError("stream", 402, "insufficient credits", "m:paid"),
+      user: makeUser({ planTier: "pro" }), ...baseOpts,
+    });
+    expect(result).toBeNull();
+  });
+
+  it("a transport-level failure (Groq unreachable entirely — DNS, timeout) also degrades cleanly, not just an HTTP error status", async () => {
+    const fastify = withKey(makeFastify(makeState({ groqAdmitResult: "ok" })));
+    vi.stubGlobal("fetch", vi.fn(async () => { throw new TypeError("fetch failed"); }));
+    const result = await attemptGroqFallback({
+      fastify, triggeringError: new OpenRouterError("stream", 402, "insufficient credits", "m:paid"),
+      user: makeUser({ planTier: "pro" }), ...baseOpts,
+    });
+    expect(result).toBeNull();
+  });
 });

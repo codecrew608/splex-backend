@@ -61,6 +61,60 @@ describe("resolveTierBudget", () => {
     expect(free.perUserDailyCap).toBe(26);
   });
 
+  it("Free + Paid can NEVER together exceed the buffered total, even under an extreme (100%) GROQ_PAID_SHARE_PCT misconfiguration", async () => {
+    // The real edge case a naive independent-floor-per-branch implementation
+    // gets wrong: at 100% paid share, a bare Math.max(1, ...) on each branch
+    // independently could let Free floor to 1 while Paid kept the full
+    // (now equal to bufferedTotal) raw share, summing to bufferedTotal + 1
+    // — one request/day over the real account limit. This is the schema's
+    // actual documented maximum (.max(100)), not a hypothetical value.
+    const fastify = makeFastify(makeState());
+    (fastify as unknown as { config: Record<string, number> }).config.GROQ_PAID_SHARE_PCT = 100;
+    const free = await resolveTierBudget(fastify, "free");
+    const paid = await resolveTierBudget(fastify, "pro");
+    expect(free.modelDailyCap + paid.modelDailyCap).toBeLessThanOrEqual(800); // bufferedTotal at defaults
+    expect(free.modelDailyCap).toBeGreaterThanOrEqual(1);
+    expect(paid.modelDailyCap).toBeGreaterThanOrEqual(1);
+  });
+
+  it("the same invariant holds at 0% paid share too", async () => {
+    const fastify = makeFastify(makeState());
+    (fastify as unknown as { config: Record<string, number> }).config.GROQ_PAID_SHARE_PCT = 0;
+    const free = await resolveTierBudget(fastify, "free");
+    const paid = await resolveTierBudget(fastify, "pro");
+    expect(free.modelDailyCap + paid.modelDailyCap).toBeLessThanOrEqual(800);
+    expect(paid.modelDailyCap).toBeGreaterThanOrEqual(1);
+  });
+
+  it("exhaustively: every integer GROQ_PAID_SHARE_PCT from 0 to 100 keeps the invariant — sum never exceeds bufferedTotal, neither side ever below 1", async () => {
+    // Not just the two edges — every value the schema allows (.min(0).max(100)).
+    for (let pct = 0; pct <= 100; pct++) {
+      const fastify = makeFastify(makeState());
+      (fastify as unknown as { config: Record<string, number> }).config.GROQ_PAID_SHARE_PCT = pct;
+      const free = await resolveTierBudget(fastify, "free");
+      const paid = await resolveTierBudget(fastify, "pro");
+      expect(free.modelDailyCap + paid.modelDailyCap, `pct=${pct}`).toBeLessThanOrEqual(800);
+      expect(free.modelDailyCap, `pct=${pct}`).toBeGreaterThanOrEqual(1);
+      expect(paid.modelDailyCap, `pct=${pct}`).toBeGreaterThanOrEqual(1);
+    }
+  });
+
+  it("exhaustively: the same invariant holds across a range of small bufferedTotal values, including the genuinely degenerate ones (<2)", async () => {
+    for (const totalCapacity of [1, 2, 3, 5, 10, 50]) {
+      for (const pct of [0, 5, 35, 50, 95, 100]) {
+        const fastify = makeFastify(makeState());
+        (fastify as unknown as { config: Record<string, number> }).config.GROQ_TOTAL_DAILY_CAPACITY = totalCapacity;
+        (fastify as unknown as { config: Record<string, number> }).config.GROQ_SAFETY_BUFFER_PCT = 0; // isolate: bufferedTotal === totalCapacity
+        (fastify as unknown as { config: Record<string, number> }).config.GROQ_PAID_SHARE_PCT = pct;
+        const free = await resolveTierBudget(fastify, "free");
+        const paid = await resolveTierBudget(fastify, "pro");
+        // The one invariant that matters even in the degenerate <2 regime:
+        // combined admission budget must never exceed the real capacity.
+        expect(free.modelDailyCap + paid.modelDailyCap, `total=${totalCapacity} pct=${pct}`).toBeLessThanOrEqual(totalCapacity);
+      }
+    }
+  });
+
   it("never returns a per-user cap less than 1, however small the computed share is", async () => {
     const fastify = makeFastify(makeState());
     (fastify as unknown as { config: Record<string, number> }).config.GROQ_TOTAL_DAILY_CAPACITY = 1;

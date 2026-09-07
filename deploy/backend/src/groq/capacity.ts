@@ -76,8 +76,31 @@ export async function resolveTierBudget(fastify: FastifyInstance, planTier: Plan
     Math.floor(fastify.config.GROQ_TOTAL_DAILY_CAPACITY * (1 - fastify.config.GROQ_SAFETY_BUFFER_PCT / 100)),
   );
   const isPaid = planTier !== "free";
-  const paidSlice = Math.floor(bufferedTotal * (fastify.config.GROQ_PAID_SHARE_PCT / 100));
-  const modelDailyCap = Math.max(1, isPaid ? paidSlice : bufferedTotal - paidSlice);
+
+  // paidSlice is clamped into [1, bufferedTotal - 1] BEFORE freeSlice is
+  // derived as its exact complement — not floored to >=1 independently on
+  // each branch AFTER an independent split, which is a subtly different
+  // (and subtly broken) computation this function shipped with initially:
+  // at GROQ_PAID_SHARE_PCT=0, rawPaidSlice is legitimately 0, so a
+  // per-branch `Math.max(1, paidSlice)` floors PAID's cap to 1 while
+  // FREE's cap had already been set to the full bufferedTotal (computed
+  // from the un-floored paidSlice=0) — summing to bufferedTotal + 1, one
+  // request/day over the real account limit. Symmetrically broken at
+  // GROQ_PAID_SHARE_PCT=100. Clamping paidSlice FIRST, into both bounds at
+  // once, then deriving freeSlice as bufferedTotal - paidSlice, makes the
+  // complement relationship exact by construction: for any bufferedTotal
+  // >= 2 and any GROQ_PAID_SHARE_PCT in the schema's allowed [0, 100]
+  // range, paidSlice and freeSlice are BOTH guaranteed in [1, bufferedTotal
+  // - 1], and their sum is always exactly bufferedTotal — never over,
+  // never leaving either tier at 0. (bufferedTotal < 2 is a genuinely
+  // degenerate single-or-zero-slot config no real deployment would run;
+  // there, the only invariant that actually matters — never exceed the
+  // real account limit — still holds, even if one tier gets 0 that call.)
+  const rawPaidSlice = Math.floor(bufferedTotal * (fastify.config.GROQ_PAID_SHARE_PCT / 100));
+  const paidSlice =
+    bufferedTotal >= 2 ? Math.min(Math.max(rawPaidSlice, 1), bufferedTotal - 1) : Math.min(rawPaidSlice, bufferedTotal);
+  const freeSlice = bufferedTotal - paidSlice;
+  const modelDailyCap = isPaid ? paidSlice : freeSlice;
 
   const perUserSharePct = isPaid ? fastify.config.GROQ_PER_USER_SHARE_PCT_PAID : fastify.config.GROQ_PER_USER_SHARE_PCT;
   const rawShare = Math.floor(modelDailyCap * (perUserSharePct / 100));
