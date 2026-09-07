@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { reasoningVerificationBlock } from "../src/cortex/systemPrompt.js";
+import { reasoningVerificationBlock, buildSystemPrompt } from "../src/cortex/systemPrompt.js";
 
 describe("reasoningVerificationBlock — domain-specific accuracy verification", () => {
   it("returns nothing for categories with no verification block (media/tool/general)", () => {
@@ -97,5 +97,47 @@ describe("reasoningVerificationBlock — domain-specific accuracy verification",
       expect(block).toMatch(/do not show your derivation/i);
       expect(block).toMatch(/never mention that you performed a verification step/i);
     }
+  });
+});
+
+// REGRESSION — reported with a screenshot, 2026-09-07, AFTER a first fix
+// that did not hold. The plain-text-maths rule was originally added only to
+// MATH_NOTATION_GUIDANCE, which reasoningVerificationBlock appends for the
+// "math" and "reasoning" categories only. But a simple question like
+// "what is x if 3x=9" carries no math strong-keyword (no operator between
+// digits, no "solve for"/"calculate"/"equation"), so Cortex routes it to
+// "general" — where that block returns "" and the rule was never applied.
+// The user's screenshot showed exactly that: routing panel reading "Best
+// fit for a fast response" (the general/chat v1 label) above an answer
+// rendered as the literal text "$x = 3$".
+//
+// The lesson: this is an output-FORMATTING rule, not a maths-domain rule.
+// Formatting applies to every answer whatever the routing decision, so it
+// belongs in the persona — which is what these assertions pin.
+describe("plain-text maths is a GLOBAL persona rule, not a math-category one", () => {
+  it("the base system prompt forbids LaTeX markup, with no category needed", () => {
+    const prompt = buildSystemPrompt(null);
+    expect(prompt).toMatch(/plain, readable text — never LaTeX markup/i);
+    expect(prompt).toMatch(/\\frac/);
+    expect(prompt).toMatch(/\\boxed/);
+    expect(prompt).toMatch(/applies to EVERY answer/i);
+  });
+
+  it("the rule survives every optional-block combination the builder supports", () => {
+    for (const prompt of [
+      buildSystemPrompt(null),
+      buildSystemPrompt("remembers things"),
+      buildSystemPrompt(null, "file context"),
+      buildSystemPrompt("mem", "file", "Project X", "project mem"),
+    ]) {
+      expect(prompt).toMatch(/never LaTeX markup/i);
+    }
+  });
+
+  it("a general-category turn — the exact routing that leaked to the user — still carries the rule", () => {
+    // reasoningVerificationBlock contributes nothing for "general"; the
+    // persona is what has to carry it, and does.
+    expect(reasoningVerificationBlock("general")).toBe("");
+    expect(buildSystemPrompt(null) + reasoningVerificationBlock("general")).toMatch(/never LaTeX markup/i);
   });
 });
