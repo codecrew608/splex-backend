@@ -51,6 +51,17 @@ export interface FakeState {
   // error-fallback path (which now fails CLOSED to maxSteps:0) standing
   // in for "the real DB has a normal row here".
   planLimits?: Record<string, number | null>;
+  // Backs reserve_daily_request/release_daily_request (migration 0055) —
+  // the daily MESSAGE-COUNT counter, kept deliberately separate from
+  // dailyLimit/dailyUsed above (the daily CREDITS pool): the two are
+  // independent counters in production (different counter_type rows) and
+  // a test proving one is atomic must not silently also depend on the
+  // other's state. undefined limit means "no configured cap for this
+  // tier" — matches production's real NULL semantics (uncapped, not
+  // fail-closed; see reserve_daily_request's own SQL comment for why this
+  // differs from the credits pool's fail-closed-on-NULL behavior).
+  dailyRequestsLimit?: number | null;
+  dailyRequestsUsed: number;
 }
 
 export function makeState(overrides: Partial<FakeState> = {}): FakeState {
@@ -60,6 +71,8 @@ export function makeState(overrides: Partial<FakeState> = {}): FakeState {
     monthlyLimit: 3000,
     dailyUsed: 0,
     monthlyUsed: 0,
+    dailyRequestsLimit: null,
+    dailyRequestsUsed: 0,
     media: new Map(),
     workflowRuns: new Map(),
     workflowSteps: new Map(),
@@ -128,6 +141,19 @@ function rpcImpl(state: FakeState, name: string, p: Record<string, unknown>): un
     }
     case "release_stale_media_reservations":
       return 0;
+    case "reserve_daily_request": {
+      // Mirrors reserve_daily_request's real SQL: NULL limit is uncapped
+      // (return true, no counter touched) — distinct from the credits
+      // pool's fail-closed-on-NULL semantics above.
+      if (state.dailyRequestsLimit === undefined || state.dailyRequestsLimit === null) return true;
+      if (state.dailyRequestsUsed + 1 > state.dailyRequestsLimit) return false;
+      state.dailyRequestsUsed += 1;
+      return true;
+    }
+    case "release_daily_request": {
+      state.dailyRequestsUsed = Math.max(0, state.dailyRequestsUsed - 1);
+      return null;
+    }
     case "diagnose_credit_rejection":
       return { reason: "daily_exhausted" };
     case "admit_openrouter_free_request":

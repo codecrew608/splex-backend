@@ -34,7 +34,7 @@ import {
   buildProjectMemorySummary,
   type ProjectMemoryContext,
 } from "../memory/extractMemory.js";
-import { checkAndReserveCredits, settleDailyReservation, resolveCreditRejectionMessage } from "../credits/checkCredits.js";
+import { checkAndReserveCredits, settleDailyReservation, resolveCreditRejectionMessage, reserveDailyRequest, releaseDailyRequest, DAILY_REQUEST_LIMIT_MESSAGE } from "../credits/checkCredits.js";
 import { consumeCredits } from "../credits/consumeCredits.js";
 import { resolveCreditGateEstimate } from "../credits/costBand.js";
 import { computeRealCost } from "../credits/realCost.js";
@@ -466,10 +466,41 @@ export async function runChat(
       return;
     }
 
+    // Atomic message-count admission (migration 0055, reserve_daily_request)
+    // — the actual fix for the daily_requests over-admission race: N
+    // simultaneous requests near a user's message-count limit used to all
+    // pass a read-only pre-check (inside check_credits()) and all proceed
+    // to generate, since the counter was only ever incremented afterwards,
+    // inside consume_credits(), well after the model had already streamed a
+    // response. This runs BEFORE any generation begins, same as the credits
+    // reservation just above, and is the sole place in the request pipeline
+    // that owns the daily_requests counter for an ordinary chat turn.
+    //
+    // Runs AFTER the credits gate rather than before/in-parallel: if this
+    // rejects, the credits reservation just made above must be fully
+    // released (actualCost 0) before returning — otherwise a request
+    // rejected for being over the MESSAGE-COUNT limit would still leak a
+    // phantom credits reservation for the rest of the day.
+    const requestReserved = await reserveDailyRequest(fastify, user.id);
+    if (!requestReserved) {
+      await settleDailyReservation(fastify, user.id, gate.dailyReserved, 0);
+      sse.error({ message: DAILY_REQUEST_LIMIT_MESSAGE });
+      sse.done({ blocked: true, conversationId, userMessageId });
+      sse.end();
+      return;
+    }
+
     // Set to the real charged amount only once generation genuinely
     // succeeds (right after computeRealCost below); stays 0 on every other
-    // exit, which fully releases the reservation via the finally.
+    // exit, which fully releases the credits reservation via the finally.
     let dailyActualCost = 0;
+    // Mirrors dailyActualCost's role but for the message-count reservation:
+    // flips true only once generation has genuinely completed and the
+    // response is being finalized — everything before that (thrown errors,
+    // empty output, early returns) leaves this false, so the finally below
+    // releases the reservation exactly on the same set of outcomes that
+    // never reached consumeCredits() before this migration.
+    let requestSucceeded = false;
     try {
 
     sse.cortexStatus({ stage: "selecting_capability", label: "Selecting AI capability..." });
@@ -605,6 +636,12 @@ export async function runChat(
 
     const realCost = await computeRealCost(fastify, decision.category, model, usage);
     dailyActualCost = realCost.creditsCharged;
+    // Generation genuinely completed with real output — this turn now
+    // counts against the daily message limit, exactly matching the
+    // pre-migration-0055 behavior where the daily_requests increment only
+    // ever ran on this same success path (inside consume_credits(), just
+    // reached earlier now).
+    requestSucceeded = true;
 
     await updateMessageResult(fastify, assistantMessageId, {
       content: fullText,
@@ -622,11 +659,15 @@ export async function runChat(
       userId: user.id, creditCost: realCost.creditsCharged, intent: decision.intentId, complexity: decision.complexity,
       openrouterModelId: model.openrouter_model_id, realCostEstimate: realCost.realCostEstimateUsd,
       realInputTokens: realCost.inputTokens, realOutputTokens: realCost.outputTokens,
-      // Daily is settled by settleDailyReservation() in the finally below —
-      // charging it here too double-counts (see skipDaily's doc comment in
-      // consumeCredits.ts; this shipped and produced an exact 2x daily
-      // overcharge in production).
+      // Daily credits are settled by settleDailyReservation() in the
+      // finally below — charging it here too double-counts (see skipDaily's
+      // doc comment in consumeCredits.ts; this shipped and produced an
+      // exact 2x daily overcharge in production). Daily MESSAGE-COUNT is
+      // owned by reserveDailyRequest() above, for the same reason —
+      // skipDailyRequest prevents the analogous double-count against
+      // daily_requests (migration 0055).
       skipDaily: true,
+      skipDailyRequest: true,
     });
 
     // Awaited (not scheduleBackground'd like memory extraction below) —
@@ -679,6 +720,15 @@ export async function runChat(
       // Fires on every exit from the try above — see routes/chat.ts's
       // identical pattern for the full reasoning.
       await settleDailyReservation(fastify, user.id, gate.dailyReserved, dailyActualCost);
+      // Message-count reservation: release it on every exit that did NOT
+      // reach the success assignment above (thrown error, empty output,
+      // early return, client abort) — matching the exact same set of
+      // outcomes that never incremented daily_requests before migration
+      // 0055 (the old increment lived inside consume_credits(), reachable
+      // only from this same success path).
+      if (!requestSucceeded) {
+        await releaseDailyRequest(fastify, user.id);
+      }
     }
   } catch (err) {
     // THE actual fix for the swallowed-error bug: fastify.log here goes through

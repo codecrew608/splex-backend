@@ -69,15 +69,32 @@ export type CreditRejectionReason =
   | "unknown_user"
   | "ok";
 
+// Machine-readable codes for the two rejection families, alongside the
+// exact strings above — a caller that wants a stable code (rather than
+// pattern-matching the message text) can pair either message with the
+// matching code below without a second source of truth.
+export const DAILY_MESSAGE_LIMIT_CODE = "DAILY_MESSAGE_LIMIT";
+export const CREDITS_EXHAUSTED_CODE = "CREDITS_EXHAUSTED";
+
 // Exported (not module-private) so callers with their own more specific
 // existing credits-exhausted wording — Agent Workflow's ceiling check says
 // "...to complete this multi-step request" rather than this generic
 // string — can still reuse the exact same daily-limit text rather than
 // duplicating the literal string at every call site.
-// Deliberately generic — never "SPLEX credits", never a number. SPLEX
-// credits are an internal backend metering unit; the user should see a
-// normal product-style limit message, not internal accounting terms.
-export const DAILY_REQUEST_LIMIT_MESSAGE = "You've reached your daily request limit. Please try again tomorrow.";
+//
+// DAILY_MESSAGE_LIMIT's exact required string ("Daily message limit
+// reached.") applied below — no conflict with existing architecture.
+//
+// CREDITS_EXHAUSTED's exact required string ("SPLEX credits exhausted.")
+// is DELIBERATELY NOT applied here — see hidden-credit-economics.test.ts,
+// an existing regression test whose entire purpose is asserting the phrase
+// "SPLEX credit" never appears in a user-facing string anywhere in this
+// codebase, backed by a real product decision ("SPLEX credits are an
+// internal backend metering unit; users must never see... the internal
+// per-request cost — anywhere in the normal product UI"). Flagged to the
+// user as a genuine conflict rather than silently overridden; kept the
+// pre-existing, tested wording here pending their decision.
+export const DAILY_REQUEST_LIMIT_MESSAGE = "Daily message limit reached.";
 export const DAILY_CREDIT_LIMIT_MESSAGE = "Your current usage limit has been reached. Please try again tomorrow.";
 const CREDITS_EXHAUSTED_MESSAGE = "Your current plan limit has been reached. Please try again later or upgrade your plan.";
 
@@ -245,6 +262,59 @@ export async function settleDailyReservation(
   const { error } = await fastify.supabaseAdmin.rpc("consume_daily_credits", { p_user_id: userId, p_credit_cost: delta });
   if (error) {
     fastify.log.error({ error, userId, reservedAmount, actualCost }, "settleDailyReservation: consume_daily_credits RPC failed");
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Daily MESSAGE-COUNT reservation (migration 0055) — atomically closes the
+// race check_credits()'s own daily_requests block could never close on its
+// own (it only ever read the counter; the increment happened later, inside
+// consume_credits(), only after generation had already streamed a full
+// response). Mirrors checkAndReserveCredits/settleDailyReservation's own
+// shape, but simpler: a message is always exactly 1, never a variable real
+// cost, so there is no settle-with-delta step — reserve_daily_request()
+// either holds the reservation (success) or releaseDailyRequest() fully
+// undoes it (failure/abort), never trues one up to a different amount.
+//
+// Required shape at the one call site that uses this (chat.ts's plain-chat
+// path — the only place that already runs the equivalent credits
+// reservation at this same boundary; workflow/media/research call sites are
+// deliberately unchanged, see migration 0055's doc comment):
+//
+//   const requestReserved = await reserveDailyRequest(fastify, user.id);
+//   if (!requestReserved) { ...release any credits reservation already
+//     made this turn, explain via DAILY_REQUEST_LIMIT_MESSAGE...; return; }
+//   let succeeded = false;
+//   try {
+//     ...generate...
+//     succeeded = true; // only once generation genuinely completes
+//     await consumeCredits(fastify, { ...skipDailyRequest: true });
+//   } finally {
+//     if (!succeeded) await releaseDailyRequest(fastify, user.id);
+//   }
+export async function reserveDailyRequest(fastify: FastifyInstance, userId: string): Promise<boolean> {
+  const { data, error } = await fastify.supabaseAdmin.rpc("reserve_daily_request", { p_user_id: userId });
+  if (error) {
+    fastify.log.error({ error, userId }, "reserve_daily_request RPC failed");
+    return false;
+  }
+  return data === true;
+}
+
+// Releases a reservation made by reserveDailyRequest() when the request did
+// NOT complete successfully — matches this codebase's existing rule that a
+// failed/aborted generation must not count against the daily message cap
+// (that was already true before this migration: the old post-hoc increment
+// inside consume_credits() only ever ran on the success path). Best-effort:
+// logs and swallows its own error rather than throwing, matching
+// settleDailyReservation's posture — by the time this runs, the response to
+// the user has usually already been decided one way or another, and a
+// bookkeeping failure here must not change that outcome. Idempotent floor
+// at 0 server-side (see the SQL), so calling it more than once is harmless.
+export async function releaseDailyRequest(fastify: FastifyInstance, userId: string): Promise<void> {
+  const { error } = await fastify.supabaseAdmin.rpc("release_daily_request", { p_user_id: userId });
+  if (error) {
+    fastify.log.error({ error, userId }, "release_daily_request RPC failed");
   }
 }
 

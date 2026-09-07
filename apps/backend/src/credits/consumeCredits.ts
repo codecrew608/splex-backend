@@ -27,6 +27,16 @@ export interface ConsumeCreditsParams {
   // because settleDailyReservation()/settleMediaReservation() already trues
   // it up from the reserved estimate to the real amount.
   skipDaily?: boolean;
+  // Same shape, same reason, applied to the daily MESSAGE-COUNT counter
+  // (migration 0055) instead of the daily credits counter above: skip it
+  // because reserveDailyRequest()/releaseDailyRequest() at the chat.ts call
+  // site already owns that counter for this turn — running both would
+  // double-count exactly the way skipDaily's own doc comment describes,
+  // just against daily_requests instead of daily_credits. Defaults false so
+  // every OTHER consumeCredits() call site (workflow steps, media
+  // generation, research) keeps its existing, unchanged behavior: only
+  // chat.ts's plain-chat path passes true.
+  skipDailyRequest?: boolean;
 }
 
 const RETRY_ATTEMPTS = 3;
@@ -120,6 +130,7 @@ export async function consumeCredits(fastify: FastifyInstance, params: ConsumeCr
       p_real_cost_estimate: params.realCostEstimate,
       p_real_input_tokens: params.realInputTokens ?? null,
       p_real_output_tokens: params.realOutputTokens ?? null,
+      p_skip_daily_request: params.skipDailyRequest ?? false,
     },
     logContext,
     { userId: params.userId, creditCost: params.creditCost, intent: params.intent, pool: "monthly" },
