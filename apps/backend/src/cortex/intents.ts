@@ -69,6 +69,44 @@ export const INTENTS: IntentDefinition[] = [
       /\bwrite (a|an|some) (?:[\w.#+]+\s+)?(function|script|program|class|component|api|endpoint)\b/i,
       /\bimplement\b/i,
       /\bbuild (a|an) (function|app|api|component|script)\b/i,
+
+      // --- building a web artefact ------------------------------------------
+      // FOUND LIVE (2026-09-07, user screenshot). A detailed request to
+      // "Build a modern, high-converting, fully responsive e-commerce
+      // homepage ... in a single, self-contained HTML file ... Tailwind via
+      // CDN and vanilla JavaScript" matched NONE of the coding patterns
+      // above: `build (a|an) (function|app|api|component|script)` requires
+      // the noun immediately after the article, and this request has five
+      // adjectives in between. With zero coding signal, the message was
+      // decided by an incidental weak hit on the word "image" and routed to
+      // vision. Before that, an equally unbounded web_search pattern claimed
+      // it outright and the user was told "Web search isn't available on
+      // your plan" — for a request to write HTML.
+      //
+      // Allows a run of adjectives/commas/hyphens between the article and
+      // the artefact noun (bounded, so it can't span into an unrelated
+      // sentence), which is how people actually describe what they want
+      // built.
+      /\b(build|create|make|design|develop|code)\b\s+(?:me\s+|us\s+)?(?:a|an|the)\s+(?:[\w-]+[\s,]+){0,6}(website|web ?page|homepage|landing ?page|web ?app|dashboard|storefront|front-?end|user interface|ui)\b/i,
+      // Unambiguous web-artefact deliverables. "an HTML file" / "a single
+      // HTML page" is never anything but a coding request.
+      /\b(html|css)\s+(file|page|document|snippet)\b/i,
+      /\b(single|self-?contained|one)[\s,-]+(?:[\w-]+[\s,-]+){0,2}html\b/i,
+      // Framework/tech names, but ONLY paired with a build/use verb.
+      //
+      // A bare framework name is NOT a build request, and the routing suite
+      // has a deliberate negative for exactly this: "What is React and why
+      // do people use it?" is a general conceptual question. A first version
+      // of this rule listed the names unqualified and promptly claimed that
+      // case for coding — caught by cases.jsonl before it shipped, which is
+      // what those negatives are there for.
+      //
+      // "vanilla JavaScript" is the exception worth listing alone: nobody
+      // writes it except when specifying how something should be built.
+      // \bscript\b deliberately does NOT match "JavaScript" (no word
+      // boundary after "Java"), which is why these are spelled out at all.
+      /\bvanilla\s+(javascript|js)\b/i,
+      /\b(build|create|make|design|develop|code|write|add|implement|using|use|with|in)\b[^.?!\n]{0,30}\b(tailwind|react|next\.?js|vue|svelte|bootstrap|javascript|typescript)\b/i,
       // `\bimplement\b` above only matches the bare verb — "write a Python
       // implementation" / "build an implementation of this algorithm" use
       // the noun form, which it never catches (confirmed live: a genuine
@@ -331,7 +369,9 @@ export const INTENTS: IntentDefinition[] = [
       /\bsearch (the web|online|the internet)( for)?\b/i,
       /\b(google|look up) (that|this|it|\w[\w\s]{2,40})\b/i,
       /\bwhat('| i)?s the (current|latest) (price|version|status|score)\b/i,
-      /\b(as of|right now|currently)\b.*\?/i,
+      // Bounded to one sentence and a short span, for the same reason the
+      // price/now pattern below is — see its comment.
+      /\b(as of|right now|currently)\b[^.?!\n]{0,60}\?/i,
       /\bwhat'?s happening (with|to)\b/i,
       // Live testing caught "what is the price of btc now" being answered
       // confidently from stale training data instead of triggering a
@@ -344,7 +384,22 @@ export const INTENTS: IntentDefinition[] = [
       // "...price of X now/today" shape specifically, since price/value/
       // rate/cost questions are inherently time-sensitive in a way most
       // other "now"-suffixed questions aren't.
-      /\b(price|value|cost|rate|worth)\b[\s\S]*\b(now|today|currently|right now|at the moment)\b/i,
+      //
+      // BOUNDED SPAN (fix, 2026-09-07). This was `[\s\S]*` — unlimited, and
+      // crossing newlines — so the two halves could sit anywhere in a
+      // message of any length and still match. A real user asking for an
+      // e-commerce page got refused with "Web search isn't available on your
+      // plan" because their brief said "a strong VALUE proposition" near the
+      // top and "Shop NOW" in a button label ~200 characters later, in
+      // unrelated sentences. Two innocent words in a 1,500-character coding
+      // request beat every coding signal in it, because this is a STRONG
+      // keyword and matched outright.
+      //
+      // The genuine case this exists for ("what is the price of btc now")
+      // has the two terms within a few words of each other in ONE sentence,
+      // so bounding the gap and stopping at sentence/line boundaries keeps
+      // it working while making the false positive structurally impossible.
+      /\b(price|value|cost|rate|worth)\b[^.?!\n]{0,40}\b(now|today|currently|right now|at the moment)\b/i,
     ],
     weakKeywords: [/\blatest\b/i, /\bcurrent(ly)?\b/i, /\bright now\b/i],
   },
