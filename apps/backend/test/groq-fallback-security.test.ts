@@ -58,21 +58,34 @@ describe("Groq fallback — exactly one integration point", () => {
   });
 });
 
-describe("Groq fallback — Free tier ONLY, structurally, not just by test coverage", () => {
-  it("attemptGroqFallback's own source contains an unconditional planTier !== \"free\" guard as its FIRST check", () => {
+describe("Groq fallback — Free AND Paid, but with a tier-DIFFERENT trigger rule, structurally", () => {
+  // Extended to Paid 2026-09-07 (user's explicit direction). The tier gate
+  // is no longer "reject Paid outright" — it's "use a different eligible-
+  // failure predicate per tier", enforced inside isEligibleFailure. This
+  // pins the one property that actually matters now: Free's predicate
+  // (isOpenRouterCapacityExhausted) structurally never includes a 402
+  // check, while the combined per-tier check explicitly re-admits 402 only
+  // for a non-free planTier.
+  it("isOpenRouterCapacityExhausted (the tier-SHARED predicate) never references balance/402 at all", () => {
+    const src = read("groq/fallback.ts");
+    const fnStart = src.indexOf("export function isOpenRouterCapacityExhausted(");
+    const fnEnd = src.indexOf("\n}", fnStart);
+    const fnBody = src.slice(fnStart, fnEnd);
+    expect(fnBody).not.toMatch(/isBalanceExceededError|402/);
+  });
+
+  it("isEligibleFailure re-admits isBalanceExceededError ONLY when planTier !== \"free\"", () => {
+    const src = read("groq/fallback.ts");
+    const fnStart = src.indexOf("function isEligibleFailure(");
+    const fnBody = src.slice(fnStart, fnStart + 300);
+    expect(fnBody).toContain('planTier !== "free" && isBalanceExceededError(err)');
+  });
+
+  it("GROQ_API_KEY is still checked before any dispatch attempt, for both tiers alike", () => {
     const src = read("groq/fallback.ts");
     const fnStart = src.indexOf("export async function attemptGroqFallback(");
-    const fnBody = src.slice(fnStart, fnStart + 800);
-    const guardAt = fnBody.indexOf('if (user.planTier !== "free") return null;');
-    expect(guardAt).toBeGreaterThan(-1);
-    // Must be the FIRST substantive check in the function body — a
-    // triggering-error or config check running first would still be safe
-    // today, but ordering the tier check first means a future added check
-    // can never accidentally short-circuit past it.
-    const keyCheckAt = fnBody.indexOf("GROQ_API_KEY");
-    const errorCheckAt = fnBody.indexOf("isOpenRouterCapacityExhausted(");
-    expect(guardAt).toBeLessThan(keyCheckAt);
-    expect(guardAt).toBeLessThan(errorCheckAt);
+    const fnBody = src.slice(fnStart, fnStart + 500);
+    expect(fnBody).toContain("if (!fastify.config.GROQ_API_KEY) return null;");
   });
 
   it("the chat.ts call site sources planTier from the server-resolved `user` object, never from the request body", () => {
@@ -81,6 +94,32 @@ describe("Groq fallback — Free tier ONLY, structurally, not just by test cover
     const call = src.slice(callAt, callAt + 400);
     expect(call).toContain("user,");
     expect(call).not.toMatch(/planTier:\s*body\./);
+  });
+});
+
+describe("Groq fallback — a Paid-served turn is billed as a REAL paid dispatch, never as a free discount", () => {
+  // Groq's own $0 cost to SPLEX must never leak into what a Paid user is
+  // charged — buildGroqModel prices a Paid-tier synthetic row at a real,
+  // non-zero rate (see fallback.ts's own header comment for the
+  // incentive-alignment reasoning), exactly like every other paid dispatch.
+  it("buildGroqModel sets non-zero cost_per_million figures ONLY for the paid branch", () => {
+    const src = read("groq/fallback.ts");
+    const fnStart = src.indexOf("function buildGroqModel(");
+    const fnBody = src.slice(fnStart, src.indexOf("\n}", fnStart));
+    expect(fnBody).toMatch(/cost_per_million_input:\s*isPaid\s*\?\s*[\d.]*[1-9]/);
+    expect(fnBody).toMatch(/cost_per_million_output:\s*isPaid\s*\?\s*[\d.]*[1-9]/);
+  });
+});
+
+describe("Groq fallback — Free and Paid can never exceed the one real shared account limit", () => {
+  // resolveTierBudget must derive both slices from the SAME configured
+  // total via a single subtraction (free = buffered - paid), never from
+  // two independently-configured raw numbers that could silently sum past
+  // the real Groq account ceiling.
+  it("capacity.ts computes Free's slice as (bufferedTotal - paidSlice), not from a separate config value", () => {
+    const src = read("groq/capacity.ts");
+    expect(src).toContain("bufferedTotal - paidSlice");
+    expect(src).not.toMatch(/GROQ_FREE_DAILY_CAPACITY/); // the old, pre-split, tier-blind config name must be gone
   });
 });
 

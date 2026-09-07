@@ -54,7 +54,19 @@ export const INTENTS: IntentDefinition[] = [
     category: "coding",
     capabilities: ["code_generation", "technical_context"],
     strongKeywords: [
-      /\bwrite (a|an|some) (function|script|program|class|component|api|endpoint)\b/i,
+      // Tolerates an optional language/framework name between the article
+      // and the noun ("write a PYTHON function", "build a REACT
+      // component") — found live (routing_regression corpus, item
+      // code-impl-07): "Write a Python function `merge(...)`..." matched
+      // NOTHING here (the bare pattern requires "a function" with nothing
+      // between them), so the whole message fell through to math_reasoning
+      // on its coordinate-pair regex incidentally matching the example
+      // tuples "(1,2)" and "(2,3)" in the spec — a coding request routed
+      // to math because the coding pattern was too rigid, not because math
+      // was a better fit. `[\w.#+]+\s+` (not `\w+`) so it also covers
+      // "C++", "C#", ".NET" style names, capped at one word so it still
+      // won't fire on an unrelated noun phrase far from "function".
+      /\bwrite (a|an|some) (?:[\w.#+]+\s+)?(function|script|program|class|component|api|endpoint)\b/i,
       /\bimplement\b/i,
       /\bbuild (a|an) (function|app|api|component|script)\b/i,
       // `\bimplement\b` above only matches the bare verb — "write a Python
@@ -82,7 +94,19 @@ export const INTENTS: IntentDefinition[] = [
       /\bstack trace\b/i,
       /\btraceback\b/i,
     ],
-    weakKeywords: [/\bbug\b/i, /\berror\b/i, /\bexception\b/i, /\bcrash(es|ing)?\b/i],
+    // Bare /\berror\b/i (removed — found live, routing_regression corpus,
+    // item lang-00) caught "Correct the grammatical error..." as a
+    // debugging weak hit, misrouting a plain grammar-fix request to coding.
+    // Qualified to error TYPES that are unambiguously code-flavored — a
+    // "grammatical"/"spelling"/"factual" error never matches any of these,
+    // while "there's a null pointer error" still does.
+    weakKeywords: [
+      /\bbug\b/i,
+      /\b(?:runtime|syntax|type|compile(?:r|ation)?|logic|null|undefined|reference|segmentation|fatal)\s+error\b/i,
+      /\berror\s+(?:message|log|code|trace)\b/i,
+      /\bexception\b/i,
+      /\bcrash(es|ing)?\b/i,
+    ],
   },
   {
     // Computer-science questions ("what is the time complexity of quicksort")

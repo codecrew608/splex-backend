@@ -121,7 +121,7 @@ export async function streamGroqCompletion(opts: GroqStreamOptions): Promise<Str
       // now, faster than the proactive daily counter could organically
       // reach it, and protects every other pending/future fallback attempt
       // today without an extra wasted round trip.
-      markGroqModelExhausted(fastify, model);
+      markGroqModelExhausted(fastify, planTier, model);
     }
     throw err;
   }

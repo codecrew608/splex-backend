@@ -63,7 +63,7 @@ const envSchema = z.object({
   // for any of them — comfortably above SPLEX's current active user count,
   // with headroom to grow. A policy choice, not a measured fact.
   OPENROUTER_PER_USER_SHARE_PCT: z.coerce.number().min(0.1).max(100).default(5),
-  // --- Groq fallback (migration 0056) — Free tier ONLY, see groq/fallback.ts ---
+  // --- Groq fallback (migration 0056) — Free AND Paid, see groq/fallback.ts ---
   //
   // Optional and unset by default: absence means the feature is simply
   // off (attemptGroqFallback returns null immediately), never a startup
@@ -78,15 +78,30 @@ const envSchema = z.object({
   GROQ_FALLBACK_MODEL: z.string().default("openai/gpt-oss-120b"),
   // Verified live against the actual provided key (real completion,
   // response headers): 1,000 requests/day, organization-wide, for the
-  // openai/gpt-oss family. Same buffer pattern as OPENROUTER_FREE_DAILY_
-  // CAPACITY above, but a wider default buffer (20% vs 10%) — deliberate,
-  // not copied by mistake: this is a newly-added emergency valve with far
-  // less production track record than the OpenRouter capacity system it
-  // mirrors, so a more conservative margin is the right default until it
-  // has real operational history.
-  GROQ_FREE_DAILY_CAPACITY: z.coerce.number().int().positive().default(1000),
-  GROQ_FREE_SAFETY_BUFFER_PCT: z.coerce.number().min(0).max(90).default(20),
+  // openai/gpt-oss family — ONE real, physical, shared ceiling covering
+  // BOTH tiers together (extended to Paid 2026-09-07; see groq/capacity.ts's
+  // resolveTierBudget for how this single total is split into two
+  // independently-bookkept tier slices that can never together exceed it).
+  // Same buffer pattern as OPENROUTER_FREE_DAILY_CAPACITY above, but a
+  // wider default buffer (20% vs 10%) — deliberate, not copied by mistake:
+  // this is a newly-added emergency valve with far less production track
+  // record than the OpenRouter capacity system it mirrors, so a more
+  // conservative margin is the right default until it has real operational
+  // history.
+  GROQ_TOTAL_DAILY_CAPACITY: z.coerce.number().int().positive().default(1000),
+  GROQ_SAFETY_BUFFER_PCT: z.coerce.number().min(0).max(90).default(20),
+  // What fraction of the BUFFERED total (see above) is reserved for Paid —
+  // Free gets the remainder. A policy choice, not a measured fact: Paid
+  // traffic is expected to be far lower-volume than Free today, so a
+  // minority share is generous per-user (see GROQ_PER_USER_SHARE_PCT_PAID
+  // below) while still leaving the majority of the shared pool for Free's
+  // higher volume.
+  GROQ_PAID_SHARE_PCT: z.coerce.number().min(0).max(100).default(35),
   GROQ_PER_USER_SHARE_PCT: z.coerce.number().min(0.1).max(100).default(5),
+  // Paid users get a much larger individual share of their tier's slice —
+  // far fewer of them are expected, and losing service for a paying
+  // customer costs more than for a Free one.
+  GROQ_PER_USER_SHARE_PCT_PAID: z.coerce.number().min(0.1).max(100).default(25),
   // Local FastAPI sidecar — Tesseract OCR + BGE-small embeddings. See
   // services/intelligence/main.py.
   INTELLIGENCE_SERVICE_URL: z.string().url().default("http://127.0.0.1:8100"),

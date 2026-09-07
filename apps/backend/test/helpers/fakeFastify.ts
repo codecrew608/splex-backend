@@ -448,9 +448,11 @@ export function makeFastify(state: FakeState) {
       GROQ_API_KEY: undefined as string | undefined,
       GROQ_BASE_URL: "https://api.groq.com/openai/v1",
       GROQ_FALLBACK_MODEL: "openai/gpt-oss-120b",
-      GROQ_FREE_DAILY_CAPACITY: 1000,
-      GROQ_FREE_SAFETY_BUFFER_PCT: 20,
+      GROQ_TOTAL_DAILY_CAPACITY: 1000,
+      GROQ_SAFETY_BUFFER_PCT: 20,
+      GROQ_PAID_SHARE_PCT: 35,
       GROQ_PER_USER_SHARE_PCT: 5,
+      GROQ_PER_USER_SHARE_PCT_PAID: 25,
     },
   } as never;
 }
