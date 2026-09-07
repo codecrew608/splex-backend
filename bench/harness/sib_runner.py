@@ -272,9 +272,32 @@ def main() -> int:
         print(f"  {q.category:<26} target={q.target:<3} available={q.available:<4} taken={q.taken}")
 
     # Execute --------------------------------------------------------------
+    # A 401 means the bench token expired (they last an hour). Left
+    # unchecked, the run happily records the whole sample as SPLEX_ERROR in
+    # a few seconds and looks like a catastrophic outage — which is exactly
+    # what happened once. Abort on the first one instead: nothing after it
+    # can succeed, and a half-written file of fake failures is worse than no
+    # file. 403 is included because the deployed edge answers that for a
+    # missing Origin or a blocked User-Agent, which is equally fatal and
+    # equally not a property of SPLEX.
+    consecutive_auth_failures = 0
+
     with out_path.open("a") as fh:
         for i, q in enumerate(todo, 1):
             res = transport(q["prompt"], cfg, args.timeout)
+
+            err = res.get("error") or ""
+            if err.startswith("HTTP 401") or err.startswith("HTTP 403"):
+                consecutive_auth_failures += 1
+                if consecutive_auth_failures >= 2:
+                    print(f"\nABORTING: {err} twice in a row — the token has expired or "
+                          f"the request is being rejected at the edge. Re-run "
+                          f"bench.harness.provision and start again. No results were "
+                          f"written for these.", file=sys.stderr)
+                    return 4
+                continue
+            consecutive_auth_failures = 0
+
             s: Score = score(q, res["text"] or None, res["error"])
             row = Row(
                 question_id=q["question_id"],
