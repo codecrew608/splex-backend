@@ -14,8 +14,8 @@ export interface CortexDecision {
   reason: string;
 }
 
-export async function runCortexClassification(fastify: FastifyInstance, message: string, planTier: PlanTier): Promise<CortexDecision> {
-  const classification = await classifyIntent(fastify, message, planTier);
+export async function runCortexClassification(fastify: FastifyInstance, message: string, planTier: PlanTier, userId: string): Promise<CortexDecision> {
+  const classification = await classifyIntent(fastify, message, planTier, userId);
   const complexity = estimateComplexity(message);
 
   return {

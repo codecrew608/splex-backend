@@ -1,5 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import type { ModelRegistryRow } from "../types/index.js";
+import type { PlanTier } from "@splex/shared-types";
 import { storeGeneratedMedia } from "../media/storage.js";
 import { computeRealCost } from "../credits/realCost.js";
 import { planDeck } from "./plan.js";
@@ -29,8 +30,9 @@ export async function generatePpt(
   userId: string,
   model: ModelRegistryRow,
   prompt: string,
+  planTier: PlanTier,
 ): Promise<GeneratePptResult> {
-  const { plan, usage } = await planDeck(fastify, model.openrouter_model_id, prompt);
+  const { plan, usage } = await planDeck(fastify, model.openrouter_model_id, prompt, userId, planTier);
   const bytes = await buildPptx(plan);
 
   const stored = await storeGeneratedMedia(fastify, userId, bytes, PPTX_MIME, "pptx");

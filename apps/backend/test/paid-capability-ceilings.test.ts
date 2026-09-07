@@ -297,7 +297,7 @@ describe("structural guards for the new premium ceilings are actually wired at t
   it("orchestrator.ts checks the workflow run-count ceiling before planWorkflow is ever called", () => {
     const src = read("cortex/workflow/orchestrator.ts");
     const quotaAt = src.indexOf('"workflow_runs", "workflow_runs_monthly"');
-    const planAt = src.indexOf("await planWorkflow(fastify, message, contextBlock, limits.maxSteps, user.planTier)");
+    const planAt = src.indexOf("await planWorkflow(fastify, message, contextBlock, limits.maxSteps, user.planTier, user.id)");
     expect(quotaAt).toBeGreaterThan(-1);
     expect(planAt).toBeGreaterThan(quotaAt);
   });

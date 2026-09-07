@@ -44,7 +44,7 @@ Valid category values: coding, reasoning, math, writing, vision, documents, gene
 "reason" must be a short (<20 words) human-readable explanation of why you picked this intent.
 If uncertain, use intentId "general_qa", category "general".`;
 
-async function classifyWithFallbackModel(fastify: FastifyInstance, message: string, planTier: PlanTier): Promise<ClassificationResult> {
+async function classifyWithFallbackModel(fastify: FastifyInstance, message: string, planTier: PlanTier, userId: string): Promise<ClassificationResult> {
   try {
     // Tier-aware: a Free request must never reach a paid model. An empty
     // candidate list means no free classifier is available at all, so skip
@@ -65,6 +65,8 @@ async function classifyWithFallbackModel(fastify: FastifyInstance, message: stri
         { role: "user", content: message },
       ],
       maxTokens: 150,
+      userId,
+      planTier,
     });
 
     const jsonMatch = raw.match(/\{[\s\S]*\}/);
@@ -236,7 +238,7 @@ export function classifyDeterministic(message: string): ClassificationResult | n
   return null;
 }
 
-export async function classifyIntent(fastify: FastifyInstance, message: string, planTier: PlanTier): Promise<ClassificationResult> {
+export async function classifyIntent(fastify: FastifyInstance, message: string, planTier: PlanTier, userId: string): Promise<ClassificationResult> {
   const deterministic = classifyDeterministic(message);
   if (deterministic) return deterministic;
 
@@ -246,5 +248,5 @@ export async function classifyIntent(fastify: FastifyInstance, message: string, 
   if (isTooShortOrGeneric(message)) {
     fastify.log.debug({ wordCount: message.trim().split(/\s+/).length }, "short message with no keyword signal — using classifier");
   }
-  return classifyWithFallbackModel(fastify, message, planTier);
+  return classifyWithFallbackModel(fastify, message, planTier, userId);
 }

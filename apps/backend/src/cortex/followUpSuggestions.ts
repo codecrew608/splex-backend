@@ -23,6 +23,7 @@ Respond with ONLY a JSON array of strings, no prose, no markdown fences: ["...",
 // for), and a short max_tokens ceiling.
 export async function generateFollowUpSuggestions(
   fastify: FastifyInstance,
+  userId: string,
   planTier: PlanTier,
   userMessage: string,
   assistantResponse: string,
@@ -40,6 +41,8 @@ export async function generateFollowUpSuggestions(
         },
       ],
       maxTokens: 200,
+      userId,
+      planTier,
     });
 
     const jsonMatch = raw.match(/\[[\s\S]*\]/);

@@ -186,7 +186,7 @@ export async function handleSyncMediaGeneration<R extends SyncMediaGenerationRes
         break;
       } catch (err) {
         lastError = err;
-        recordModelFailure(fastify, model.id, err, Date.now() - startedAt);
+        recordModelFailure(fastify, model.id, err, Date.now() - startedAt, model.openrouter_model_id);
         fastify.log.warn({ ...describeError(err), model: model.openrouter_model_id, kind }, "media generation failed, trying next candidate");
       }
     }
@@ -441,7 +441,7 @@ export async function handleAsyncMediaGeneration(params: AsyncMediaGenerationPar
         break;
       } catch (err) {
         lastError = err;
-        recordModelFailure(fastify, model.id, err, Date.now() - startedAt);
+        recordModelFailure(fastify, model.id, err, Date.now() - startedAt, model.openrouter_model_id);
         fastify.log.warn({ ...describeError(err), model: model.openrouter_model_id, kind }, "async media submit failed, trying next candidate");
       }
     }

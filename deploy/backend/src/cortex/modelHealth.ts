@@ -1,5 +1,6 @@
 import type { FastifyInstance } from "fastify";
-import { isBalanceExceededError, isModelUnavailableError } from "../openrouter/client.js";
+import { isBalanceExceededError, isModelUnavailableError, isFreeModelDailyCapExceededError } from "../openrouter/client.js";
+import { markModelCapacityExhausted, isFairShareExceededError } from "../openrouter/capacity.js";
 
 export type ModelOutcome = "success" | "failure" | "timeout";
 
@@ -75,9 +76,53 @@ export function recordModelFailure(
   modelId: string,
   err: unknown,
   latencyMs?: number,
+  // The OpenRouter STRING id (e.g. "vendor/model:free") — distinct from
+  // `modelId` above, which is the model_registry ROW's uuid (what
+  // record_model_health/model_registry updates key on). markModelCapacityExhausted
+  // needs the string id: it writes into provider_free_model_capacity, which
+  // is keyed the same way admitOpenRouterFreeRequest reads it — by the
+  // literal id OpenRouter itself understands, not SPLEX's internal row id.
+  // Optional so every EXISTING call site keeps compiling unchanged; only
+  // the isFreeModelDailyCapExceededError branch below actually needs it,
+  // and that branch degrades to a log-only warning if it is omitted rather
+  // than writing a row keyed on the wrong identifier — which is exactly
+  // the live bug this parameter exists to prevent (verified in
+  // production, 2026-09-07: two rows were written keyed on a
+  // model_registry uuid, which admitOpenRouterFreeRequest can never match
+  // against, silently defeating the reactive layer).
+  openrouterModelId?: string,
 ): void {
   if (isBalanceExceededError(err)) {
     fastify.log.warn({ modelId }, "OpenRouter balance exceeded — not counting against model health");
+    return;
+  }
+  if (isFairShareExceededError(err)) {
+    // A PER-USER policy limit (migration 0054), unrelated to this model's
+    // own behaviour entirely — the same request would have been rejected
+    // identically whichever model it targeted. Recording it as a failure
+    // would penalise a model for a different user's usage pattern.
+    fastify.log.warn({ modelId }, "per-user fair-share limit hit — not counting against model health");
+    return;
+  }
+  if (isFreeModelDailyCapExceededError(err)) {
+    // Same principle as the balance-exceeded branch above, applied to a
+    // different account-level condition: this model hit its tracked daily
+    // free-request ceiling (migration 0054), which says nothing about its
+    // own quality or uptime and must not count against it — and unlike
+    // isModelUnavailableError below, it is NOT permanently dead, so it must
+    // not be deactivated either. It will have room again at UTC midnight.
+    //
+    // The one thing this DOES do: mark the model's own capacity counter
+    // exhausted right now, so every other pending/future attempt at this
+    // specific model today short-circuits at admitOpenRouterFreeRequest
+    // without spending a network round trip re-discovering what this
+    // response just told us directly.
+    fastify.log.warn({ modelId, openrouterModelId }, "OpenRouter free-model daily capacity hit — not counting against model health");
+    if (openrouterModelId) {
+      markModelCapacityExhausted(fastify, openrouterModelId);
+    } else {
+      fastify.log.warn({ modelId }, "recordModelFailure: no openrouterModelId supplied, cannot mark provider capacity exhausted for this call site");
+    }
     return;
   }
   if (isModelUnavailableError(err)) {

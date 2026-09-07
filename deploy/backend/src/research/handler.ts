@@ -142,12 +142,12 @@ export async function handleWebSearch(params: HandleWebSearchParams): Promise<vo
       model = candidates[i];
       const startedAt = Date.now();
       try {
-        result = await performWebSearch(fastify, model.openrouter_model_id, query);
+        result = await performWebSearch(fastify, model.openrouter_model_id, query, user.id, user.planTier);
         recordModelOutcome(fastify, model.id, "success", Date.now() - startedAt, result.costUsd);
         break;
       } catch (err) {
         lastError = err;
-        recordModelFailure(fastify, model.id, err, Date.now() - startedAt);
+        recordModelFailure(fastify, model.id, err, Date.now() - startedAt, model.openrouter_model_id);
         fastify.log.warn({ ...describeError(err), model: model.openrouter_model_id }, "web search failed, trying next candidate");
       }
     }

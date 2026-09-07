@@ -102,6 +102,8 @@ async function runStage(
     maxTokens: opts.maxTokens ?? 1500,
     tools: opts.tools,
     signal: opts.signal,
+    userId: user.id,
+    planTier: user.planTier,
   });
 
   const costUsd = generationId ? await fetchGenerationCost(fastify, generationId) : 0;

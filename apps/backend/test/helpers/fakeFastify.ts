@@ -28,6 +28,18 @@ export interface FakeState {
   nextId: number;
   rpcCalls: Array<{ name: string; params: Record<string, unknown> }>;
   logs: Array<{ level: string; msg: string }>;
+  // admit_openrouter_free_request (migration 0054) is deliberately NOT
+  // faithfully re-implemented here the way the credit RPCs above are — its
+  // safety property is a real joint row-lock across two tables, which a
+  // single-threaded JS map cannot meaningfully prove or disprove either
+  // way. What these tests need from the fake is "capacity.ts calls the RPC
+  // with the right params and reacts correctly to each of its 3 possible
+  // return values" — a controllable canned response is the honest tool for
+  // that, and rpcCalls (above) already lets a test assert exactly which
+  // params were sent. The RPC's actual atomicity is proven separately, by
+  // firing real concurrent calls at the real deployed function — see
+  // bench/harness/capacity_concurrency.mjs.
+  openrouterAdmitResult?: "ok" | "fair_share_exceeded" | "provider_capacity_exhausted";
   // Opt-in seed for plan_limits rows, keyed by counter_type, for the
   // single planTier this state represents. Undefined (the default) keeps
   // every table/counter_type resolving to the generic stub's `null` —
@@ -118,6 +130,10 @@ function rpcImpl(state: FakeState, name: string, p: Record<string, unknown>): un
       return 0;
     case "diagnose_credit_rejection":
       return { reason: "daily_exhausted" };
+    case "admit_openrouter_free_request":
+      return state.openrouterAdmitResult ?? "ok";
+    case "mark_provider_model_exhausted":
+      return null;
     default:
       return null;
   }
@@ -374,7 +390,21 @@ export function makeFastify(state: FakeState) {
     },
   };
 
-  return { supabaseAdmin, log, config: { CORTEX_CLASSIFIER_MODEL_ID: "stub", CREDITS_PER_USD: 20000 } } as never;
+  return {
+    supabaseAdmin,
+    log,
+    config: {
+      CORTEX_CLASSIFIER_MODEL_ID: "stub",
+      CREDITS_PER_USD: 20000,
+      // Fixed stub values matching the real production defaults
+      // (plugins/env.ts) — tests build their expected numbers against
+      // these directly rather than parameterizing them, same idiom as
+      // CREDITS_PER_USD above.
+      OPENROUTER_FREE_DAILY_CAPACITY: 50,
+      OPENROUTER_FREE_SAFETY_BUFFER_PCT: 10,
+      OPENROUTER_PER_USER_SHARE_PCT: 5,
+    },
+  } as never;
 }
 
 export function makeMedia(state: FakeState, userId = "u1"): string {

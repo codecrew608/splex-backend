@@ -277,6 +277,17 @@ cat > "$OUT/wrangler.jsonc" <<'EOF'
     "OPENROUTER_APP_NAME": "SPLEX",
     "CORTEX_CLASSIFIER_MODEL_ID": "qwen/qwen-2.5-72b-instruct",
     "CREDITS_PER_USD": "120000",
+    // OpenRouter free-model capacity admission control (migration 0054).
+    // 50 is the CURRENTLY VERIFIED live value (X-RateLimit-Limit on the
+    // production key, checked 2026-09-07) — update the moment the
+    // intended $10 top-up is confirmed AND re-verified
+    // (bench/harness/quota_probe.py), never on the vendor's documented
+    // number alone. See openrouter/capacity.ts and db/migrations/0054 for
+    // why a uniform per-model default is safe even though it is not
+    // precisely correct for every model.
+    "OPENROUTER_FREE_DAILY_CAPACITY": "50",
+    "OPENROUTER_FREE_SAFETY_BUFFER_PCT": "10",
+    "OPENROUTER_PER_USER_SHARE_PCT": "5",
     // Not secret — a plan identifier. RAZORPAY_WEBHOOK_SECRET stays
     // `wrangler secret put` only, same rule as SUPABASE_SERVICE_ROLE_KEY
     // above — never add it here.

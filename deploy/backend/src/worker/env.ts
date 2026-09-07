@@ -24,6 +24,36 @@ const workerEnvSchema = z.object({
   OPENROUTER_APP_NAME: z.string().default("SPLEX"),
   CORTEX_CLASSIFIER_MODEL_ID: z.string().min(1),
   CREDITS_PER_USD: z.coerce.number().positive().default(120_000),
+  // --- OpenRouter free-model capacity admission control (migration 0054) ---
+  //
+  // Verified live against the production key before choosing this default:
+  // ten distinct :free models probed back-to-back returned
+  // `X-RateLimit-Limit: 50` on every one that carried the header at all.
+  // This is NOT a claim that every model shares one bucket — two models
+  // (minimax-m2.7:free, minimax-m3:free) showed no such header — it is the
+  // conservative per-model ceiling applied uniformly; see
+  // db/migrations/0054's header comment and openrouter/capacity.ts for why
+  // that is safe even where it is not precisely correct.
+  //
+  // UPDATE THIS the moment the intended $10 OpenRouter top-up is confirmed
+  // AND re-verified live (bench/harness/quota_probe.py already does this) —
+  // OpenRouter's own documented behavior is 1,000/day after that, but this
+  // codebase's rule is to verify, not trust, before changing a number real
+  // money/capacity planning depends on.
+  OPENROUTER_FREE_DAILY_CAPACITY: z.coerce.number().int().positive().default(50),
+  // Precautionary margin under the configured capacity above — protects
+  // against the configured number being stale-too-high (OpenRouter lowers a
+  // model's real ceiling without notice) or against imprecision in what
+  // "one request" costs at the account level. A policy choice, not a
+  // measured fact — stated as such here and in the deployment report.
+  OPENROUTER_FREE_SAFETY_BUFFER_PCT: z.coerce.number().min(0).max(90).default(10),
+  // What fraction of one model's (buffered) daily capacity a single user
+  // may consume alone, before OTHER users are protected from that one
+  // user's burst. 5% means at least 20 users could be fully active on the
+  // same model on the same day before this becomes the binding constraint
+  // for any of them — comfortably above SPLEX's current active user count,
+  // with headroom to grow. A policy choice, not a measured fact.
+  OPENROUTER_PER_USER_SHARE_PCT: z.coerce.number().min(0.1).max(100).default(5),
   // Optional here (unlike the Fastify schema, which defaults to a
   // loopback URL) — on Workers there is no "same machine" to default to;
   // an unset value means the intelligence service is genuinely

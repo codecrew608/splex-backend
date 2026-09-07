@@ -265,6 +265,8 @@ async function executeStep(
           // message.content, all 4000 tokens apparently spent on a channel
           // this code doesn't read) — both discovered live.
           maxTokens: 6000,
+          userId: user.id,
+          planTier: user.planTier,
         }),
       ));
     } catch (err) {
@@ -400,6 +402,8 @@ async function executeStep(
           // own comment above), and a workflow's final deliverable is
           // exactly the kind of output that needs real room.
           maxTokens: resolveMaxTokens(step.category, "complex", m),
+          userId: user.id,
+          planTier: user.planTier,
         }),
       ));
     } catch (err) {
@@ -714,7 +718,7 @@ export async function startWorkflow(params: {
     return { handled: true };
   }
 
-  const plan = await planWorkflow(fastify, message, contextBlock, limits.maxSteps, user.planTier);
+  const plan = await planWorkflow(fastify, message, contextBlock, limits.maxSteps, user.planTier, user.id);
 
   if (plan.outcome === "fallback") {
     return { handled: false };
@@ -871,7 +875,7 @@ export async function resumeWorkflow(params: {
       return { handled: false };
     }
     const augmentedContext = `${contextBlock}\n\nThe user was previously asked: "${run.clarification_question ?? ""}"\nTheir answer: ${answer}`;
-    const plan = await planWorkflow(fastify, "(see clarification above)", augmentedContext, limits.maxSteps, user.planTier);
+    const plan = await planWorkflow(fastify, "(see clarification above)", augmentedContext, limits.maxSteps, user.planTier, user.id);
 
     if (plan.outcome === "fallback") {
       await fastify.supabaseAdmin.from("workflow_runs").update({ status: "cancelled" }).eq("id", run.id);

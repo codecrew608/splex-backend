@@ -1,5 +1,7 @@
 import type { FastifyInstance } from "fastify";
+import type { PlanTier } from "../shared-types.js";
 import type { OpenRouterUsage } from "../types/index.js";
+import { admitOpenRouterFreeRequest, isFreeModelId } from "./capacity.js";
 
 export type ChatContentPart =
   | { type: "text"; text: string }
@@ -25,6 +27,15 @@ export interface StreamCompletionOptions {
   messages: ChatMessageParam[];
   signal?: AbortSignal;
   onToken: (delta: string) => void;
+  // Required, not optional — same discipline as maxTokens below, and for
+  // the same reason: this is what admitOpenRouterFreeRequest (migration
+  // 0054) checks BEFORE any real dispatch to a :free model. An optional
+  // field a future call site could forget to pass is exactly the shape of
+  // gap that let the classifier reach a paid model for Free users before
+  // resolveClassifierModel was fixed — required fields make that class of
+  // bug a compile error instead of a silent, billing-relevant omission.
+  userId: string;
+  planTier: PlanTier;
   // Required, not optional — omitting this is exactly what caused the
   // OpenRouter 402 bug (see cortex/tokenBudget.ts): with no max_tokens at
   // all, OpenRouter falls back to the served model's own maximum (65536
@@ -138,7 +149,15 @@ export function withDeadline(signal: AbortSignal | undefined, ms: number): Abort
 // it arrives. Never streamed directly to the client 1:1 without going
 // through the caller's SSE writer — callers own the client-facing framing.
 export async function streamCompletion(opts: StreamCompletionOptions): Promise<StreamCompletionResult> {
-  const { fastify, model, messages, signal, onToken, maxTokens } = opts;
+  const { fastify, model, messages, signal, onToken, maxTokens, userId, planTier } = opts;
+
+  // Admission control (migration 0054) — see openrouter/capacity.ts. Only
+  // :free models are subject to OpenRouter's shared daily allowance; a
+  // paid-tier dispatch is billed directly to the account and has no
+  // capacity ceiling to admit against.
+  if (isFreeModelId(model)) {
+    await admitOpenRouterFreeRequest(fastify, userId, planTier, model);
+  }
 
   const response = await fetch(`${fastify.config.OPENROUTER_BASE_URL}/chat/completions`, {
     method: "POST",
@@ -270,8 +289,15 @@ export async function completeOnce(opts: {
   // Optional caller deadline — e.g. deep research's whole-run budget, so a
   // multi-stage run cannot outlive it one 60s stage at a time.
   signal?: AbortSignal;
+  // Required — see StreamCompletionOptions' identical fields for why.
+  userId: string;
+  planTier: PlanTier;
 }): Promise<CompleteOnceResult> {
-  const { fastify, model, messages, maxTokens = 200, tools } = opts;
+  const { fastify, model, messages, maxTokens = 200, tools, userId, planTier } = opts;
+
+  if (isFreeModelId(model)) {
+    await admitOpenRouterFreeRequest(fastify, userId, planTier, model);
+  }
 
   const bodyFor = (disableReasoning: boolean) =>
     JSON.stringify({
@@ -479,6 +505,27 @@ export function isModelUnavailableError(err: unknown): boolean {
 export function isBalanceExceededError(err: unknown): boolean {
   if (!(err instanceof Error)) return false;
   return /OpenRouter (request|classifier request) failed \(402\)/.test(err.message);
+}
+
+// The specific, verified-live shape of a per-model free-daily-cap hit —
+// distinct from a transient per-minute 429. Confirmed against the real
+// production key (2026-09-07): status 429, body containing this exact
+// phrase, alongside `X-RateLimit-Limit`/`X-RateLimit-Remaining: 0`
+// headers. Deliberately matched on the body text (not just status 429,
+// which is also the generic upstream-busy code every OTHER retryable
+// failure uses) — a plain rate-limited-right-now 429 on a specific model
+// says nothing about the ACCOUNT's daily allowance and must not trigger
+// the account-protection side effect below.
+//
+// Also matches admitOpenRouterFreeRequest's own SYNTHETIC 429 (thrown
+// locally, before any network call, when the proactive counter is
+// already at its configured cap) — same detection string, same downstream
+// handling, by design: from the caller's point of view a pre-emptively
+// denied dispatch and a live 429 from OpenRouter itself are the same
+// event, just caught one network round trip earlier.
+export function isFreeModelDailyCapExceededError(err: unknown): boolean {
+  if (!(err instanceof OpenRouterError)) return false;
+  return err.status === 429 && /free-models-per-day|provider_capacity_exhausted/.test(err.body);
 }
 
 // Binary media endpoints (currently /audio/speech) return raw bytes with no

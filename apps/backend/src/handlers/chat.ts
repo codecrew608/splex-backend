@@ -38,7 +38,8 @@ import { checkAndReserveCredits, settleDailyReservation, resolveCreditRejectionM
 import { consumeCredits } from "../credits/consumeCredits.js";
 import { resolveCreditGateEstimate } from "../credits/costBand.js";
 import { computeRealCost } from "../credits/realCost.js";
-import { streamCompletion, isRetryableOpenRouterError, isBalanceExceededError, isModelUnavailableError, type ChatContentPart, describeError } from "../openrouter/client.js";
+import { streamCompletion, isRetryableOpenRouterError, isBalanceExceededError, isModelUnavailableError, isFreeModelDailyCapExceededError, type ChatContentPart, describeError } from "../openrouter/client.js";
+import { isFairShareExceededError } from "../openrouter/capacity.js";
 import { resolveMaxTokens } from "../cortex/tokenBudget.js";
 import { fetchOwnedFiles, buildImageDataUri, buildAttachmentTextBlock, linkFilesToMessage } from "../files/attachments.js";
 import { retrieveFileContext } from "../intelligence/retrieve.js";
@@ -209,7 +210,7 @@ export async function runChat(
     // UI animates against is unchanged. Errors stay owned by
     // runCortexClassification (it resolves to a general fallback rather
     // than rejecting), so this can't become an unhandled rejection.
-    const classificationPromise = runCortexClassification(fastify, classifierInputMessage, user.planTier);
+    const classificationPromise = runCortexClassification(fastify, classifierInputMessage, user.planTier, user.id);
 
     const [rawMemoryFacts, { data: profileRow }, fileContext, projectContext] = await Promise.all([
       fetchMemoryFacts(fastify, user.id),
@@ -385,7 +386,7 @@ export async function runChat(
       await handleSyncMediaGeneration({
         fastify, sse, user, conversationId, userMessageId, decision,
         kind: "ppt", prompt: classifierInputMessage,
-        generate: generatePpt,
+        generate: (f, uid, m, p) => generatePpt(f, uid, m, p, user.planTier),
         buildMarkdown: (result) => `[📊 Download presentation (${result.slideCount} slides)](${result.url})`,
         quotaExceededMessage: (quota: MediaQuota) =>
           quota.blockedBy === "monthly"
@@ -553,11 +554,12 @@ export async function runChat(
           fastify, model: model.openrouter_model_id, messages: completionMessages,
           signal: abortController.signal, onToken: (delta) => sse.token({ delta }),
           maxTokens: resolveMaxTokens(decision.category, decision.complexity, model),
+          userId: user.id, planTier: user.planTier,
         });
         recordModelOutcome(fastify, model.id, "success", Date.now() - startedAt);
         break;
       } catch (err) {
-        recordModelFailure(fastify, model.id, err, Date.now() - startedAt);
+        recordModelFailure(fastify, model.id, err, Date.now() - startedAt, model.openrouter_model_id);
         const isLastCandidate = i === modelCandidates.length - 1;
         if (!isLastCandidate && isRetryableOpenRouterError(err)) {
           fastify.log.warn(
@@ -633,7 +635,7 @@ export async function runChat(
     // short max_tokens ceiling, and it never throws (see its own
     // try/catch) — a failure here silently means no suggestions, never a
     // broken or delayed response.
-    const suggestions = await generateFollowUpSuggestions(fastify, user.planTier, classifierInputMessage, fullText);
+    const suggestions = await generateFollowUpSuggestions(fastify, user.id, user.planTier, classifierInputMessage, fullText);
 
     // realCost.creditsCharged is real, persisted (consumeCredits above) —
     // never sent to the client, on either field. SPLEX credits are an
@@ -695,14 +697,29 @@ export async function runChat(
       "/chat request failed",
     );
     sse.error({
-      message:
-        isBalanceExceededError(err) || isModelUnavailableError(err)
+      message: isFairShareExceededError(err)
+        ? // Distinct from every other branch here: this is neither a
+          // provider outage nor a SPLEX-credit limit, so it gets its own
+          // honest, specific wording rather than being folded into either.
+          // Never mentions OpenRouter or "capacity" — matches this
+          // codebase's existing rule (see DAILY_REQUEST_LIMIT_MESSAGE's own
+          // comment) that a user sees normal product-style limit language,
+          // never internal infrastructure terms.
+          "You've reached today's limit for instant replies. Please try again tomorrow."
+        : isBalanceExceededError(err) || isModelUnavailableError(err) || isFreeModelDailyCapExceededError(err)
           ? // Model-unavailable reaching here means the fallback chain was
             // exhausted and even the LAST candidate was retired upstream —
             // an availability problem on our side, not a mystery. Say so
             // honestly rather than hiding a known cause behind the generic
             // message. (recordModelFailure has already deactivated the row,
             // so the next request won't repeat this.)
+            //
+            // isFreeModelDailyCapExceededError reaching all the way here
+            // means EVERY free candidate for this category hit its daily
+            // cap — verified live, 2026-09-07: a math request exhausted
+            // both nemotron math candidates and fell through to this exact
+            // branch, which (before this fix) showed the generic message
+            // instead of this honest one.
             "This AI service is temporarily unavailable. Please try again shortly."
           : "Something went wrong. Please try again.",
     });

@@ -87,9 +87,9 @@ describe("every provider call site derives its model from a tier-guarded source"
     // guarantee moves to their callers. Pin those here — otherwise the
     // enumeration above could be satisfied by indirection alone.
     expect(read("ppt/generate.ts"))
-      .toContain("planDeck(fastify, model.openrouter_model_id, prompt)");
+      .toContain("planDeck(fastify, model.openrouter_model_id, prompt, userId, planTier)");
     expect(read("research/handler.ts"))
-      .toContain("performWebSearch(fastify, model.openrouter_model_id, query)");
+      .toContain("performWebSearch(fastify, model.openrouter_model_id, query, user.id, user.planTier)");
     // ...and those `model` values come from the guarded selector.
     expect(read("research/handler.ts")).toContain("selectModelCandidates(fastify, \"web_search\", user.planTier");
     expect(read("ppt/generate.ts")).toMatch(/model:\s*ModelRegistryRow/);

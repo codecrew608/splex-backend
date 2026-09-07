@@ -1,4 +1,5 @@
 import type { FastifyInstance } from "fastify";
+import type { PlanTier } from "@splex/shared-types";
 import { completeOnce } from "../openrouter/client.js";
 import type { OpenRouterUsage } from "../types/index.js";
 
@@ -62,8 +63,10 @@ function coerceSlide(raw: unknown): SlidePlan | null {
 // returning a half-empty deck) when the model gives nothing usable — the
 // caller treats that as a failed generation, so the user isn't charged
 // for and handed a broken one-slide file.
-export async function planDeck(fastify: FastifyInstance, model: string, prompt: string): Promise<DeckPlanResult> {
+export async function planDeck(fastify: FastifyInstance, model: string, prompt: string, userId: string, planTier: PlanTier): Promise<DeckPlanResult> {
   const { content: raw, usage } = await completeOnce({
+    userId,
+    planTier,
     fastify,
     model,
     messages: [

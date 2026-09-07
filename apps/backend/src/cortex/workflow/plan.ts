@@ -40,6 +40,7 @@ export async function planWorkflow(
   contextBlock: string,
   maxSteps: number,
   planTier: PlanTier,
+  userId: string,
 ): Promise<PlanResult> {
   const userContent = contextBlock ? `${contextBlock}\n\nUser request:\n${message}` : `User request:\n${message}`;
 
@@ -67,6 +68,8 @@ export async function planWorkflow(
         { role: "user", content: userContent },
       ],
       maxTokens: 1500,
+      userId,
+      planTier,
     });
     raw = result.content;
   } catch (err) {

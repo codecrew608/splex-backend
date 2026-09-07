@@ -1,4 +1,5 @@
 import type { FastifyInstance } from "fastify";
+import type { PlanTier } from "../shared-types.js";
 import { completeOnce, fetchGenerationCost, type ChatMessageParam } from "../openrouter/client.js";
 import { isSafeExternalUrl, BLOCKED_FETCH_DOMAINS } from "./security.js";
 import type { WebSearchResult } from "./types.js";
@@ -32,6 +33,8 @@ export async function performWebSearch(
   fastify: FastifyInstance,
   model: string,
   query: string,
+  userId: string,
+  planTier: PlanTier,
 ): Promise<WebSearchResult> {
   const messages: ChatMessageParam[] = [
     { role: "system", content: searchSystemPrompt() },
@@ -43,6 +46,8 @@ export async function performWebSearch(
     model,
     messages,
     maxTokens: MAX_TOKENS,
+    userId,
+    planTier,
     tools: [
       {
         type: "openrouter:web_search",

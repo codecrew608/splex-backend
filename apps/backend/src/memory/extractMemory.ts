@@ -244,6 +244,8 @@ export async function extractAndUpdateMemory(
       : `Existing facts:\n${existingBlock}\n\nNew exchange:\nUser: ${userMessage.slice(0, 2000)}\nAssistant: ${assistantResponse.slice(0, 2000)}`;
 
     const { content: raw } = await completeOnceWithFallback(fastify, memoryModelCandidates, {
+      userId,
+      planTier,
       messages: [
         { role: "system", content: systemPrompt },
         { role: "user", content: userContent },
