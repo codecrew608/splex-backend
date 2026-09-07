@@ -1,11 +1,18 @@
 """Live observability for OpenRouter free-model capacity admission control
-(migration 0054).
+(migration 0054) AND the Groq fallback (migration 0056).
 
 Read-only. Answers the operational question this feature exists to make
 answerable: today, right now, how much of the tracked capacity has actually
 been used, per model and in aggregate, and how many users are how close to
 their own fair-share cap. Run this before deciding whether to raise
-OPENROUTER_FREE_DAILY_CAPACITY, and after, to confirm the change took effect.
+OPENROUTER_FREE_DAILY_CAPACITY (or GROQ_FREE_DAILY_CAPACITY), and after, to
+confirm the change took effect.
+
+The Groq section below answers the specific question the failover feature
+needs answerable at all times: how much of Free-tier traffic today was
+served by OpenRouter directly vs. failed over to Groq, and how close the
+Groq fallback itself is to ITS OWN shared daily cap — the resource a
+failover-of-a-failover would have nowhere left to fail over to.
 """
 
 from __future__ import annotations
@@ -58,9 +65,30 @@ def main() -> int:
     for r in rows:
         print(f"  {r['user_id']}  used={r['used']:<4} period={r['period_start']}")
 
+    print("\n=== Groq fallback: per-model capacity used today (UTC) ===")
+    rows = rest(
+        "provider_groq_capacity?select=model_id,period_start,used,updated_at"
+        "&order=used.desc&limit=50"
+    )
+    if not rows:
+        print("  (no rows yet — Groq fallback has not served any request since this migration deployed)")
+    for r in rows:
+        print(f"  {r['model_id']:<52} used={r['used']:<6} period={r['period_start']}  updated={r['updated_at']}")
+
+    print("\n=== Groq fallback: per-user usage today ===")
+    rows = rest(
+        "usage_counters?select=user_id,period_start,used"
+        "&counter_type=eq.groq_free_requests&order=used.desc&limit=20"
+    )
+    if not rows:
+        print("  (no rows yet)")
+    for r in rows:
+        print(f"  {r['user_id']}  used={r['used']:<4} period={r['period_start']}")
+
     print("\n=== current config (from the deployed worker's own vars) ===")
     print("  read via: wrangler tail, or the values in deploy/backend/wrangler.jsonc")
     print("  OPENROUTER_FREE_DAILY_CAPACITY / OPENROUTER_FREE_SAFETY_BUFFER_PCT / OPENROUTER_PER_USER_SHARE_PCT")
+    print("  GROQ_API_KEY (secret, presence-only) / GROQ_FREE_DAILY_CAPACITY / GROQ_FREE_SAFETY_BUFFER_PCT / GROQ_PER_USER_SHARE_PCT")
     return 0
 
 

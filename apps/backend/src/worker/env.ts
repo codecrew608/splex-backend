@@ -54,6 +54,15 @@ const workerEnvSchema = z.object({
   // for any of them — comfortably above SPLEX's current active user count,
   // with headroom to grow. A policy choice, not a measured fact.
   OPENROUTER_PER_USER_SHARE_PCT: z.coerce.number().min(0.1).max(100).default(5),
+  // --- Groq fallback (migration 0056) — Free tier ONLY, see groq/fallback.ts ---
+  // Same schema as the Fastify plugin above — see that file for the full
+  // rationale (including how "Groq, not xAI Grok" was confirmed live).
+  GROQ_API_KEY: z.string().min(1).optional(),
+  GROQ_BASE_URL: z.string().url().default("https://api.groq.com/openai/v1"),
+  GROQ_FALLBACK_MODEL: z.string().default("openai/gpt-oss-120b"),
+  GROQ_FREE_DAILY_CAPACITY: z.coerce.number().int().positive().default(1000),
+  GROQ_FREE_SAFETY_BUFFER_PCT: z.coerce.number().min(0).max(90).default(20),
+  GROQ_PER_USER_SHARE_PCT: z.coerce.number().min(0.1).max(100).default(5),
   // Optional here (unlike the Fastify schema, which defaults to a
   // loopback URL) — on Workers there is no "same machine" to default to;
   // an unset value means the intelligence service is genuinely

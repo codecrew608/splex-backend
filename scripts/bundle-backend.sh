@@ -193,6 +193,12 @@ OPENROUTER_SITE_URL=
 OPENROUTER_APP_NAME=SPLEX
 CORTEX_CLASSIFIER_MODEL_ID=
 CREDITS_PER_USD=120000
+GROQ_API_KEY=
+GROQ_BASE_URL=https://api.groq.com/openai/v1
+GROQ_FALLBACK_MODEL=openai/gpt-oss-120b
+GROQ_FREE_DAILY_CAPACITY=1000
+GROQ_FREE_SAFETY_BUFFER_PCT=20
+GROQ_PER_USER_SHARE_PCT=5
 INTELLIGENCE_SERVICE_URL=
 INTELLIGENCE_SERVICE_TOKEN=
 LOG_LEVEL=info
@@ -288,6 +294,20 @@ cat > "$OUT/wrangler.jsonc" <<'EOF'
     "OPENROUTER_FREE_DAILY_CAPACITY": "50",
     "OPENROUTER_FREE_SAFETY_BUFFER_PCT": "10",
     "OPENROUTER_PER_USER_SHARE_PCT": "5",
+    // Groq fallback (migration 0056) — Free tier ONLY, see groq/fallback.ts.
+    // GROQ_API_KEY is NOT here — `wrangler secret put` only, same rule as
+    // OPENROUTER_API_KEY above — never a plaintext var, never committed.
+    // Feature is off (attemptGroqFallback returns null) until that secret
+    // is actually set. 1000 is the CURRENTLY VERIFIED live org-wide cap for
+    // the openai/gpt-oss family (checked 2026-09-07, real completion +
+    // response headers against the actual provided key) — a 20% buffer
+    // (vs OpenRouter's own 10%) is a deliberately more conservative default
+    // given this system has far less production track record.
+    "GROQ_BASE_URL": "https://api.groq.com/openai/v1",
+    "GROQ_FALLBACK_MODEL": "openai/gpt-oss-120b",
+    "GROQ_FREE_DAILY_CAPACITY": "1000",
+    "GROQ_FREE_SAFETY_BUFFER_PCT": "20",
+    "GROQ_PER_USER_SHARE_PCT": "5",
     // Not secret — a plan identifier. RAZORPAY_WEBHOOK_SECRET stays
     // `wrangler secret put` only, same rule as SUPABASE_SERVICE_ROLE_KEY
     // above — never add it here.
@@ -312,6 +332,12 @@ OPENROUTER_SITE_URL=http://localhost:3000
 OPENROUTER_APP_NAME=SPLEX
 CORTEX_CLASSIFIER_MODEL_ID=
 CREDITS_PER_USD=120000
+GROQ_API_KEY=
+GROQ_BASE_URL=https://api.groq.com/openai/v1
+GROQ_FALLBACK_MODEL=openai/gpt-oss-120b
+GROQ_FREE_DAILY_CAPACITY=1000
+GROQ_FREE_SAFETY_BUFFER_PCT=20
+GROQ_PER_USER_SHARE_PCT=5
 INTELLIGENCE_SERVICE_URL=
 INTELLIGENCE_SERVICE_TOKEN=
 LOG_LEVEL=info

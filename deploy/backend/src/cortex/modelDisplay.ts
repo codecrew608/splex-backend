@@ -33,6 +33,12 @@ const FRIENDLY_MODEL_NAMES: Record<string, string> = {
   "nvidia/nemotron-nano-9b-v2:free": "Nemotron Nano",
   "openai/gpt-oss-20b": "GPT-OSS 20B",
   "openai/gpt-oss-20b:free": "GPT-OSS 20B",
+  // Served via the Groq fallback (migration 0056), never OpenRouter — see
+  // groq/fallback.ts. Same id string as OpenRouter's own hosted
+  // gpt-oss-120b would use if SPLEX ever added it there, which is exactly
+  // the point: this map's job is a friendly MODEL name, never which
+  // infrastructure/provider actually served it.
+  "openai/gpt-oss-120b": "GPT-OSS 120B",
   "poolside/laguna-s-2.1:free": "Laguna S",
   "poolside/laguna-xs-2.1:free": "Laguna XS",
   "qwen/qwen-2.5-72b-instruct": "Qwen 2.5",

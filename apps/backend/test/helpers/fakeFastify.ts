@@ -40,6 +40,8 @@ export interface FakeState {
   // firing real concurrent calls at the real deployed function — see
   // bench/harness/capacity_concurrency.mjs.
   openrouterAdmitResult?: "ok" | "fair_share_exceeded" | "provider_capacity_exhausted";
+  // Same canned-response idiom, for admit_groq_fallback_request (migration 0056).
+  groqAdmitResult?: "ok" | "fair_share_exceeded" | "provider_capacity_exhausted";
   // Opt-in seed for plan_limits rows, keyed by counter_type, for the
   // single planTier this state represents. Undefined (the default) keeps
   // every table/counter_type resolving to the generic stub's `null` —
@@ -159,6 +161,15 @@ function rpcImpl(state: FakeState, name: string, p: Record<string, unknown>): un
     case "admit_openrouter_free_request":
       return state.openrouterAdmitResult ?? "ok";
     case "mark_provider_model_exhausted":
+      return null;
+    // Groq fallback (migration 0056) — same "canned response, not a
+    // faithful re-implementation" posture as admit_openrouter_free_request
+    // above, and for the identical reason given in openrouterAdmitResult's
+    // own doc comment: real atomicity is a Postgres row-lock property a
+    // single-threaded JS fake cannot meaningfully prove either way.
+    case "admit_groq_fallback_request":
+      return state.groqAdmitResult ?? "ok";
+    case "mark_groq_model_exhausted":
       return null;
     default:
       return null;
@@ -429,6 +440,17 @@ export function makeFastify(state: FakeState) {
       OPENROUTER_FREE_DAILY_CAPACITY: 50,
       OPENROUTER_FREE_SAFETY_BUFFER_PCT: 10,
       OPENROUTER_PER_USER_SHARE_PCT: 5,
+      // Groq fallback (migration 0056) — matching production defaults
+      // (plugins/env.ts). GROQ_API_KEY intentionally undefined by default:
+      // most tests exercise "feature not configured" as the safe baseline,
+      // same reasoning as production's own optional-secret default; tests
+      // that need the feature ON set it explicitly.
+      GROQ_API_KEY: undefined as string | undefined,
+      GROQ_BASE_URL: "https://api.groq.com/openai/v1",
+      GROQ_FALLBACK_MODEL: "openai/gpt-oss-120b",
+      GROQ_FREE_DAILY_CAPACITY: 1000,
+      GROQ_FREE_SAFETY_BUFFER_PCT: 20,
+      GROQ_PER_USER_SHARE_PCT: 5,
     },
   } as never;
 }

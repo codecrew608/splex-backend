@@ -40,6 +40,7 @@ import { resolveCreditGateEstimate } from "../credits/costBand.js";
 import { computeRealCost } from "../credits/realCost.js";
 import { streamCompletion, isRetryableOpenRouterError, isBalanceExceededError, isModelUnavailableError, isFreeModelDailyCapExceededError, type ChatContentPart, describeError } from "../openrouter/client.js";
 import { isFairShareExceededError } from "../openrouter/capacity.js";
+import { attemptGroqFallback } from "../groq/fallback.js";
 import { resolveMaxTokens } from "../cortex/tokenBudget.js";
 import { fetchOwnedFiles, buildImageDataUri, buildAttachmentTextBlock, linkFilesToMessage } from "../files/attachments.js";
 import { retrieveFileContext } from "../intelligence/retrieve.js";
@@ -576,31 +577,52 @@ export async function runChat(
 
     let model = modelCandidates[0];
     let generation: Awaited<ReturnType<typeof streamCompletion>> | undefined;
-    for (let i = 0; i < modelCandidates.length; i++) {
-      model = modelCandidates[i];
-      attemptedModelIds.push(model.openrouter_model_id);
-      const startedAt = Date.now();
-      try {
-        generation = await streamCompletion({
-          fastify, model: model.openrouter_model_id, messages: completionMessages,
-          signal: abortController.signal, onToken: (delta) => sse.token({ delta }),
-          maxTokens: resolveMaxTokens(decision.category, decision.complexity, model),
-          userId: user.id, planTier: user.planTier,
-        });
-        recordModelOutcome(fastify, model.id, "success", Date.now() - startedAt);
-        break;
-      } catch (err) {
-        recordModelFailure(fastify, model.id, err, Date.now() - startedAt, model.openrouter_model_id);
-        const isLastCandidate = i === modelCandidates.length - 1;
-        if (!isLastCandidate && isRetryableOpenRouterError(err)) {
-          fastify.log.warn(
-            { ...describeError(err), model: model.openrouter_model_id, category: decision.category },
-            "model call failed, retrying with fallback candidate",
-          );
-          continue;
+    try {
+      for (let i = 0; i < modelCandidates.length; i++) {
+        model = modelCandidates[i];
+        attemptedModelIds.push(model.openrouter_model_id);
+        const startedAt = Date.now();
+        try {
+          generation = await streamCompletion({
+            fastify, model: model.openrouter_model_id, messages: completionMessages,
+            signal: abortController.signal, onToken: (delta) => sse.token({ delta }),
+            maxTokens: resolveMaxTokens(decision.category, decision.complexity, model),
+            userId: user.id, planTier: user.planTier,
+          });
+          recordModelOutcome(fastify, model.id, "success", Date.now() - startedAt);
+          break;
+        } catch (err) {
+          recordModelFailure(fastify, model.id, err, Date.now() - startedAt, model.openrouter_model_id);
+          const isLastCandidate = i === modelCandidates.length - 1;
+          if (!isLastCandidate && isRetryableOpenRouterError(err)) {
+            fastify.log.warn(
+              { ...describeError(err), model: model.openrouter_model_id, category: decision.category },
+              "model call failed, retrying with fallback candidate",
+            );
+            continue;
+          }
+          throw err;
         }
-        throw err;
       }
+    } catch (err) {
+      // Every OpenRouter candidate is exhausted (or a non-retryable error
+      // aborted early — see attemptGroqFallback's own eligibility check,
+      // which only proceeds on a genuine capacity/rate-limit condition).
+      // Free tier only, and only ONE Groq attempt, ever, per turn — see
+      // groq/fallback.ts's header comment for the full eligibility rule.
+      // On success, `model`/`generation` are reassigned so every line
+      // below (computeRealCost, updateMessageResult, consumeCredits, the
+      // SSE routing summary) runs completely unchanged regardless of which
+      // provider actually served this turn — the ENTIRE point of this
+      // failover being transparent to the user.
+      const fallback = await attemptGroqFallback({
+        fastify, triggeringError: err, user, category: decision.category,
+        messages: completionMessages, maxTokens: resolveMaxTokens(decision.category, decision.complexity),
+        signal: abortController.signal, onToken: (delta) => sse.token({ delta }),
+      });
+      if (!fallback) throw err; // rethrow the ORIGINAL OpenRouter error — never a Groq-specific message
+      model = fallback.model;
+      generation = fallback.generation;
     }
     const { fullText, usage, aborted } = generation as Awaited<ReturnType<typeof streamCompletion>>;
 

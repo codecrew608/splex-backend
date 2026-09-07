@@ -63,6 +63,30 @@ const envSchema = z.object({
   // for any of them — comfortably above SPLEX's current active user count,
   // with headroom to grow. A policy choice, not a measured fact.
   OPENROUTER_PER_USER_SHARE_PCT: z.coerce.number().min(0.1).max(100).default(5),
+  // --- Groq fallback (migration 0056) — Free tier ONLY, see groq/fallback.ts ---
+  //
+  // Optional and unset by default: absence means the feature is simply
+  // off (attemptGroqFallback returns null immediately), never a startup
+  // failure — this is an emergency valve, not a required dependency.
+  // Groq, Inc. (api.groq.com), confirmed NOT xAI's Grok — see
+  // db/migrations/0056's header comment for how that was verified live
+  // against the actual key.
+  GROQ_API_KEY: z.string().min(1).optional(),
+  GROQ_BASE_URL: z.string().url().default("https://api.groq.com/openai/v1"),
+  // The one curated fallback model — see groq/fallback.ts's header for why
+  // this deliberately does not replicate SPLEX's category-aware routing.
+  GROQ_FALLBACK_MODEL: z.string().default("openai/gpt-oss-120b"),
+  // Verified live against the actual provided key (real completion,
+  // response headers): 1,000 requests/day, organization-wide, for the
+  // openai/gpt-oss family. Same buffer pattern as OPENROUTER_FREE_DAILY_
+  // CAPACITY above, but a wider default buffer (20% vs 10%) — deliberate,
+  // not copied by mistake: this is a newly-added emergency valve with far
+  // less production track record than the OpenRouter capacity system it
+  // mirrors, so a more conservative margin is the right default until it
+  // has real operational history.
+  GROQ_FREE_DAILY_CAPACITY: z.coerce.number().int().positive().default(1000),
+  GROQ_FREE_SAFETY_BUFFER_PCT: z.coerce.number().min(0).max(90).default(20),
+  GROQ_PER_USER_SHARE_PCT: z.coerce.number().min(0.1).max(100).default(5),
   // Local FastAPI sidecar — Tesseract OCR + BGE-small embeddings. See
   // services/intelligence/main.py.
   INTELLIGENCE_SERVICE_URL: z.string().url().default("http://127.0.0.1:8100"),
