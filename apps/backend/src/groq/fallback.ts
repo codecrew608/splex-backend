@@ -4,7 +4,7 @@ import type { ModelRegistryRow } from "../types/index.js";
 import type { ChatMessageParam, StreamCompletionResult } from "../openrouter/client.js";
 import { isRetryableOpenRouterError, isBalanceExceededError, describeError } from "../openrouter/client.js";
 import { isFairShareExceededError } from "../openrouter/capacity.js";
-import { streamGroqCompletion, describeGroqError } from "./client.js";
+import { streamGroqCompletion, describeGroqError, isRetryableGroqError } from "./client.js";
 
 // The ONE integration point between SPLEX's normal OpenRouter routing and
 // the Groq fallback (migration 0056). Deliberately isolated in its own
@@ -73,6 +73,38 @@ function isEligibleFailure(err: unknown, planTier: string): boolean {
 export interface GroqFallbackResult {
   model: ModelRegistryRow;
   generation: StreamCompletionResult;
+}
+
+// Thrown by the CALLER (handlers/chat.ts) when the fallback could not serve
+// the turn for a reason that will clear on its own within seconds — as
+// opposed to the user genuinely being out of entitlement for the day.
+//
+// FOUND LIVE (2026-09-07): a user at 7 of 50 messages and 115 of 3,000
+// credits was shown "You've reached today's limit for instant replies.
+// Please try again tomorrow." What had actually happened was that Groq hit
+// its TOKENS-PER-MINUTE ceiling on a run of long maths answers — a window
+// that resets in 577ms. The message was not just unhelpful, it was false:
+// it told someone with 86% of their daily allowance untouched to come back
+// the next day, when a retry would have worked immediately.
+//
+// The original OpenRouter error still propagates for every non-transient
+// case, so the existing, audited messages stay authoritative there.
+export class ProviderBusyError extends Error {
+  constructor() {
+    super("Fallback provider is rate-limited right now (rolling window).");
+    this.name = "ProviderBusyError";
+  }
+}
+
+export function isProviderBusyError(err: unknown): boolean {
+  return err instanceof ProviderBusyError;
+}
+
+// Distinguishes "will clear in seconds" from "genuinely unavailable". A 429
+// is Groq's rolling-window limit; 5xx is a transient upstream fault. Both
+// are worth telling the user to retry shortly rather than tomorrow.
+function isTransientGroqFailure(err: unknown): boolean {
+  return isRetryableGroqError(err);
 }
 
 // Builds a synthetic ModelRegistryRow so every downstream call site in
@@ -155,10 +187,17 @@ export async function attemptGroqFallback(opts: AttemptGroqFallbackOptions): Pro
     );
     return { model, generation };
   } catch (fallbackErr) {
+    const transient = isTransientGroqFailure(fallbackErr);
     fastify.log.warn(
-      { userId: user.id, planTier: user.planTier, category, fallbackError: describeGroqError(fallbackErr) },
-      "fallback provider also unavailable — surfacing the original OpenRouter error to the user",
+      { userId: user.id, planTier: user.planTier, category, transient, fallbackError: describeGroqError(fallbackErr) },
+      transient
+        ? "fallback provider rate-limited (rolling window) — caller should tell the user to retry shortly, NOT tomorrow"
+        : "fallback provider also unavailable — surfacing the original OpenRouter error to the user",
     );
+    // A transient failure is surfaced as its own error type so the caller
+    // can say something true. Anything else keeps the original OpenRouter
+    // error, preserving every existing audited message.
+    if (transient) throw new ProviderBusyError();
     return null;
   }
 }

@@ -81,6 +81,12 @@ export function isGroqRateLimitError(err: unknown): boolean {
 }
 
 const GROQ_TIMEOUT_MS = 180_000;
+// Sized to Groq's measured token-window reset (577ms) with headroom, and
+// hard-capped so an unexpectedly large retry-after can never stall a
+// user-facing turn — at that point failing fast and letting the caller
+// surface an honest "busy, try shortly" beats holding the connection.
+const GROQ_RETRY_MS = 1_500;
+const GROQ_RETRY_MAX_MS = 4_000;
 
 function groqHeaders(fastify: FastifyInstance): Record<string, string> {
   return {
@@ -101,32 +107,62 @@ export async function streamGroqCompletion(opts: GroqStreamOptions): Promise<Str
 
   await admitGroqFallbackRequest(fastify, userId, planTier, model);
 
-  const response = await fetch(`${fastify.config.GROQ_BASE_URL}/chat/completions`, {
-    method: "POST",
-    headers: groqHeaders(fastify),
-    body: JSON.stringify({
-      model,
-      messages,
-      stream: true,
-      stream_options: { include_usage: true },
-      max_tokens: maxTokens,
-    }),
-    signal: withDeadline(signal, GROQ_TIMEOUT_MS),
-  });
+  const dispatch = () =>
+    fetch(`${fastify.config.GROQ_BASE_URL}/chat/completions`, {
+      method: "POST",
+      headers: groqHeaders(fastify),
+      body: JSON.stringify({
+        model,
+        messages,
+        stream: true,
+        stream_options: { include_usage: true },
+        max_tokens: maxTokens,
+      }),
+      signal: withDeadline(signal, GROQ_TIMEOUT_MS),
+    });
+
+  let response = await dispatch();
+
+  // ONE short retry on a 429, because Groq's rate-limit windows are
+  // genuinely sub-second — measured on this account:
+  //     x-ratelimit-reset-tokens:   577ms   (8,000 tokens/minute)
+  //     x-ratelimit-reset-requests: 1m26s   (1,000 requests)
+  //
+  // FOUND LIVE (2026-09-07): a user working through long maths answers
+  // exhausted the TOKENS-per-minute window — those replies are 2-4k tokens
+  // each — and was told "You've reached today's limit for instant replies.
+  // Please try again tomorrow." They were at 7 of 50 messages and 115 of
+  // 3,000 credits. The limit they actually hit would have cleared before
+  // they finished reading the sentence.
+  //
+  // Retrying once, briefly, converts most of those into a served answer.
+  // Deliberately ONE retry with a small cap: the point is to ride out a
+  // sub-second token window, not to sit in a retry loop against a provider
+  // that is genuinely saturated. Honours Groq's own retry-after when it
+  // sends one, and the caller's abort signal throughout.
+  if (response.status === 429) {
+    const retryAfterHeader = Number(response.headers?.get?.("retry-after") ?? NaN);
+    const waitMs = Math.min(Number.isFinite(retryAfterHeader) ? retryAfterHeader * 1000 : GROQ_RETRY_MS, GROQ_RETRY_MAX_MS);
+    fastify.log.warn(
+      { model, planTier, waitMs },
+      "Groq 429 (rolling window) — retrying once after a short wait rather than failing the turn",
+    );
+    await new Promise((resolve) => setTimeout(resolve, waitMs));
+    if (!signal?.aborted) {
+      response = await dispatch();
+    }
+  }
 
   if (!response.ok || !response.body) {
     const text = await response.text().catch(() => "");
     const err = new GroqError(response.status, text, model);
     if (isGroqRateLimitError(err)) {
-      // Deliberately ONLY logged — no day-long exhaustion marking. Groq's
-      // rate limits are rolling sub-minute windows (measured: requests
-      // reset in ~86s, tokens in ~577ms), so a 429 means "slow down for a
-      // moment", never "come back tomorrow". Treating it as the latter took
-      // the whole fallback offline for every user for a day — see
-      // groq/capacity.ts's removal note for the full incident.
+      // Only logged — never a day-long exhaustion marking. See
+      // groq/capacity.ts's removal note: treating a rolling-window 429 as
+      // daily exhaustion took the whole fallback offline for every user.
       fastify.log.warn(
         { model, planTier, status: response.status },
-        "Groq rate limit hit (rolling window — clears in seconds; no capacity marking applied)",
+        "Groq rate limit persisted through the retry — surfacing as a transient failure",
       );
     }
     // Reliability tracking (migration 0058) — deliberately recorded here,

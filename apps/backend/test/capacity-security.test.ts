@@ -163,9 +163,9 @@ describe("capacity admission — an exhausted-candidate-list free-cap failure ge
   // silently dropped again.
   it("isFreeModelDailyCapExceededError is checked in chat.ts's outer error-message ternary", () => {
     const src = read("handlers/chat.ts");
-    const ternaryStart = src.indexOf("sse.error({\n      message: isFairShareExceededError(err)");
+    const ternaryStart = src.indexOf("sse.error({\n      message: isProviderBusyError(err)");
     expect(ternaryStart, "outer error-message ternary not found where expected").toBeGreaterThan(-1);
-    const ternary = src.slice(ternaryStart, ternaryStart + 800);
+    const ternary = src.slice(ternaryStart, ternaryStart + 1600);
     expect(ternary).toContain("isFreeModelDailyCapExceededError(err)");
   });
 });

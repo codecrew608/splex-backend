@@ -203,9 +203,27 @@ describe("attemptGroqFallback — Groq itself unavailable (both tiers)", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  it("Groq's own live call fails -> returns null so the caller rethrows the ORIGINAL OpenRouter error", async () => {
+  // CHANGED 2026-09-07 (this test previously asserted `toBeNull()`): a
+  // TRANSIENT Groq failure now throws ProviderBusyError instead, so the
+  // caller can tell the user "try again in a few seconds" rather than
+  // rethrowing the OpenRouter fair-share error whose message says "try
+  // again tomorrow". A real user at 7 of 50 messages was shown the latter
+  // when Groq had merely hit its 577ms token window.
+  it("Groq 429 (transient) -> throws ProviderBusyError so the caller can say something TRUE", async () => {
     const fastify = withKey(makeFastify(makeState({ groqAdmitResult: "ok" })));
-    mockFetchOnce({ ok: false, status: 429, text: "rate limited" });
+    // Two 429s: the first triggers the single retry, the second exhausts it.
+    vi.stubGlobal("fetch", vi.fn(async () => ({ ok: false, status: 429, body: null, text: async () => "rate limited" })));
+    await expect(
+      attemptGroqFallback({
+        fastify, triggeringError: new OpenRouterError("stream", 402, "insufficient credits", "m:paid"),
+        user: makeUser({ planTier: "pro" }), ...baseOpts,
+      }),
+    ).rejects.toThrow(/rate-limited right now/i);
+  });
+
+  it("a NON-transient Groq failure still returns null, preserving the original OpenRouter error and its audited message", async () => {
+    const fastify = withKey(makeFastify(makeState({ groqAdmitResult: "ok" })));
+    mockFetchOnce({ ok: false, status: 400, text: "malformed" });
     const result = await attemptGroqFallback({
       fastify, triggeringError: new OpenRouterError("stream", 402, "insufficient credits", "m:paid"),
       user: makeUser({ planTier: "pro" }), ...baseOpts,

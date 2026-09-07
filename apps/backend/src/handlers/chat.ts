@@ -41,7 +41,7 @@ import { resolveCreditGateEstimate } from "../credits/costBand.js";
 import { computeRealCost } from "../credits/realCost.js";
 import { streamCompletion, isRetryableOpenRouterError, isBalanceExceededError, isModelUnavailableError, isFreeModelDailyCapExceededError, type ChatContentPart, describeError } from "../openrouter/client.js";
 import { isFairShareExceededError } from "../openrouter/capacity.js";
-import { attemptGroqFallback } from "../groq/fallback.js";
+import { attemptGroqFallback, isProviderBusyError } from "../groq/fallback.js";
 import { resolveMaxTokens } from "../cortex/tokenBudget.js";
 import { fetchOwnedFiles, buildImageDataUri, buildAttachmentTextBlock, linkFilesToMessage } from "../files/attachments.js";
 import { retrieveFileContext } from "../intelligence/retrieve.js";
@@ -778,7 +778,13 @@ export async function runChat(
       "/chat request failed",
     );
     sse.error({
-      message: isFairShareExceededError(err)
+      message: isProviderBusyError(err)
+        ? // A rolling-window rate limit on the fallback provider — clears in
+          // SECONDS, not tomorrow. Telling a user with most of their daily
+          // allowance untouched to "try again tomorrow" was factually wrong
+          // (see ProviderBusyError's own doc comment for the incident).
+          "SPLEX is briefly at capacity. Please try again in a few seconds."
+        : isFairShareExceededError(err)
         ? // Distinct from every other branch here: this is neither a
           // provider outage nor a SPLEX-credit limit, so it gets its own
           // honest, specific wording rather than being folded into either.

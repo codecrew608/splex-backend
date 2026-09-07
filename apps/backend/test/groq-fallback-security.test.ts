@@ -209,7 +209,10 @@ describe("Groq fallback — admission runs before any real network call", () => 
     const src = read("groq/client.ts");
     const fnStart = src.indexOf("export async function streamGroqCompletion(");
     const admitAt = src.indexOf("admitGroqFallbackRequest", fnStart);
-    const fetchAt = src.indexOf("await fetch(", fnStart);
+    // The real network call now goes through a `dispatch()` helper so the
+    // single 429 retry can reuse it — so this pins the helper's DEFINITION
+    // (where fetch actually lives) rather than a bare "await fetch(".
+    const fetchAt = src.indexOf("fetch(`${fastify.config.GROQ_BASE_URL}", fnStart);
     expect(admitAt).toBeGreaterThan(-1);
     expect(fetchAt).toBeGreaterThan(-1);
     expect(admitAt).toBeLessThan(fetchAt);
