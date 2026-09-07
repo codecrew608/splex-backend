@@ -47,13 +47,11 @@ const workerEnvSchema = z.object({
   // "one request" costs at the account level. A policy choice, not a
   // measured fact — stated as such here and in the deployment report.
   OPENROUTER_FREE_SAFETY_BUFFER_PCT: z.coerce.number().min(0).max(90).default(10),
-  // What fraction of one model's (buffered) daily capacity a single user
-  // may consume alone, before OTHER users are protected from that one
-  // user's burst. 5% means at least 20 users could be fully active on the
-  // same model on the same day before this becomes the binding constraint
-  // for any of them — comfortably above SPLEX's current active user count,
-  // with headroom to grow. A policy choice, not a measured fact.
-  OPENROUTER_PER_USER_SHARE_PCT: z.coerce.number().min(0.1).max(100).default(5),
+  // RAISED 5 -> 20 (2026-09-07) — at 5% against OpenRouter's real 50/day
+  // allowance this resolved to just 2 requests/user/day, which a real user
+  // hit after 5 messages of an advertised 50. See plugins/env.ts's fuller
+  // note on why no percentage makes a 45-request pool serve many users.
+  OPENROUTER_PER_USER_SHARE_PCT: z.coerce.number().min(0.1).max(100).default(20),
   // --- Groq fallback (migration 0056) — Free AND Paid, see groq/fallback.ts ---
   // Same schema as the Fastify plugin above — see that file for the full
   // rationale (including how "Groq, not xAI Grok" was confirmed live, and
@@ -61,7 +59,7 @@ const workerEnvSchema = z.object({
   GROQ_API_KEY: z.string().min(1).optional(),
   GROQ_BASE_URL: z.string().url().default("https://api.groq.com/openai/v1"),
   GROQ_FALLBACK_MODEL: z.string().default("openai/gpt-oss-120b"),
-  GROQ_TOTAL_DAILY_CAPACITY: z.coerce.number().int().positive().default(1000),
+  GROQ_TOTAL_DAILY_CAPACITY: z.coerce.number().int().positive().default(3000),
   GROQ_SAFETY_BUFFER_PCT: z.coerce.number().min(0).max(90).default(20),
   GROQ_PAID_SHARE_PCT: z.coerce.number().min(0).max(100).default(35),
   GROQ_PER_USER_SHARE_PCT: z.coerce.number().min(0.1).max(100).default(5),

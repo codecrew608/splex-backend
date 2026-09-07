@@ -28,14 +28,14 @@ import { isRetryableGroqError, isGroqRateLimitError, GroqError } from "../src/gr
 
 describe("resolveTierBudget", () => {
   it("Free and Paid derive from the SAME buffered total, never independently", async () => {
-    // Stub config: total=1000, buffer=20% -> buffered=800; paid share=35%
-    // -> paid=280, free=520. 280 + 520 = 800 exactly — the whole point.
+    // Stub config: total=3000, buffer=20% -> buffered=2400; paid share=35%
+    // -> paid=840, free=1560. 840 + 1560 = 2400 exactly — the whole point.
     const fastify = makeFastify(makeState());
     const free = await resolveTierBudget(fastify, "free");
     const paid = await resolveTierBudget(fastify, "pro");
-    expect(free.modelDailyCap + paid.modelDailyCap).toBe(800);
-    expect(paid.modelDailyCap).toBe(280);
-    expect(free.modelDailyCap).toBe(520);
+    expect(free.modelDailyCap + paid.modelDailyCap).toBe(2400);
+    expect(paid.modelDailyCap).toBe(840);
+    expect(free.modelDailyCap).toBe(1560);
   });
 
   it("Free and Paid get DIFFERENT bookkeeping model ids, both derived from the same real model", async () => {
@@ -48,17 +48,17 @@ describe("resolveTierBudget", () => {
   });
 
   it("Paid's per-user share is computed from Paid's OWN slice, at Paid's OWN percentage — not Free's", async () => {
-    // Paid slice = 280, per-user 25% of that = 70.
+    // Paid slice = 840, per-user 25% of that = 210.
     const fastify = makeFastify(makeState());
     const paid = await resolveTierBudget(fastify, "pro");
-    expect(paid.perUserDailyCap).toBe(70);
+    expect(paid.perUserDailyCap).toBe(210);
   });
 
   it("Free's per-user share is computed from Free's OWN slice, at Free's OWN (smaller) percentage", async () => {
-    // Free slice = 520, per-user 5% of that = 26.
+    // Free slice = 1560, per-user 5% of that = 78.
     const fastify = makeFastify(makeState());
     const free = await resolveTierBudget(fastify, "free");
-    expect(free.perUserDailyCap).toBe(26);
+    expect(free.perUserDailyCap).toBe(78);
   });
 
   it("Free + Paid can NEVER together exceed the buffered total, even under an extreme (100%) GROQ_PAID_SHARE_PCT misconfiguration", async () => {
@@ -72,7 +72,7 @@ describe("resolveTierBudget", () => {
     (fastify as unknown as { config: Record<string, number> }).config.GROQ_PAID_SHARE_PCT = 100;
     const free = await resolveTierBudget(fastify, "free");
     const paid = await resolveTierBudget(fastify, "pro");
-    expect(free.modelDailyCap + paid.modelDailyCap).toBeLessThanOrEqual(800); // bufferedTotal at defaults
+    expect(free.modelDailyCap + paid.modelDailyCap).toBeLessThanOrEqual(2400); // bufferedTotal at defaults
     expect(free.modelDailyCap).toBeGreaterThanOrEqual(1);
     expect(paid.modelDailyCap).toBeGreaterThanOrEqual(1);
   });
@@ -82,7 +82,7 @@ describe("resolveTierBudget", () => {
     (fastify as unknown as { config: Record<string, number> }).config.GROQ_PAID_SHARE_PCT = 0;
     const free = await resolveTierBudget(fastify, "free");
     const paid = await resolveTierBudget(fastify, "pro");
-    expect(free.modelDailyCap + paid.modelDailyCap).toBeLessThanOrEqual(800);
+    expect(free.modelDailyCap + paid.modelDailyCap).toBeLessThanOrEqual(2400);
     expect(paid.modelDailyCap).toBeGreaterThanOrEqual(1);
   });
 
@@ -93,7 +93,7 @@ describe("resolveTierBudget", () => {
       (fastify as unknown as { config: Record<string, number> }).config.GROQ_PAID_SHARE_PCT = pct;
       const free = await resolveTierBudget(fastify, "free");
       const paid = await resolveTierBudget(fastify, "pro");
-      expect(free.modelDailyCap + paid.modelDailyCap, `pct=${pct}`).toBeLessThanOrEqual(800);
+      expect(free.modelDailyCap + paid.modelDailyCap, `pct=${pct}`).toBeLessThanOrEqual(2400);
       expect(free.modelDailyCap, `pct=${pct}`).toBeGreaterThanOrEqual(1);
       expect(paid.modelDailyCap, `pct=${pct}`).toBeGreaterThanOrEqual(1);
     }

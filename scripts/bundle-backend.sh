@@ -196,7 +196,7 @@ CREDITS_PER_USD=120000
 GROQ_API_KEY=
 GROQ_BASE_URL=https://api.groq.com/openai/v1
 GROQ_FALLBACK_MODEL=openai/gpt-oss-120b
-GROQ_TOTAL_DAILY_CAPACITY=1000
+GROQ_TOTAL_DAILY_CAPACITY=3000
 GROQ_SAFETY_BUFFER_PCT=20
 GROQ_PAID_SHARE_PCT=35
 GROQ_PER_USER_SHARE_PCT=5
@@ -295,24 +295,27 @@ cat > "$OUT/wrangler.jsonc" <<'EOF'
     // precisely correct for every model.
     "OPENROUTER_FREE_DAILY_CAPACITY": "50",
     "OPENROUTER_FREE_SAFETY_BUFFER_PCT": "10",
-    "OPENROUTER_PER_USER_SHARE_PCT": "5",
+    "OPENROUTER_PER_USER_SHARE_PCT": "20",
     // Groq fallback (migration 0056) — Free AND Paid (extended 2026-09-07;
     // see groq/fallback.ts's header for why Paid's trigger includes 402
     // balance-exceeded, deliberately excluded for Free). GROQ_API_KEY is
     // NOT here — `wrangler secret put` only, same rule as OPENROUTER_API_KEY
     // above — never a plaintext var, never committed. Feature is off
     // (attemptGroqFallback returns null) until that secret is actually set.
-    // GROQ_TOTAL_DAILY_CAPACITY (1000) is the CURRENTLY VERIFIED live
-    // org-wide cap for the openai/gpt-oss family (checked 2026-09-07, real
-    // completion + response headers against the actual provided key) — ONE
-    // real, physical, shared ceiling covering BOTH tiers together, split by
-    // GROQ_PAID_SHARE_PCT into two independently-bookkept slices (see
-    // groq/capacity.ts's resolveTierBudget) that can never together exceed
-    // it. A 20% buffer (vs OpenRouter's own 10%) is deliberately more
-    // conservative given this system has far less production track record.
+    // GROQ_TOTAL_DAILY_CAPACITY (3000) is a DERIVED daily estimate, not a
+    // vendor-published daily cap — Groq publishes no daily limit. Measured
+    // against this account: 8,000 tokens/minute (reset 577ms) and 1,000
+    // requests per rolling ~86s window. At a typical ~1,500-token turn the
+    // token limit binds first: ~5.3 req/min, ~7,600/day theoretical. 3,000
+    // sits well under that while staying high enough that this counter no
+    // longer undercuts a user's ADVERTISED entitlement (at 1000 it capped
+    // Free at 26 Groq messages/day against a promised 50 — a real user hit
+    // exactly that). Split by GROQ_PAID_SHARE_PCT into two
+    // independently-bookkept tier slices that can never together exceed it
+    // (groq/capacity.ts's resolveTierBudget).
     "GROQ_BASE_URL": "https://api.groq.com/openai/v1",
     "GROQ_FALLBACK_MODEL": "openai/gpt-oss-120b",
-    "GROQ_TOTAL_DAILY_CAPACITY": "1000",
+    "GROQ_TOTAL_DAILY_CAPACITY": "3000",
     "GROQ_SAFETY_BUFFER_PCT": "20",
     "GROQ_PAID_SHARE_PCT": "35",
     "GROQ_PER_USER_SHARE_PCT": "5",
@@ -344,7 +347,7 @@ CREDITS_PER_USD=120000
 GROQ_API_KEY=
 GROQ_BASE_URL=https://api.groq.com/openai/v1
 GROQ_FALLBACK_MODEL=openai/gpt-oss-120b
-GROQ_TOTAL_DAILY_CAPACITY=1000
+GROQ_TOTAL_DAILY_CAPACITY=3000
 GROQ_SAFETY_BUFFER_PCT=20
 GROQ_PAID_SHARE_PCT=35
 GROQ_PER_USER_SHARE_PCT=5

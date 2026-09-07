@@ -12,7 +12,7 @@ import type { PlanTier } from "@splex/shared-types";
 // users complaining first.
 //
 // Fire-and-forget, matching every other bookkeeping write in this codebase
-// (recordModelOutcome, markModelCapacityExhausted, markGroqModelExhausted)
+// (recordModelOutcome, markModelCapacityExhausted)
 // — telemetry must never fail or slow a request whose real answer has
 // already been decided.
 

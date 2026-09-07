@@ -118,7 +118,68 @@ export async function fetchRecentHistory(fastify: FastifyInstance, conversationI
 
   if (error || !data) return [];
 
-  return (data as Array<{ role: MessageRole; content: string }>).reverse();
+  return dropOrphanedUserTurns((data as Array<{ role: MessageRole; content: string }>).reverse());
+}
+
+// Defence in depth for the ANSWER-BLEED bug (real production incident,
+// 2026-09-07). Every path that refuses a turn — capability not on the plan,
+// quota exhausted, credits gone — now persists its refusal as a real
+// assistant row (see persistRefusal below), so history alternates properly.
+// This function exists in case a future path forgets to.
+//
+// WHAT WENT WRONG. A user asked "what is the latest news about floods in
+// nepal?" and was correctly refused ("Web search isn't available on your
+// plan") — but only over SSE; nothing was written for the assistant turn.
+// The user's own message row was already persisted, so the next turn's
+// history read back as two consecutive user messages:
+//
+//   user: "what is the latest news about floods in nepal?"   <- orphaned
+//   user: "tell few oral histories about mahatma gandhi"
+//
+// The model, given two questions and no intervening answer, answered BOTH:
+// the reply opened with a "Floods in Nepal" section the user had not asked
+// for in that turn and had already been told was unavailable.
+//
+// Collapsing to the LAST of a consecutive user run (rather than dropping
+// the run entirely) keeps the turn the user is actually waiting on, which
+// is always the most recent one — chat.ts relies on history's last entry
+// being exactly that.
+export function dropOrphanedUserTurns(messages: HistoryMessage[]): HistoryMessage[] {
+  const out: HistoryMessage[] = [];
+  for (const message of messages) {
+    if (message.role === "user" && out.length > 0 && out[out.length - 1].role === "user") {
+      out[out.length - 1] = message; // supersede the unanswered one
+      continue;
+    }
+    out.push(message);
+  }
+  return out;
+}
+
+// Persists a refusal as a real assistant turn.
+//
+// Two bugs at once, both seen in production: without this, a refused turn
+// left an orphaned user message that bled into the next turn's answer (see
+// dropOrphanedUserTurns above), AND the refusal itself vanished on reload —
+// the user saw "Web search isn't available on your plan" live, refreshed,
+// and found their question sitting there with no reply at all.
+//
+// status 'failed' is the existing, correct classification: the turn
+// genuinely did not produce a generation, and 'failed' rows are already
+// specified to carry a short honest string rather than a blank (see this
+// file's header). Best-effort by design — a refusal that has already been
+// delivered over SSE must never be turned into a 500 because bookkeeping
+// failed afterwards.
+export async function persistRefusal(
+  fastify: FastifyInstance,
+  conversationId: string,
+  content: string,
+): Promise<void> {
+  try {
+    await insertMessage(fastify, { conversationId, role: "assistant", content, status: "failed" });
+  } catch (err) {
+    fastify.log.warn({ err, conversationId }, "failed to persist refusal message (non-fatal)");
+  }
 }
 
 export async function deleteMessageAndAfter(

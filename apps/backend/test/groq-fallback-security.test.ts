@@ -123,6 +123,39 @@ describe("Groq fallback — Free and Paid can never exceed the one real shared a
   });
 });
 
+describe("Groq 429 handling — a rolling-window rate limit must never become a day-long outage", () => {
+  // REGRESSION (real production incident, 2026-09-07, same day it shipped).
+  // markGroqModelExhausted mirrored OpenRouter's day-long exhaustion marking
+  // on any Groq 429. That is correct for OpenRouter (its 429 genuinely means
+  // "free-models-per-day spent", reset at UTC midnight) and factually wrong
+  // for Groq, whose measured headers are rolling sub-minute windows:
+  //   x-ratelimit-limit-requests: 1000  reset: 1m26.4s
+  //   x-ratelimit-limit-tokens:   8000  reset: 577ms
+  //
+  // Impact: one Free user's large generation (an e-commerce site) exceeded
+  // the 8,000 tokens-per-MINUTE window. The resulting 429 — which would have
+  // cleared in under a second — wrote used=1000000 against BOTH tier
+  // bookkeeping rows, disabling the Groq fallback for EVERY user on BOTH
+  // tiers until UTC midnight. The user had used 5 of 50 messages and 103 of
+  // 3,000 credits.
+  it("no code path marks Groq capacity exhausted from a 429 (or at all)", () => {
+    for (const rel of ["groq/client.ts", "groq/capacity.ts", "groq/fallback.ts", "groq/health.ts"]) {
+      const src = read(rel);
+      expect(src, `${rel} must not call a Groq exhaustion-marking RPC`).not.toContain('"mark_groq_model_exhausted"');
+      expect(src, `${rel} must not call markGroqModelExhausted`).not.toMatch(/markGroqModelExhausted\s*\(/);
+    }
+  });
+
+  it("the 429 branch in streamGroqCompletion only logs — it performs no capacity write", () => {
+    const src = read("groq/client.ts");
+    const at = src.indexOf("if (isGroqRateLimitError(err)) {");
+    expect(at).toBeGreaterThan(-1);
+    const branch = src.slice(at, src.indexOf("}", src.indexOf("fastify.log.warn", at)));
+    expect(branch).toContain("fastify.log.warn");
+    expect(branch).not.toMatch(/\.rpc\(|markGroq|Exhausted/);
+  });
+});
+
 describe("Groq reliability tracking (migration 0058) — never conflated with SPLEX's own configured capacity ceiling", () => {
   // The entire point of a separate reliability table: an admission DENIAL
   // (fair-share or provider_capacity_exhausted, both thrown by

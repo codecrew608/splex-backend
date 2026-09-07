@@ -169,8 +169,6 @@ function rpcImpl(state: FakeState, name: string, p: Record<string, unknown>): un
     // single-threaded JS fake cannot meaningfully prove either way.
     case "admit_groq_fallback_request":
       return state.groqAdmitResult ?? "ok";
-    case "mark_groq_model_exhausted":
-      return null;
     default:
       return null;
   }
@@ -439,7 +437,7 @@ export function makeFastify(state: FakeState) {
       // CREDITS_PER_USD above.
       OPENROUTER_FREE_DAILY_CAPACITY: 50,
       OPENROUTER_FREE_SAFETY_BUFFER_PCT: 10,
-      OPENROUTER_PER_USER_SHARE_PCT: 5,
+      OPENROUTER_PER_USER_SHARE_PCT: 20,
       // Groq fallback (migration 0056) — matching production defaults
       // (plugins/env.ts). GROQ_API_KEY intentionally undefined by default:
       // most tests exercise "feature not configured" as the safe baseline,
@@ -448,7 +446,7 @@ export function makeFastify(state: FakeState) {
       GROQ_API_KEY: undefined as string | undefined,
       GROQ_BASE_URL: "https://api.groq.com/openai/v1",
       GROQ_FALLBACK_MODEL: "openai/gpt-oss-120b",
-      GROQ_TOTAL_DAILY_CAPACITY: 1000,
+      GROQ_TOTAL_DAILY_CAPACITY: 3000,
       GROQ_SAFETY_BUFFER_PCT: 20,
       GROQ_PAID_SHARE_PCT: 35,
       GROQ_PER_USER_SHARE_PCT: 5,

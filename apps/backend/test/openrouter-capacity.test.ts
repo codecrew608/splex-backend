@@ -45,10 +45,34 @@ describe("isFreeModelId", () => {
 
 describe("resolvePerUserDailyShare", () => {
   it("computes the configured percentage of the BUFFERED capacity, not the raw one", async () => {
-    // Stub config: capacity=50, buffer=10% -> effective 45; share=5% of 45 = 2.25 -> floor 2.
+    // Stub config: capacity=50, buffer=10% -> effective 45; share=20% of 45 = 9.
     const fastify = makeFastify(makeState());
     const share = await resolvePerUserDailyShare(fastify, "free");
-    expect(share).toBe(2);
+    expect(share).toBe(9);
+  });
+
+  // REGRESSION (real production incident, 2026-09-07). This test previously
+  // asserted `toBe(2)` — it faithfully encoded the bug rather than catching
+  // it. At the then-default 5% share against OpenRouter's genuine 50/day
+  // allowance, every Free user got exactly TWO OpenRouter-served messages
+  // per day. A real user sent 5 messages (of an advertised 50), spent 103 of
+  // 3,000 daily credits, and was locked out.
+  //
+  // The lesson worth pinning is not the specific number — it is the
+  // INVARIANT the number violated: a provider-side fairness ration must
+  // never be so small that it becomes the binding limit on what the plan
+  // publicly promises. The plan's own daily_requests entitlement should be
+  // what a user runs into. A single-digit provider share is only acceptable
+  // because a fallback provider absorbs everything past it; if that
+  // fallback is ever removed, this ration has to rise to meet the
+  // entitlement instead.
+  it("the per-user share is never so small that it becomes the de-facto message limit", async () => {
+    const fastify = makeFastify(makeState());
+    const share = await resolvePerUserDailyShare(fastify, "free");
+    // Sanity floor: a share in the low single digits means a user exhausts
+    // the "good" provider within a couple of messages, which is what the
+    // incident looked like from the user's side.
+    expect(share, "per-user OpenRouter share collapsed to a near-zero ration again").toBeGreaterThanOrEqual(5);
   });
 
   it("never returns less than 1, however small the computed share is", async () => {

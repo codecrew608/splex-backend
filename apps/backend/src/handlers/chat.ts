@@ -10,6 +10,7 @@ import {
   fetchRecentHistory,
   deleteMessageAndAfter,
   type HistoryMessage,
+  persistRefusal,
 } from "../persistence/messages.js";
 import { insertCortexDecision } from "../persistence/cortexDecisions.js";
 import {
@@ -461,7 +462,13 @@ export async function runChat(
     // reservation exactly once — see the try/finally below.
     const gate = await checkAndReserveCredits(fastify, user.id, gateEstimate);
     if (!gate.allowed) {
-      sse.error({ message: await resolveCreditRejectionMessage(fastify, user.id, gateEstimate) });
+      const refusal = await resolveCreditRejectionMessage(fastify, user.id, gateEstimate);
+      sse.error({ message: refusal });
+      // Persist the refusal as a real assistant turn — otherwise the user's
+      // message is left orphaned (bleeding into the NEXT turn's answer) and
+      // the refusal itself vanishes on reload. See persistRefusal's own doc
+      // comment for the production incident behind this.
+      await persistRefusal(fastify, conversationId, refusal);
       sse.done({ blocked: true, conversationId, userMessageId });
       sse.end();
       return;
@@ -486,6 +493,7 @@ export async function runChat(
     if (!requestReserved) {
       await settleDailyReservation(fastify, user.id, gate.dailyReserved, 0);
       sse.error({ message: DAILY_REQUEST_LIMIT_MESSAGE });
+      await persistRefusal(fastify, conversationId, DAILY_REQUEST_LIMIT_MESSAGE);
       sse.done({ blocked: true, conversationId, userMessageId });
       sse.end();
       return;
@@ -508,6 +516,7 @@ export async function runChat(
     const modelCandidates = await selectModelCandidates(fastify, decision.category, user.planTier, cortexVersion, decision.complexity);
     if (modelCandidates.length === 0) {
       sse.error({ message: "This capability is temporarily unavailable, please try again shortly." });
+      await persistRefusal(fastify, conversationId, "This capability is temporarily unavailable, please try again shortly.");
       sse.done({ blocked: true, conversationId, userMessageId });
       sse.end();
       return;

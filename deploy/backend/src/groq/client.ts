@@ -3,7 +3,7 @@ import type { PlanTier } from "../shared-types.js";
 import type { OpenRouterUsage } from "../types/index.js";
 import type { ChatMessageParam, StreamCompletionResult } from "../openrouter/client.js";
 import { withDeadline } from "../openrouter/client.js";
-import { admitGroqFallbackRequest, markGroqModelExhausted } from "./capacity.js";
+import { admitGroqFallbackRequest } from "./capacity.js";
 import { recordGroqDispatchSuccess, recordGroqDispatchFailure } from "./health.js";
 
 // Groq (api.groq.com — Groq, Inc., the LPU fast-inference hardware
@@ -63,13 +63,14 @@ export function describeGroqError(err: unknown): Record<string, unknown> {
   return { errorName: typeof err, errorMessage: String(err) };
 }
 
-// 429/5xx — the shapes worth a reactive capacity-exhaustion mark (429) or
-// are simply transient (5xx). Deliberately narrow, matching
-// isRetryableOpenRouterError's own scope restricted to this codebase's one
-// Groq call site: there is no multi-candidate Groq fallback chain to
-// retry across (see groq/fallback.ts — exactly one attempt, ever, per
-// turn), so this exists only to classify the failure for logging/telemetry
-// and to drive markGroqModelExhausted, not to decide whether to try again.
+// 429 (rolling rate-limit window) / 5xx (transient upstream). Deliberately
+// narrow, and restricted to this codebase's one Groq call site: there is no
+// multi-candidate Groq fallback chain to retry across (see groq/fallback.ts
+// — exactly one attempt, ever, per turn), so this exists purely to classify
+// a failure for logging and reliability telemetry, never to decide whether
+// to try again and — since 2026-09-07 — never to drive any capacity
+// marking. See groq/capacity.ts's removal note for why a Groq 429 must not
+// be treated the way an OpenRouter 429 legitimately is.
 export function isRetryableGroqError(err: unknown): boolean {
   if (!(err instanceof GroqError)) return false;
   return /^(429|5\d\d)$/.test(String(err.status));
@@ -117,12 +118,16 @@ export async function streamGroqCompletion(opts: GroqStreamOptions): Promise<Str
     const text = await response.text().catch(() => "");
     const err = new GroqError(response.status, text, model);
     if (isGroqRateLimitError(err)) {
-      // Reactive correction (migration 0056) — same reasoning as
-      // markModelCapacityExhausted: a live 429 tells us the truth right
-      // now, faster than the proactive daily counter could organically
-      // reach it, and protects every other pending/future fallback attempt
-      // today without an extra wasted round trip.
-      markGroqModelExhausted(fastify, planTier, model);
+      // Deliberately ONLY logged — no day-long exhaustion marking. Groq's
+      // rate limits are rolling sub-minute windows (measured: requests
+      // reset in ~86s, tokens in ~577ms), so a 429 means "slow down for a
+      // moment", never "come back tomorrow". Treating it as the latter took
+      // the whole fallback offline for every user for a day — see
+      // groq/capacity.ts's removal note for the full incident.
+      fastify.log.warn(
+        { model, planTier, status: response.status },
+        "Groq rate limit hit (rolling window — clears in seconds; no capacity marking applied)",
+      );
     }
     // Reliability tracking (migration 0058) — deliberately recorded here,
     // AFTER admission already passed, not wrapping admitGroqFallbackRequest

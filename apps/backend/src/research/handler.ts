@@ -8,7 +8,7 @@ import { computeMediaCreditsCharged } from "../credits/mediaCost.js";
 import { resolveCreditGateEstimate } from "../credits/costBand.js";
 import { checkAndReserveCredits, settleDailyReservation, resolveCreditRejectionMessage } from "../credits/checkCredits.js";
 import { consumeCredits } from "../credits/consumeCredits.js";
-import { insertMessage, updateMessageResult } from "../persistence/messages.js";
+import { insertMessage, updateMessageResult, persistRefusal } from "../persistence/messages.js";
 import { insertCortexDecision } from "../persistence/cortexDecisions.js";
 import { recordModelOutcome, recordModelFailure } from "../cortex/modelHealth.js";
 import { isBalanceExceededError, describeError } from "../openrouter/client.js";
@@ -44,6 +44,12 @@ export async function handleWebSearch(params: HandleWebSearchParams): Promise<vo
           ? "Web search isn't available on your plan."
           : "Your current usage limit has been reached. Please try again later.";
     sse.error({ message });
+    // THE refusal from the production answer-bleed incident (2026-09-07): a
+    // user asked for Nepal flood news, was correctly told web search isn't
+    // on their plan — but nothing was persisted for the assistant turn, so
+    // their question sat orphaned in history and the model answered it
+    // again, unprompted, inside the NEXT turn's reply. See persistRefusal.
+    await persistRefusal(fastify, conversationId, message);
     sse.done({ blocked: true, conversationId, userMessageId });
     sse.end();
     return;

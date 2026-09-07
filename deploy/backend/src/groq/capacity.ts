@@ -168,23 +168,44 @@ export async function admitGroqFallbackRequest(
   }
 }
 
-// Reactive correction — mirrors markModelCapacityExhausted exactly,
-// applied to the Groq table instead. Fire-and-forget: a bookkeeping write
-// must never slow or fail a request whose real answer has already been
-// decided. Marks BOTH tiers' bookkeeping rows exhausted — a live 429 from
-// Groq means the real, physical, shared account is out of room right now,
-// which is true regardless of which tier's slice happened to trigger it.
-export function markGroqModelExhausted(fastify: FastifyInstance, planTier: PlanTier, modelId: string): void {
-  const isPaid = planTier !== "free";
-  const bookkeepingIds = [`${modelId}#free-tier`, `${modelId}#paid-tier`];
-  for (const id of bookkeepingIds) {
-    const work = fastify.supabaseAdmin
-      .rpc("mark_groq_model_exhausted", { p_model_id: id })
-      .then(({ error }: { error: { message: string } | null }) => {
-        if (error) fastify.log.warn({ error, modelId: id, planTier, isPaid }, "mark_groq_model_exhausted RPC failed (non-fatal)");
-      });
-    if (fastify.scheduleBackground) {
-      fastify.scheduleBackground(Promise.resolve(work).catch(() => {}));
-    }
-  }
-}
+// REMOVED (2026-09-07, same day it shipped) — there is deliberately no
+// reactive "mark Groq exhausted for the day" here any more.
+//
+// WHAT IT DID, AND WHY IT WAS WRONG. It mirrored OpenRouter's
+// markModelCapacityExhausted: on a live 429, mark the model exhausted for
+// the whole UTC day so later requests fail fast instead of re-discovering
+// it. That is correct for OpenRouter, whose 429 genuinely means
+// "free-models-per-day spent" (verified: its reset header points at UTC
+// midnight). It is factually wrong for Groq, and copying the pattern
+// across without re-checking the premise is exactly the mistake:
+//
+//   Groq's own response headers, measured directly against this account:
+//     x-ratelimit-limit-requests: 1000   reset: 1m26.4s
+//     x-ratelimit-limit-tokens:   8000   reset: 577ms
+//
+// Those are ROLLING SUB-MINUTE windows, not daily caps. A Groq 429 means
+// "slow down for a few seconds", not "come back tomorrow".
+//
+// REAL PRODUCTION IMPACT, observed the same day: one Free user asked for a
+// full e-commerce site. That single large generation exceeded the 8,000
+// tokens-per-minute window and returned a 429 that would have cleared in
+// under a second. This function then wrote used=1000000 against BOTH tier
+// bookkeeping rows — disabling the Groq fallback for EVERY user, on BOTH
+// tiers, until UTC midnight. The user had spent 5 of 50 messages and 103
+// of 3,000 daily credits, and was locked out with "You've reached today's
+// limit for instant replies."
+//
+// The cross-tier marking made it worse and was wrong on its own terms: it
+// broke the "Free and Paid can never starve each other" guarantee that the
+// tier-split bookkeeping exists to provide, from the one code path that
+// bypassed it.
+//
+// WHY NOTHING REPLACES IT. Groq already enforces its own limits, returns a
+// clean immediate 429 (no generation is wasted), and clears within seconds.
+// SPLEX re-implementing that with a coarser, longer-lived, global kill
+// switch can only ever be worse than deferring to the provider. A failed
+// attempt already degrades correctly through attemptGroqFallback -> the
+// original OpenRouter error -> the existing honest user-facing message, and
+// the next request simply succeeds. The proactive per-user/per-model
+// counters above stay: those are a SPLEX fairness policy, not an attempt to
+// mirror Groq's rate limiter.

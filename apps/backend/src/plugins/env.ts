@@ -58,11 +58,24 @@ const envSchema = z.object({
   OPENROUTER_FREE_SAFETY_BUFFER_PCT: z.coerce.number().min(0).max(90).default(10),
   // What fraction of one model's (buffered) daily capacity a single user
   // may consume alone, before OTHER users are protected from that one
-  // user's burst. 5% means at least 20 users could be fully active on the
-  // same model on the same day before this becomes the binding constraint
-  // for any of them — comfortably above SPLEX's current active user count,
-  // with headroom to grow. A policy choice, not a measured fact.
-  OPENROUTER_PER_USER_SHARE_PCT: z.coerce.number().min(0.1).max(100).default(5),
+  // user's burst.
+  //
+  // RAISED 5 -> 20 (2026-09-07), from real production evidence. At 5%
+  // against OpenRouter's genuine 50/day free allowance the arithmetic is
+  // floor(floor(50 * 0.9) * 0.05) = 2 — every Free user got exactly TWO
+  // OpenRouter-served messages per day before being pushed to the fallback
+  // for everything else. That is not a fair share, it is a wall. A real
+  // user hit it after 5 messages (of an advertised 50) and, combined with
+  // a separate fallback bug, was locked out entirely.
+  //
+  // 20% gives 9/user/day, so the shared pool still supports ~5 fully-active
+  // users concurrently — comfortably above current usage — while the Groq
+  // fallback (far larger capacity, see GROQ_TOTAL_DAILY_CAPACITY below)
+  // absorbs everything past it. The honest constraint underneath: 45
+  // effective requests/day is simply a very small pool, and NO percentage
+  // makes it serve many users at once. The real fix for scale is
+  // OpenRouter balance; this is the best allocation of what exists today.
+  OPENROUTER_PER_USER_SHARE_PCT: z.coerce.number().min(0.1).max(100).default(20),
   // --- Groq fallback (migration 0056) — Free AND Paid, see groq/fallback.ts ---
   //
   // Optional and unset by default: absence means the feature is simply
@@ -76,19 +89,28 @@ const envSchema = z.object({
   // The one curated fallback model — see groq/fallback.ts's header for why
   // this deliberately does not replicate SPLEX's category-aware routing.
   GROQ_FALLBACK_MODEL: z.string().default("openai/gpt-oss-120b"),
-  // Verified live against the actual provided key (real completion,
-  // response headers): 1,000 requests/day, organization-wide, for the
-  // openai/gpt-oss family — ONE real, physical, shared ceiling covering
-  // BOTH tiers together (extended to Paid 2026-09-07; see groq/capacity.ts's
-  // resolveTierBudget for how this single total is split into two
-  // independently-bookkept tier slices that can never together exceed it).
-  // Same buffer pattern as OPENROUTER_FREE_DAILY_CAPACITY above, but a
-  // wider default buffer (20% vs 10%) — deliberate, not copied by mistake:
-  // this is a newly-added emergency valve with far less production track
-  // record than the OpenRouter capacity system it mirrors, so a more
-  // conservative margin is the right default until it has real operational
-  // history.
-  GROQ_TOTAL_DAILY_CAPACITY: z.coerce.number().int().positive().default(1000),
+  // CORRECTED 1000 -> 3000 (2026-09-07). The original 1000 came from
+  // reading `x-ratelimit-limit-requests: 1000` as a DAILY cap. It is not:
+  // the same response carries `x-ratelimit-reset-requests: 1m26.4s` — a
+  // rolling sub-minute window, not a day. Groq's real binding constraint is
+  // tokens: 8,000 per minute (`x-ratelimit-reset-tokens: 577ms`).
+  //
+  // Honest derivation of the number below, stated as the estimate it is:
+  // 8,000 TPM at a typical ~1,500-token chat turn is ~5.3 sustained
+  // requests/minute, or ~7,600/day theoretical. 3,000 is deliberately well
+  // under that (~40% utilisation), while being high enough that this
+  // counter stops being the binding limit on a user's ADVERTISED
+  // entitlement — which was the actual bug: at 1000, Free's slice capped a
+  // user at 26 Groq-served messages/day against an advertised 50. Provider
+  // rationing must never silently undercut what the plan promises; the
+  // plan's own daily_requests limit should be what a user hits.
+  //
+  // Still ONE real, physical, shared ceiling covering BOTH tiers (see
+  // groq/capacity.ts's resolveTierBudget for the split that can never
+  // exceed it). The 20% buffer stays: Groq enforces its own limits
+  // per-minute anyway, so this counter is a SPLEX fairness/spend policy,
+  // not a safety mechanism standing between SPLEX and a real charge.
+  GROQ_TOTAL_DAILY_CAPACITY: z.coerce.number().int().positive().default(3000),
   GROQ_SAFETY_BUFFER_PCT: z.coerce.number().min(0).max(90).default(20),
   // What fraction of the BUFFERED total (see above) is reserved for Paid —
   // Free gets the remainder. A policy choice, not a measured fact: Paid
