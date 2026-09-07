@@ -67,3 +67,45 @@ def main() -> int:
 
 if __name__ == "__main__":
     sys.exit(main())
+
+
+# --- SFB v1.0 additions -----------------------------------------------------
+# Scientific notation written longhand, and diacritics. Same rule as every
+# other normalisation here: a right answer written differently must pass, and
+# a WRONG answer must stay wrong.
+
+SCI = {"evaluation_method": "NUMERIC", "gold_answer": 1.75e-07, "tolerance": 1.75e-13}
+CITY = {"evaluation_method": "EXACT", "gold_answer": "brasilia"}
+
+SFB_MUST_PASS = [
+    ("latex sci notation", SCI, "$$\n1.75 \\times 10^{-7}\n$$"),
+    ("plain sci notation", SCI, "1.75 x 10^-7"),
+    ("e notation still fine", SCI, "1.75e-7"),
+    ("diacritics stripped", CITY, "Brasília"),
+    ("plain spelling still fine", CITY, "The capital is Brasilia."),
+]
+
+SFB_MUST_FAIL = [
+    ("wrong mantissa stays wrong", SCI, "2.75 \\times 10^{-7}"),
+    ("wrong exponent stays wrong", SCI, "1.75 \\times 10^{-9}"),
+    ("different city stays wrong", CITY, "Brasões"),
+    ("unrelated city stays wrong", CITY, "Buenos Aires"),
+]
+
+
+def sfb_main() -> int:
+    failures = 0
+    print("\n== SFB v1.0: scientific notation and diacritics ==")
+    for label, q, resp in SFB_MUST_PASS:
+        s = score(q, resp)
+        ok = s.outcome == CORRECT
+        print(f"  {'PASS' if ok else 'FAIL'}  {label:<28} -> {s.outcome}")
+        failures += 0 if ok else 1
+    print("\n== and wrong answers must STILL be wrong ==")
+    for label, q, resp in SFB_MUST_FAIL:
+        s = score(q, resp)
+        ok = s.outcome == INCORRECT
+        print(f"  {'PASS' if ok else 'FAIL'}  {label:<28} -> {s.outcome}")
+        failures += 0 if ok else 1
+    print("\n" + ("SFB NORMALISATION CHECKS PASSED" if not failures else f"{failures} FAILURES"))
+    return 1 if failures else 0

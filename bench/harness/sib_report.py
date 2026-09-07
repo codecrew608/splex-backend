@@ -177,12 +177,20 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--results", required=True, help="SIB results JSONL")
     ap.add_argument("--splex-target", default="splex")
+    # The benchmark this run belongs to. Carried into the JSON and the
+    # console header so an SFB result can never be read as an SIB one —
+    # the two have different scopes and different samples, and mixing them
+    # is exactly the confusion the spec forbids.
+    ap.add_argument("--intelligence-label", default=BENCHMARK_VERSION)
+    ap.add_argument("--system-label", default=ssb.BENCHMARK_VERSION)
     ap.add_argument("--baselines", nargs="*", default=[])
     ap.add_argument("--failure-probes", default=None)
     ap.add_argument("--vitest-json", default=None)
     ap.add_argument("--user-id", default=None)
     ap.add_argument("--env-file", default=str(Path.home() / "Desktop/Splex/apps/backend/.env"))
     ap.add_argument("--out-json", required=True)
+    ap.add_argument("--isolation-json", default=None,
+                    help="large-n free/paid isolation result (isolation_suite.mjs)")
     ap.add_argument("--or-usage-delta", type=float, default=None,
                     help="OpenRouter lifetime-usage delta across the run, in USD")
     args = ap.parse_args()
@@ -224,6 +232,25 @@ def main() -> int:
         isolation = ssb.safety_isolation(db.get("models", []))
         cost = ssb.cost_efficiency(db, args.or_usage_delta)
 
+    # Isolation prefers the large-n suite when one was run. The run's own DB
+    # models cover only the handful of models this sample happened to touch;
+    # the suite exercises the real selector thousands of times across every
+    # category, which is the difference between "no violation seen" and a
+    # figure with a usable confidence bound.
+    isolation_large = None
+    if args.isolation_json and Path(args.isolation_json).exists():
+        isolation_large = json.loads(Path(args.isolation_json).read_text())
+        n = isolation_large["selector_invocations"]
+        v = isolation_large["violations"]
+        lo, _hi = wilson_interval(n - v, n)
+        isolation_large["wilson_lower_pct"] = lo
+        # Rule of three: with zero observed failures the 95% upper bound on
+        # the failure rate is 3/n. This is what a "99.99%" claim would have
+        # to clear, and it is reported whether or not it does.
+        isolation_large["rule_of_three_upper_failure_pct"] = (3 / n * 100) if v == 0 else None
+        isolation["pct"] = isolation_large["isolation_pct"]
+        isolation["large_n"] = isolation_large
+
     ssb_components = {
         "routing_accuracy": routing["acceptable_pct"],
         "task_success": success["pct"],
@@ -237,8 +264,8 @@ def main() -> int:
     ssb_overall, ssb_weight = ssb.overall(ssb_components)
 
     report = {
-        "benchmark": BENCHMARK_VERSION,
-        "system_benchmark": ssb.BENCHMARK_VERSION,
+        "benchmark": args.intelligence_label,
+        "system_benchmark": args.system_label,
         "sib": {"splex": splex,
                 "baselines": {k: v["scores"] for k, v in baselines.items()}},
         "ssb": {"components": ssb_components, "overall": ssb_overall,
@@ -254,7 +281,7 @@ def main() -> int:
     Path(args.out_json).write_text(json.dumps(report, indent=2))
 
     # ---- console summary -------------------------------------------------
-    print(f"\n{'=' * 74}\n{BENCHMARK_VERSION} — SPLEX (Free tier)\n{'=' * 74}")
+    print(f"\n{'=' * 74}\n{args.intelligence_label} — SPLEX (Free tier)\n{'=' * 74}")
     print(f"Overall: {fmt(splex['overall'])}   "
           f"(scored n={splex['n_scored']}, review={splex['n_review']}, "
           f"provider failures={splex['n_failed']}, weight covered={splex['weight_covered']:.2f})")
@@ -265,7 +292,7 @@ def main() -> int:
         print(f"{cat:<26}{fmt(c['score']):>9}{c['n_scored']:>5}{ci:>20}"
               f"{c['n_review']:>8}{c['n_failed']:>6}")
 
-    print(f"\n{'=' * 74}\n{ssb.BENCHMARK_VERSION} — SPLEX platform\n{'=' * 74}")
+    print(f"\n{'=' * 74}\n{args.system_label} — SPLEX platform\n{'=' * 74}")
     print(f"Overall: {fmt(ssb_overall)}   (weight covered={ssb_weight:.2f})")
     for k, w in ssb.WEIGHTS.items():
         print(f"  {k:<24} {fmt(ssb_components[k]):>9}   weight {w:.2f}")

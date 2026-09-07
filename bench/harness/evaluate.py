@@ -19,6 +19,7 @@ from __future__ import annotations
 import json
 import math
 import re
+import unicodedata
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -70,6 +71,11 @@ _LATEX_SUBS = [
     (re.compile(r"\\(?:left|right|displaystyle|,|;|!)"), ""),
     (re.compile(r"\\text\s*\{([^{}]*)\}"), r"\1"),
     (re.compile(r"\\sqrt\s*\{([^{}]+)\}"), r"sqrt(\1)"),
+    # LaTeX grouping braces after ^ or _ carry no meaning of their own:
+    # 10^{-7} is 10^-7. Left in place they split a single value into
+    # separate tokens, which is how "1.75 x 10^{-7}" was read as the
+    # three numbers 1.75, 10 and -7.
+    (re.compile(r"([\^_])\s*\{([^{}]+)\}"), r"\1\2"),
     (re.compile(r"\\pi\b"), "pi"),
     (re.compile(r"[$]{1,2}"), " "),
     (re.compile(r"\\\[|\\\]|\\\(|\\\)"), " "),
@@ -156,6 +162,10 @@ _NUM_RE = re.compile(r"-?\d[\d,]*\.?\d*(?:[eE][-+]?\d+)?")
 
 # Parentheses are optional because LaTeX normalisation emits "((2)/(3))"
 # from \frac{2}{3}, while a model writing plain text emits "2/3".
+# "1.75 x 10^-7" and "1.75 * 10^-7" are one value. Without this the
+# extractor reports 1.75, 10 and -7 and scores a correct answer wrong.
+_SCI_RE = re.compile(r"(-?\d+(?:\.\d+)?)\s*[*x×·]\s*10\s*\^\s*(-?\d+)", re.I)
+
 _FRACTION_RE = re.compile(
     r"\(?\s*(-?\d+(?:\.\d+)?)\s*\)?\s*/\s*\(?\s*(-?\d+(?:\.\d+)?)\s*\)?")
 
@@ -163,6 +173,11 @@ _FRACTION_RE = re.compile(
 def _extract_numbers(text: str) -> list[float]:
     cleaned = text.replace(",", "")
     out = []
+    for m in _SCI_RE.finditer(cleaned):
+        try:
+            out.append(float(m.group(1)) * (10 ** int(m.group(2))))
+        except (ValueError, OverflowError):
+            pass
     # A fraction is a number. Models answer "2/3" (and, after LaTeX
     # normalisation, "((2)/(3))") at least as often as "0.667", and reading
     # only the literal digits would score both halves of a correct fraction
@@ -201,7 +216,13 @@ def score_numeric(response: str, gold: float, tolerance: float) -> Score:
 
 
 def _exact_norm(text: str) -> str:
-    out = re.sub(r"[^\w\s^]", " ", str(text).lower())
+    # Strip diacritics before comparing. "Brasilia" and "Brasília" are the
+    # same answer written two ways, and a benchmark that marks the accented
+    # spelling wrong is measuring orthography, not knowledge. Applied to
+    # BOTH sides, so it can never make a different word match.
+    decomposed = unicodedata.normalize("NFKD", str(text))
+    stripped = "".join(c for c in decomposed if not unicodedata.combining(c))
+    out = re.sub(r"[^\w\s^]", " ", stripped.lower())
     return re.sub(r"\s+", " ", out).strip()
 
 

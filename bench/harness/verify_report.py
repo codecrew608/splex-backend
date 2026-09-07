@@ -145,6 +145,26 @@ def main() -> int:
             check(o["percentage_point_diff"] is None and o["relative_pct_diff"] is None,
                   f"{name}: refuses to report a difference with no data")
 
+    print("\n== 10. isolation arithmetic (recomputed independently) ==")
+    iso = report.get("ssb", {}).get("isolation_detail", {}).get("large_n")
+    if iso:
+        n, v = iso["selector_invocations"], iso["violations"]
+        mine = (1 - v / n) * 100 if n else None
+        check(abs(mine - iso["isolation_pct"]) < 1e-9,
+              f"isolation {iso['isolation_pct']:.4f}% == recomputed {mine:.4f}% (n={n})")
+        # Rule of three, restated here rather than imported.
+        if v == 0:
+            expect = 3 / n * 100
+            check(abs(expect - iso["rule_of_three_upper_failure_pct"]) < 1e-9,
+                  f"rule-of-three upper bound {expect:.4f}% on {n} zero-failure trials")
+            # A 99.99% claim needs the upper bound at or below 0.01%.
+            supports = expect <= 0.01
+            print(f"  {'    '}n={n} {'DOES' if supports else 'does NOT'} support a 99.99% claim "
+                  f"(needs n>=30000; upper bound on failure rate is {expect:.4f}%)")
+        check(v == 0 or iso["failures"], "any violation count is backed by listed failures")
+    else:
+        print("  (no large-n isolation result in this report)")
+
     if args.routing and Path(args.routing).exists():
         print("\n== 9. routing simulator fidelity ==")
         rt = json.loads(Path(args.routing).read_text())

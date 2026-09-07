@@ -184,3 +184,20 @@ contributes **nothing** to SFB-I or SFB-S.
   inherited corpus rather than expanded, because prompts authored after the
   patterns are not independent evidence. This *lowers* the reportable n and is
   recorded so the choice is visible.
+- **A6 (2026-09-07, mid-run):** two further notation rules, added after the
+  live run marked two right answers wrong.
+  *Trigger:* `1.75 × 10⁻⁷` was read as the three separate numbers 1.75, 10 and
+  −7 (LaTeX grouping braces after `^` were not stripped, and longhand
+  scientific notation was not recognised as one value); and `Brasília` failed
+  against a gold of `brasilia` on the accent alone.
+  *Change:* strip LaTeX grouping braces after `^`/`_`, read `a × 10^b` as one
+  number, and NFKD-normalise away combining marks on **both** sides of an
+  EXACT comparison.
+  *Why this is not tuning:* neither rule knows anything about any question.
+  `test_normalisation.py` proves both directions — a wrong mantissa, a wrong
+  exponent, a different city and an unrelated city all still score INCORRECT.
+  Every result in the report is re-scored with the one final scorer version.
+  *Disclosure:* these fixes were made after seeing the failures they address.
+  That is the same situation as A1/A2 and is stated rather than hidden; the
+  protection is that the rules are general, symmetric across targets, and
+  provably cannot turn a wrong answer into a right one.

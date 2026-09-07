@@ -1,0 +1,464 @@
+{
+  "benchmark": "SFB-I v1.0 (Free-tier intelligence)",
+  "system_benchmark": "SFB-S v1.0 (Free-tier system)",
+  "sib": {
+    "splex": {
+      "categories": {
+        "mathematics": {
+          "n_sampled": 6,
+          "n_scored": 6,
+          "n_review": 0,
+          "n_failed": 0,
+          "credit": 6.0,
+          "score": 100.0,
+          "ci": [
+            60.966571198614396,
+            100.0
+          ]
+        },
+        "reasoning": {
+          "n_sampled": 6,
+          "n_scored": 6,
+          "n_review": 0,
+          "n_failed": 0,
+          "credit": 6.0,
+          "score": 100.0,
+          "ci": [
+            60.966571198614396,
+            100.0
+          ]
+        },
+        "coding": {
+          "n_sampled": 5,
+          "n_scored": 5,
+          "n_review": 0,
+          "n_failed": 0,
+          "credit": 5.0,
+          "score": 100.0,
+          "ci": [
+            56.55175351015047,
+            100.0
+          ]
+        },
+        "knowledge": {
+          "n_sampled": 5,
+          "n_scored": 5,
+          "n_review": 0,
+          "n_failed": 0,
+          "credit": 5.0,
+          "score": 100.0,
+          "ci": [
+            56.55175351015047,
+            100.0
+          ]
+        },
+        "instruction_following": {
+          "n_sampled": 4,
+          "n_scored": 4,
+          "n_review": 0,
+          "n_failed": 0,
+          "credit": 4.0,
+          "score": 100.0,
+          "ci": [
+            51.01091634281154,
+            100.0
+          ]
+        },
+        "hallucination_resistance": {
+          "n_sampled": 4,
+          "n_scored": 0,
+          "n_review": 4,
+          "n_failed": 0,
+          "credit": 0,
+          "score": null,
+          "ci": null
+        },
+        "long_context": {
+          "n_sampled": 3,
+          "n_scored": 2,
+          "n_review": 1,
+          "n_failed": 0,
+          "credit": 2.0,
+          "score": 100.0,
+          "ci": [
+            34.23802274009781,
+            100.0
+          ]
+        },
+        "multilingual": {
+          "n_sampled": 3,
+          "n_scored": 3,
+          "n_review": 0,
+          "n_failed": 0,
+          "credit": 3.0,
+          "score": 100.0,
+          "ci": [
+            43.85029681293942,
+            100.0
+          ]
+        },
+        "safety": {
+          "n_sampled": 2,
+          "n_scored": 0,
+          "n_review": 0,
+          "n_failed": 2,
+          "credit": 0,
+          "score": null,
+          "ci": null
+        },
+        "structured_output": {
+          "n_sampled": 2,
+          "n_scored": 1,
+          "n_review": 1,
+          "n_failed": 0,
+          "credit": 0.0,
+          "score": 0.0,
+          "ci": [
+            0.0,
+            79.34506856996815
+          ]
+        }
+      },
+      "overall": 92.85714285714288,
+      "weight_covered": 0.8399999999999999,
+      "n_total": 40,
+      "n_scored": 32,
+      "n_review": 6,
+      "n_failed": 2
+    },
+    "baselines": {}
+  },
+  "ssb": {
+    "components": {
+      "routing_accuracy": 90.0,
+      "task_success": 95.0,
+      "reliability": 100.0,
+      "capability_selection": 70.0,
+      "failure_recovery": 100.0,
+      "cost_efficiency": 100.0,
+      "latency": 50,
+      "safety_isolation": 100
+    },
+    "overall": 89.0,
+    "weight_covered": 1.0,
+    "routing_detail": {
+      "n": 40,
+      "strict_pct": 70.0,
+      "acceptable_pct": 90.0,
+      "strict_ci": [
+        54.56998117812808,
+        81.92515477247962
+      ],
+      "acceptable_ci": [
+        76.9482247686573,
+        96.04204713255808
+      ],
+      "confusion": {
+        "math -> math": 14,
+        "general -> general": 9,
+        "coding -> coding": 5,
+        "documents -> general": 3,
+        "reasoning -> general": 2,
+        "general -> writing": 2,
+        "general -> math": 2,
+        "math -> general": 1,
+        "general -> documents": 1,
+        "reasoning -> documents": 1
+      },
+      "unknown_labels": []
+    },
+    "task_success_detail": {
+      "n": 40,
+      "delivered": 38,
+      "pct": 95.0,
+      "ci": [
+        83.49612262711148,
+        98.61793326175582
+      ],
+      "failures": {
+        "PROVIDER_UNAVAILABLE": 2
+      }
+    },
+    "latency_detail": {
+      "n": 40,
+      "p50_ms": 11988,
+      "p90_ms": 19175,
+      "max_ms": 36590,
+      "ttft_p50_ms": 4022,
+      "score": 50
+    },
+    "isolation_detail": {
+      "distinct_models_used": [
+        "cohere/north-mini-code:free",
+        "google/gemma-4-26b-a4b-it:free",
+        "minimax/minimax-m2.7:free",
+        "minimax/minimax-m3:free",
+        "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free",
+        "nvidia/nemotron-3-super-120b-a12b:free",
+        "poolside/laguna-s-2.1:free"
+      ],
+      "violations": [],
+      "pct": 100,
+      "large_n": {
+        "selector_invocations": 2466,
+        "violations": 0,
+        "empty_pools": 504,
+        "guard_trips": 0,
+        "isolation_pct": 100,
+        "categories": {
+          "general": 1080,
+          "writing": 252,
+          "documents": 126,
+          "image": 126,
+          "ppt": 126,
+          "video": 126,
+          "audio": 126,
+          "web_search": 126,
+          "coding": 126,
+          "math": 126,
+          "reasoning": 126
+        },
+        "failures": [],
+        "elapsed_s": 334.9,
+        "wilson_lower_pct": 99.84446536805935,
+        "rule_of_three_upper_failure_pct": 0.12165450121654502
+      }
+    },
+    "cost_detail": {
+      "n": 133,
+      "correctly_charged": 133,
+      "pct": 100.0,
+      "charged_for_failed_generation": [],
+      "completed_but_unbilled": [],
+      "total_credits_charged": 685,
+      "real_provider_spend_usd": 0.0
+    },
+    "failure_probes": {
+      "total": 8,
+      "passed": 8,
+      "results": [
+        {
+          "probe_id": "cap-image",
+          "what": "asks for image generation on a tier with 0 image quota",
+          "passed": true,
+          "why": "declined honestly (matched 'plan')",
+          "http": 200,
+          "latency_ms": 807,
+          "excerpt": "Image generation isn't available on your plan.",
+          "note": "Free tier has image_generations=0 AND no free/image registry row. Correct behaviour is an honest refusal; returning a URL or a fabricated image reference is the failure this checks for."
+        },
+        {
+          "probe_id": "cap-websearch",
+          "what": "asks for a live web search on a tier with 0 search quota",
+          "passed": true,
+          "why": "declined honestly (matched 'plan')",
+          "http": 200,
+          "latency_ms": 380,
+          "excerpt": "Web search isn't available on your plan.",
+          "note": "web_searches=0 for free. A confidently fabricated headline is the failure mode; admitting no live access is the pass."
+        },
+        {
+          "probe_id": "cap-video",
+          "what": "asks for video generation, which no free model can perform",
+          "passed": true,
+          "why": "declined honestly (matched 'upgrade')",
+          "http": 200,
+          "latency_ms": 386,
+          "excerpt": "Video generation is a Starter feature \u2014 upgrade to unlock it.",
+          "note": "NO_GENERAL_FALLBACK must stop this reaching a text model."
+        },
+        {
+          "probe_id": "bad-empty",
+          "what": "sends an empty message",
+          "passed": true,
+          "why": "expected HTTP 400, got 400",
+          "http": 400,
+          "latency_ms": 200,
+          "excerpt": "",
+          "note": "chatBodySchema requires min(1); a clean 400 is correct."
+        },
+        {
+          "probe_id": "bad-oversize",
+          "what": "sends a message past the 8000-char cap",
+          "passed": true,
+          "why": "expected HTTP 400, got 400",
+          "http": 400,
+          "latency_ms": 211,
+          "excerpt": "",
+          "note": "Boundary of chatBodySchema.max(8000)."
+        },
+        {
+          "probe_id": "bad-conv-id",
+          "what": "references a conversation id that is not a uuid",
+          "passed": true,
+          "why": "expected HTTP 400, got 400",
+          "http": 400,
+          "latency_ms": 212,
+          "excerpt": "",
+          "note": "Malformed input must be rejected before any model call is paid for."
+        },
+        {
+          "probe_id": "auth-none",
+          "what": "no Authorization header",
+          "passed": true,
+          "why": "expected HTTP 401, got 401",
+          "http": 401,
+          "latency_ms": 154,
+          "excerpt": "",
+          "note": "unauthenticated requests must never reach a model"
+        },
+        {
+          "probe_id": "auth-garbage",
+          "what": "a syntactically invalid bearer token",
+          "passed": true,
+          "why": "expected HTTP 401, got 401",
+          "http": 401,
+          "latency_ms": 241,
+          "excerpt": "",
+          "note": "unauthenticated requests must never reach a model"
+        }
+      ]
+    }
+  },
+  "db": {
+    "models": [
+      "minimax/minimax-m2.7:free",
+      "minimax/minimax-m2.7:free",
+      "minimax/minimax-m2.7:free",
+      "minimax/minimax-m2.7:free",
+      "minimax/minimax-m2.7:free",
+      "minimax/minimax-m2.7:free",
+      "minimax/minimax-m2.7:free",
+      "minimax/minimax-m2.7:free",
+      "minimax/minimax-m2.7:free",
+      "minimax/minimax-m2.7:free",
+      "minimax/minimax-m2.7:free",
+      "minimax/minimax-m2.7:free",
+      "minimax/minimax-m2.7:free",
+      "minimax/minimax-m2.7:free",
+      "minimax/minimax-m2.7:free",
+      "minimax/minimax-m2.7:free",
+      "minimax/minimax-m2.7:free",
+      "minimax/minimax-m2.7:free",
+      "minimax/minimax-m2.7:free",
+      "minimax/minimax-m2.7:free",
+      "minimax/minimax-m2.7:free",
+      "minimax/minimax-m2.7:free",
+      "minimax/minimax-m2.7:free",
+      "nvidia/nemotron-3-super-120b-a12b:free",
+      "minimax/minimax-m2.7:free",
+      "nvidia/nemotron-3-super-120b-a12b:free",
+      "minimax/minimax-m2.7:free",
+      "minimax/minimax-m2.7:free",
+      "minimax/minimax-m2.7:free",
+      "minimax/minimax-m2.7:free",
+      "minimax/minimax-m2.7:free",
+      "minimax/minimax-m2.7:free",
+      "minimax/minimax-m2.7:free",
+      "nvidia/nemotron-3-super-120b-a12b:free",
+      "minimax/minimax-m2.7:free",
+      "minimax/minimax-m2.7:free",
+      "minimax/minimax-m2.7:free",
+      "minimax/minimax-m2.7:free",
+      "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free",
+      "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free",
+      "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free",
+      "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free",
+      "minimax/minimax-m2.7:free",
+      "minimax/minimax-m2.7:free",
+      "minimax/minimax-m2.7:free",
+      "minimax/minimax-m3:free",
+      "minimax/minimax-m2.7:free",
+      "minimax/minimax-m2.7:free",
+      "minimax/minimax-m2.7:free",
+      "minimax/minimax-m2.7:free",
+      "minimax/minimax-m2.7:free",
+      "minimax/minimax-m2.7:free",
+      "minimax/minimax-m2.7:free",
+      "minimax/minimax-m3:free",
+      "minimax/minimax-m2.7:free",
+      "minimax/minimax-m2.7:free",
+      "minimax/minimax-m2.7:free",
+      "minimax/minimax-m2.7:free",
+      "minimax/minimax-m2.7:free",
+      "minimax/minimax-m2.7:free",
+      "minimax/minimax-m2.7:free",
+      "minimax/minimax-m2.7:free",
+      "minimax/minimax-m2.7:free",
+      "minimax/minimax-m2.7:free",
+      "minimax/minimax-m2.7:free",
+      "minimax/minimax-m2.7:free",
+      "minimax/minimax-m2.7:free",
+      "minimax/minimax-m2.7:free",
+      "poolside/laguna-s-2.1:free",
+      "minimax/minimax-m2.7:free",
+      "minimax/minimax-m2.7:free",
+      "nvidia/nemotron-3-super-120b-a12b:free",
+      "nvidia/nemotron-3-super-120b-a12b:free",
+      "nvidia/nemotron-3-super-120b-a12b:free",
+      "nvidia/nemotron-3-super-120b-a12b:free",
+      "minimax/minimax-m2.7:free",
+      "nvidia/nemotron-3-super-120b-a12b:free",
+      "nvidia/nemotron-3-super-120b-a12b:free",
+      "minimax/minimax-m2.7:free",
+      "nvidia/nemotron-3-super-120b-a12b:free",
+      "nvidia/nemotron-3-super-120b-a12b:free",
+      "nvidia/nemotron-3-super-120b-a12b:free",
+      "nvidia/nemotron-3-super-120b-a12b:free",
+      "minimax/minimax-m2.7:free",
+      "nvidia/nemotron-3-super-120b-a12b:free",
+      "nvidia/nemotron-3-super-120b-a12b:free",
+      "minimax/minimax-m2.7:free",
+      "nvidia/nemotron-3-super-120b-a12b:free",
+      "minimax/minimax-m2.7:free",
+      "minimax/minimax-m2.7:free",
+      "nvidia/nemotron-3-super-120b-a12b:free",
+      "minimax/minimax-m2.7:free",
+      "minimax/minimax-m2.7:free",
+      "minimax/minimax-m2.7:free",
+      "minimax/minimax-m2.7:free",
+      "minimax/minimax-m3:free",
+      "minimax/minimax-m2.7:free",
+      "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free",
+      "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free",
+      "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free",
+      "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free",
+      "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free",
+      "google/gemma-4-26b-a4b-it:free",
+      "cohere/north-mini-code:free",
+      "minimax/minimax-m2.7:free",
+      "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free",
+      "minimax/minimax-m2.7:free",
+      "minimax/minimax-m2.7:free",
+      "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free",
+      "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free",
+      "minimax/minimax-m2.7:free",
+      "minimax/minimax-m2.7:free",
+      "minimax/minimax-m2.7:free",
+      "minimax/minimax-m2.7:free",
+      "nvidia/nemotron-3-super-120b-a12b:free",
+      "minimax/minimax-m3:free",
+      "minimax/minimax-m2.7:free",
+      "minimax/minimax-m2.7:free",
+      "minimax/minimax-m2.7:free",
+      "minimax/minimax-m3:free",
+      "minimax/minimax-m2.7:free",
+      "minimax/minimax-m2.7:free"
+    ],
+    "model_counts": {
+      "minimax/minimax-m2.7:free": 84,
+      "nvidia/nemotron-3-super-120b-a12b:free": 18,
+      "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free": 12,
+      "minimax/minimax-m3:free": 5,
+      "poolside/laguna-s-2.1:free": 1,
+      "google/gemma-4-26b-a4b-it:free": 1,
+      "cohere/north-mini-code:free": 1
+    },
+    "credits_total": 685,
+    "status_counts": {
+      "failed": 25,
+      "complete": 247
+    }
+  },
+  "comparisons": {}
+}

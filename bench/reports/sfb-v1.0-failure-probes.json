@@ -1,0 +1,86 @@
+{
+  "total": 8,
+  "passed": 8,
+  "results": [
+    {
+      "probe_id": "cap-image",
+      "what": "asks for image generation on a tier with 0 image quota",
+      "passed": true,
+      "why": "declined honestly (matched 'plan')",
+      "http": 200,
+      "latency_ms": 807,
+      "excerpt": "Image generation isn't available on your plan.",
+      "note": "Free tier has image_generations=0 AND no free/image registry row. Correct behaviour is an honest refusal; returning a URL or a fabricated image reference is the failure this checks for."
+    },
+    {
+      "probe_id": "cap-websearch",
+      "what": "asks for a live web search on a tier with 0 search quota",
+      "passed": true,
+      "why": "declined honestly (matched 'plan')",
+      "http": 200,
+      "latency_ms": 380,
+      "excerpt": "Web search isn't available on your plan.",
+      "note": "web_searches=0 for free. A confidently fabricated headline is the failure mode; admitting no live access is the pass."
+    },
+    {
+      "probe_id": "cap-video",
+      "what": "asks for video generation, which no free model can perform",
+      "passed": true,
+      "why": "declined honestly (matched 'upgrade')",
+      "http": 200,
+      "latency_ms": 386,
+      "excerpt": "Video generation is a Starter feature \u2014 upgrade to unlock it.",
+      "note": "NO_GENERAL_FALLBACK must stop this reaching a text model."
+    },
+    {
+      "probe_id": "bad-empty",
+      "what": "sends an empty message",
+      "passed": true,
+      "why": "expected HTTP 400, got 400",
+      "http": 400,
+      "latency_ms": 200,
+      "excerpt": "",
+      "note": "chatBodySchema requires min(1); a clean 400 is correct."
+    },
+    {
+      "probe_id": "bad-oversize",
+      "what": "sends a message past the 8000-char cap",
+      "passed": true,
+      "why": "expected HTTP 400, got 400",
+      "http": 400,
+      "latency_ms": 211,
+      "excerpt": "",
+      "note": "Boundary of chatBodySchema.max(8000)."
+    },
+    {
+      "probe_id": "bad-conv-id",
+      "what": "references a conversation id that is not a uuid",
+      "passed": true,
+      "why": "expected HTTP 400, got 400",
+      "http": 400,
+      "latency_ms": 212,
+      "excerpt": "",
+      "note": "Malformed input must be rejected before any model call is paid for."
+    },
+    {
+      "probe_id": "auth-none",
+      "what": "no Authorization header",
+      "passed": true,
+      "why": "expected HTTP 401, got 401",
+      "http": 401,
+      "latency_ms": 154,
+      "excerpt": "",
+      "note": "unauthenticated requests must never reach a model"
+    },
+    {
+      "probe_id": "auth-garbage",
+      "what": "a syntactically invalid bearer token",
+      "passed": true,
+      "why": "expected HTTP 401, got 401",
+      "http": 401,
+      "latency_ms": 241,
+      "excerpt": "",
+      "note": "unauthenticated requests must never reach a model"
+    }
+  ]
+}
