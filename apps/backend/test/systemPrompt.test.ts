@@ -33,27 +33,49 @@ describe("reasoningVerificationBlock — domain-specific accuracy verification",
   it("math AND reasoning categories both get math-notation guidance (physics/vectors live under 'reasoning', not 'math')", () => {
     for (const category of ["math", "reasoning"]) {
       const block = reasoningVerificationBlock(category);
-      expect(block).toMatch(/standard mathematical notation instead of describing calculations in prose/i);
-      // $$...$$ for BOTH inline and display -- matching MarkdownRenderer.tsx's
-      // singleDollarTextMath:false, which turns single-$ math off entirely
-      // (it collides with ordinary text mentioning a price/amount). The
-      // prompt must never tell the model to use a bare single $, since the
-      // renderer won't treat it as math at all.
-      expect(block).toMatch(/\$\$\.\.\.\$\$/);
-      expect(block).toMatch(/never a single \$/);
+      expect(block).toMatch(/plain, readable text by default/i);
     }
   });
 
-  it("math-notation guidance is explicitly NOT silent — it says so, distinguishing it from the verification pass above it", () => {
+  // REGRESSION — real user sessions, 2026-09-07. The guidance previously
+  // told the model to use $$...$$ for all maths, matching
+  // MarkdownRenderer.tsx's singleDollarTextMath:false. The models did not
+  // comply: they emitted $...$, \(...\), [ 3x = 9 ] and \boxed{x = 3},
+  // none of which that renderer accepts — so users saw raw markup like
+  // \frac{20 - 9x}{2} on answers that were otherwise correct, on trivial
+  // algebra that never needed rendering in the first place.
+  //
+  // The durable lesson, and what these assertions actually protect: a
+  // precise delimiter contract is not something weaker open-weight models
+  // reliably honour, so the safe default for ordinary maths is notation
+  // that needs no rendering at all. $$...$$ survives only as the narrow
+  // exception for notation plain text genuinely cannot express.
+  it("defaults to PLAIN TEXT maths and explicitly forbids the markup users were seeing raw", () => {
     const block = reasoningVerificationBlock("math");
-    expect(block).toMatch(/show the actual solving steps as your answer/i);
-    expect(block).toMatch(/distinct from the silent verification pass described above/i);
+    expect(block).toMatch(/plain, readable text by default/i);
+    // Names the exact artefacts observed leaking to real users.
+    expect(block).toMatch(/\\frac/);
+    expect(block).toMatch(/\\boxed/);
+    expect(block).toMatch(/NEVER emit backslash commands/i);
   });
 
-  it("math-notation guidance tells the model not to force LaTeX onto ordinary prose or pad trivial calculations", () => {
+  it("keeps $$...$$ as the narrow exception, and still never permits a bare single $", () => {
+    const block = reasoningVerificationBlock("math");
+    expect(block).toMatch(/\$\$\.\.\.\$\$/);
+    expect(block).toMatch(/never a single \$/);
+    // The exception must read as an exception, not a general permission.
+    expect(block).toMatch(/only.{0,40}exception|exception.{0,80}genuinely complex/i);
+  });
+
+  it("math-notation guidance is explicitly NOT silent — the worked steps are the answer", () => {
+    const block = reasoningVerificationBlock("math");
+    expect(block).toMatch(/show the actual solving steps/i);
+    expect(block).toMatch(/state the final result plainly/i);
+  });
+
+  it("still tells the model not to pad a trivial calculation into a fake derivation", () => {
     const block = reasoningVerificationBlock("math");
     expect(block).toMatch(/don't pad a one-line calculation into an unnecessary multi-step derivation/i);
-    expect(block).toMatch(/don't force LaTeX onto ordinary prose/i);
   });
 
   it("coding category does NOT get math-notation guidance (it's not a math category)", () => {

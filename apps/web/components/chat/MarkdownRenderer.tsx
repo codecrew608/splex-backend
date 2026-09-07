@@ -41,10 +41,18 @@ export function MarkdownRenderer({ content }: MarkdownRendererProps) {
         // remark-math's own README calls this out as the standard fix for
         // exactly the collision this app would otherwise hit constantly: an
         // ordinary reply mentioning a price ("$5 and $10") would otherwise
-        // parse "5 and " as an inline formula. cortex/systemPrompt.ts's
-        // MATH_NOTATION_GUIDANCE instructs the model to use $$...$$ for
-        // both inline and display math specifically so this stays in sync
-        // with what's actually enabled here.
+        // parse "5 and " as an inline formula.
+        //
+        // KEEP IN SYNC with cortex/systemPrompt.ts's MATH_NOTATION_GUIDANCE,
+        // which as of 2026-09-07 tells the model to write ordinary algebra
+        // in PLAIN TEXT and reserve $$...$$ for genuinely complex notation
+        // only. That change came from real user sessions: the models were
+        // emitting $...$, \(...\), [ ... ] and \boxed{} — none of which this
+        // renderer accepts — so users saw raw markup like \frac{20 - 9x}{2}
+        // instead of maths, on answers that were otherwise correct. The
+        // deeper lesson is that a precise delimiter contract is not
+        // something weaker open-weight models reliably honour, so the safe
+        // default is notation that needs no rendering at all.
         //
         // Malformed/unbalanced math (a genuine LaTeX syntax error the model
         // produced) fails closed — rehype-katex renders KaTeX's own inline

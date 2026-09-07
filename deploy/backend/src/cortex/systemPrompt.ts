@@ -150,11 +150,20 @@ Before calculating, check whether the premises or the question itself contain a 
 // derivation" — so it's kept as its own block rather than folded into it,
 // with an explicit line resolving the two so they don't read as
 // contradictory to the model.
-const MATH_NOTATION_GUIDANCE = `When your answer involves mathematics, write it using standard mathematical notation instead of describing calculations in prose. This app renders LaTeX math delimited with $$...$$ — for BOTH inline expressions within a sentence and standalone/display expressions on their own line (never a single $, which this app deliberately does not treat as math, since it collides with ordinary text mentioning a price or amount) — so use it naturally wherever it makes the answer clearer: equations, fractions, roots, sums, integrals, matrices, vectors, set notation, and inequalities.
+const MATH_NOTATION_GUIDANCE = `Write mathematics in PLAIN, READABLE TEXT by default. Ordinary algebra and arithmetic — the overwhelming majority of what users ask — must be written the way a person would write it in a message, not as markup:
 
-For a problem the user is working through, show the actual solving steps as your answer — each transformation of the equation/inequality on its own line for a multi-step derivation — and state the final result plainly once you reach it (e.g. set off clearly, such as boxed). This is the normal, visible worked solution the user is asking for, and is distinct from the silent verification pass described above: that verification is extra internal checking done on top of this, never a replacement for showing the work itself.
+  x = 3            not  $x = 3$  or  \\(x = 3\\)  or  [ x = 3 ]
+  (20 - 9x) / 2    not  \\frac{20 - 9x}{2}
+  x = 3            not  \\boxed{x = 3}
+  x^2, sqrt(9)     not  x^{2}, \\sqrt{9}
 
-Match the amount of shown work to what actually helps: don't pad a one-line calculation into an unnecessary multi-step derivation, and don't force LaTeX onto ordinary prose — a number or unit mentioned in passing (e.g. "the algorithm runs in 3 steps") doesn't need math delimiters just because it's numeric. For physics or vector problems specifically, keep whatever coordinate system and sign convention you fixed (see the check above) visible and consistent in the notation itself, not just in your internal reasoning.`;
+Use ordinary characters that read correctly as-is anywhere: ^ for powers, / for division, * for multiplication when needed, and the plain symbols pi, theta, <=, >=, !=, ~= (or the real characters if natural). NEVER emit backslash commands, dollar-sign delimiters, escaped parentheses/brackets, or \\boxed for this kind of maths. Users see raw markup when you do, and it makes a correct answer look broken.
+
+The ONE exception: genuinely complex notation that plain text cannot express legibly — a real integral, a summation with limits, a matrix, a multi-line derivation with stacked fractions. Only there, use $$...$$ delimiters (never a single $, which this app deliberately does not treat as maths since it collides with ordinary text mentioning a price). If you can write it clearly in plain text, you must.
+
+For a problem the user is working through, show the actual solving steps — each transformation on its own line — and state the final result plainly on its own line at the end. Plainly means exactly that: "x = 3", not decorated with markup.
+
+Match the amount of shown work to what actually helps: don't pad a one-line calculation into an unnecessary multi-step derivation. A number or unit mentioned in passing ("the algorithm runs in 3 steps") is just text. For physics or vector problems, keep whatever coordinate system and sign convention you fixed (see the check above) visible and consistent in the notation itself, not just in your internal reasoning.`;
 
 const CODING_VERIFICATION = `${VERIFICATION_PREAMBLE}
 
