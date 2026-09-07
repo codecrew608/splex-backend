@@ -1,0 +1,28 @@
+{
+  "selector_invocations": 1644,
+  "violations": 0,
+  "empty_pools": 336,
+  "paid_invocations": 1644,
+  "paid_violations": 0,
+  "paid_empty_pools": 84,
+  "total_invocations": 3288,
+  "total_violations": 0,
+  "guard_trips": 0,
+  "isolation_pct": 100,
+  "categories": {
+    "general": 594,
+    "writing": 168,
+    "documents": 84,
+    "image": 84,
+    "ppt": 84,
+    "video": 84,
+    "audio": 84,
+    "web_search": 84,
+    "coding": 126,
+    "math": 84,
+    "reasoning": 84,
+    "vision": 84
+  },
+  "failures": [],
+  "elapsed_s": 425.4
+}
