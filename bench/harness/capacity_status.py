@@ -119,6 +119,28 @@ def main() -> int:
     for r in rows:
         print(f"  {r['user_id']}  used={r['used']:<4} period={r['period_start']}")
 
+    # Groq RELIABILITY (migration 0058) — genuinely different question from
+    # everything above, which all answers "how much of our OWN configured
+    # capacity is used". This answers "is Groq itself getting less
+    # reliable" — the concrete mitigation for the fact that Groq's free
+    # developer tier carries no contract or SLA. A rising failure rate here,
+    # trending across days, is the earliest real signal that something
+    # changed on Groq's side — see this before a user ever has to report it.
+    print("\n=== Groq RELIABILITY (dispatch success/failure, last 14 days, by tier) ===")
+    rows = rest(
+        "groq_dispatch_outcomes?select=period_start,tier,success,failure,last_failure_at,last_failure_status,last_failure_body"
+        "&order=period_start.desc&limit=28"
+    )
+    if not rows:
+        print("  (no rows yet — no Groq dispatch has completed since migration 0058 deployed)")
+    for r in rows:
+        total = r["success"] + r["failure"]
+        rate = 100 * r["success"] / total if total else 0.0
+        flag = "  <-- WARNING: success rate below 90%" if total >= 5 and rate < 90 else ""
+        print(f"  {r['period_start']}  {r['tier']:<5}  success={r['success']:<4} failure={r['failure']:<4} rate={rate:5.1f}%{flag}")
+        if r.get("last_failure_at"):
+            print(f"      last failure: {r['last_failure_at']}  status={r['last_failure_status']}  {str(r.get('last_failure_body') or '')[:120]!r}")
+
     print("\n=== current config (from the deployed worker's own vars) ===")
     print("  read via: wrangler tail, or the values in deploy/backend/wrangler.jsonc")
     print("  OPENROUTER_FREE_DAILY_CAPACITY / OPENROUTER_FREE_SAFETY_BUFFER_PCT / OPENROUTER_PER_USER_SHARE_PCT")

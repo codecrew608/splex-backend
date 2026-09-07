@@ -4,6 +4,7 @@ import type { OpenRouterUsage } from "../types/index.js";
 import type { ChatMessageParam, StreamCompletionResult } from "../openrouter/client.js";
 import { withDeadline } from "../openrouter/client.js";
 import { admitGroqFallbackRequest, markGroqModelExhausted } from "./capacity.js";
+import { recordGroqDispatchSuccess, recordGroqDispatchFailure } from "./health.js";
 
 // Groq (api.groq.com — Groq, Inc., the LPU fast-inference hardware
 // company) — NOT xAI's Grok. See db/migrations/0056's header comment for
@@ -123,6 +124,13 @@ export async function streamGroqCompletion(opts: GroqStreamOptions): Promise<Str
       // today without an extra wasted round trip.
       markGroqModelExhausted(fastify, planTier, model);
     }
+    // Reliability tracking (migration 0058) — deliberately recorded here,
+    // AFTER admission already passed, not wrapping admitGroqFallbackRequest
+    // above: a fair-share/capacity DENIAL is SPLEX's own configured ceiling
+    // being hit, which says nothing about Groq's own reliability and must
+    // not be conflated with it. Only a real dispatch attempt against Groq's
+    // actual API — this branch, and the mid-stream one below — counts.
+    recordGroqDispatchFailure(fastify, planTier, response.status, text);
     throw err;
   }
 
@@ -169,9 +177,22 @@ export async function streamGroqCompletion(opts: GroqStreamOptions): Promise<Str
     if (signal?.aborted) {
       aborted = true;
     } else {
+      // A genuine mid-stream transport failure (connection dropped,
+      // decode error) — distinct from a client abort (handled above, and
+      // NOT a Groq reliability signal: Groq was serving fine, the client
+      // walked away) and distinct from the initial !response.ok branch
+      // (which already has a real HTTP status). No status code applies
+      // here, so 0 is used as an explicit "transport-level, not an HTTP
+      // response" marker rather than inventing one.
+      recordGroqDispatchFailure(fastify, planTier, 0, err instanceof Error ? err.message : String(err));
       throw err;
     }
   }
+
+  // Reached only on a genuine successful completion OR a client-side abort
+  // (Groq itself served correctly either way — see the catch block above
+  // for why an abort is not counted as a Groq failure).
+  recordGroqDispatchSuccess(fastify, planTier);
 
   return { fullText, usage, aborted };
 }

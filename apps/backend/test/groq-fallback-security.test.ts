@@ -123,6 +123,54 @@ describe("Groq fallback — Free and Paid can never exceed the one real shared a
   });
 });
 
+describe("Groq reliability tracking (migration 0058) — never conflated with SPLEX's own configured capacity ceiling", () => {
+  // The entire point of a separate reliability table: an admission DENIAL
+  // (fair-share or provider_capacity_exhausted, both thrown by
+  // admitGroqFallbackRequest BEFORE any network call) reflects SPLEX's own
+  // configured limits, not Groq's reliability, and must never be recorded
+  // as a Groq dispatch failure — doing so would make the "is Groq itself
+  // degrading" signal this migration exists to provide untrustworthy the
+  // moment SPLEX's own caps are simply being hit under normal load.
+  it("recordGroqDispatchFailure/-Success are called strictly AFTER admitGroqFallbackRequest in streamGroqCompletion", () => {
+    const src = read("groq/client.ts");
+    const fnStart = src.indexOf("export async function streamGroqCompletion(");
+    const fnEnd = src.indexOf("\nexport ", fnStart + 10);
+    const fnBody = src.slice(fnStart, fnEnd === -1 ? undefined : fnEnd);
+    const admitAt = fnBody.indexOf("admitGroqFallbackRequest(");
+    expect(admitAt).toBeGreaterThan(-1);
+    for (const call of ["recordGroqDispatchFailure(", "recordGroqDispatchSuccess("]) {
+      const at = fnBody.indexOf(call);
+      expect(at, `${call} not found`).toBeGreaterThan(-1);
+      expect(at, `${call} must run after admission, not before/around it`).toBeGreaterThan(admitAt);
+    }
+  });
+
+  it("record_groq_dispatch_outcome is never called directly outside groq/health.ts", () => {
+    let directCallSites = 0;
+    for (const file of walk(SRC)) {
+      if (file.endsWith("groq/health.ts")) continue;
+      const src = readFileSync(file, "utf8");
+      if (src.includes('"record_groq_dispatch_outcome"')) directCallSites++;
+    }
+    expect(directCallSites).toBe(0);
+  });
+
+  it("recordGroqDispatchFailure/-Success have exactly one call site each (groq/client.ts)", () => {
+    for (const fn of ["recordGroqDispatchFailure", "recordGroqDispatchSuccess"]) {
+      let callSites = 0;
+      for (const file of walk(SRC)) {
+        if (file.endsWith("groq/health.ts")) continue; // the definition itself
+        const src = readFileSync(file, "utf8");
+        if (src.includes(`${fn}(`)) {
+          callSites++;
+          expect(file.endsWith("groq/client.ts"), `unexpected call site for ${fn}: ${file}`).toBe(true);
+        }
+      }
+      expect(callSites, `${fn} should have exactly one call site`).toBe(1);
+    }
+  });
+});
+
 describe("Groq fallback — admission runs before any real network call", () => {
   it("streamGroqCompletion calls admitGroqFallbackRequest BEFORE fetch()", () => {
     const src = read("groq/client.ts");
