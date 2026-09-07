@@ -166,6 +166,40 @@ export const INTENTS: IntentDefinition[] = [
       /\b[CP]\(\s*\d+\s*,\s*\d+\s*\)/,
       /\bby what factor\b/i,
 
+      // Mathematical function-call notation. sin(, ln(, sqrt( and friends
+      // are unambiguous: no ordinary sentence writes them.
+      /\b(?:sin|cos|tan|sec|csc|cot|asin|acos|atan|sinh|cosh|tanh|ln|log|exp|sqrt|abs|floor|ceil|mod)\s*\(/i,
+
+      // Calculus and linear algebra, by name.
+      /\b(?:differentiate|integrate|derivative|integral|antiderivative)\b/i,
+      /\b(?:determinant|eigenvalue|eigenvector|matrix|matrices|vector|dot product|cross product|transpose)\b/i,
+      /\bsolve the system\b/i,
+
+      // Number theory, spelled out as well as abbreviated.
+      /\b(?:greatest common divisor|least common multiple|highest common factor|prime factorisation|prime factorization|modulo)\b/i,
+      /\b\d+\s+mod\s+-?\d+/i,
+
+      // Presentation of a numeric result.
+      /\bscientific notation\b/i,
+      /\bround\b[^.?!]{0,40}\bdecimal places?\b/i,
+      /\bto\s+\d+\s+(?:decimal places?|significant figures?|s\.?f\.?)\b/i,
+
+      // Named physical/geometric quantities, in a message that also
+      // carries a number. The quantity word alone is not enough — "the
+      // area of France" is geography — but a quantity plus a figure is a
+      // calculation in every ordinary reading.
+      // Deliberately excludes energy, power, current, frequency and density.
+      // Each is an ordinary English word before it is a physical quantity —
+      // "renewable energy", "current events", "population density" — and the
+      // labelled negatives caught exactly that: a 10-slide presentation about
+      // renewable energy was pulled into maths. The unit nouns below carry
+      // the same questions without the ambiguity ("what power, in watts").
+      /(?=[^]*\d)[^]*\b(?:voltage|resistance|wattage|velocity|acceleration|momentum|wavelength|torque|resistor|ohms?|volts?|watts?|amperes?|amps?|joules?|newtons?|pascals?|hertz)\b/i,
+      /(?=[^]*\d)[^]*\b(?:area|volume|perimeter|surface area|hypotenuse|radius|diameter)\s+of\b/i,
+
+      // Business arithmetic.
+      /(?=[^]*\d)[^]*\b(?:gross margin|profit margin|markup|break[- ]?even|compound interest|simple interest|roi|ltv|cagr|churn rate|depreciation)\b/i,
+
       // Word problems: a quantity question with a number in the SAME
       // sentence. Sentence-bounded on purpose — an earlier version looked
       // for two numbers anywhere in the message, which made every
