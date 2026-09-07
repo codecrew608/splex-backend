@@ -98,7 +98,12 @@ export const INTENTS: IntentDefinition[] = [
       /\b(?:asymptotic|amortis?zed)\b/i,
       /\bhow does (?:the )?\w+ (?:algorithm|sort|search|protocol) work\b/i,
     ],
-    weakKeywords: [/\bcomplexity\b/i, /\brecursion\b/i, /\bcompiler\b/i],
+    // "complexity" alone is removed: it is an ordinary English word long
+    // before it is a CS term, and it was pulling reading-comprehension
+    // passages ("the complexity of the gearing") into the coding pool. The
+    // strong patterns above already cover the real usage — time/space
+    // complexity, big-O, asymptotic — without the collision.
+    weakKeywords: [/\brecursion\b/i, /\bcompiler\b/i, /\btime complexity\b/i],
   },
   {
     id: "math_reasoning",

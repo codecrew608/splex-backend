@@ -122,6 +122,7 @@ const REPEATS = Number(process.env.ISOLATION_REPEATS ?? 3);
 
 const started = Date.now();
 let checks = 0, violations = 0, emptyPools = 0;
+let paidChecks = 0, paidViolations = 0, paidEmptyPools = 0;
 const byCategory = new Map();
 const failures = [];
 
@@ -137,16 +138,37 @@ for (let r = 0; r < REPEATS; r++) {
     const category = decision?.category ?? "general";
 
     for (const complexity of COMPLEXITIES) {
+      // --- Free tier: must NEVER be offered a paid model ------------------
       const candidates = await selectModelCandidates(
         fastify, category, "free", "v1", complexity,
       );
       checks++;
       byCategory.set(category, (byCategory.get(category) ?? 0) + 1);
-      if (candidates.length === 0) { emptyPools++; continue; }
+      if (candidates.length === 0) { emptyPools++; }
       for (const c of candidates) {
         if (c.variant !== "free" || c.free_tier_allowed !== true) {
           violations++;
-          failures.push({ message: message.slice(0, 70), category, complexity,
+          failures.push({ kind: "free_got_paid", message: message.slice(0, 70),
+                          category, complexity,
+                          model: c.openrouter_model_id, variant: c.variant });
+        }
+      }
+
+      // --- Paid tier: the mirror property --------------------------------
+      // Isolation is only half a guarantee if it is achieved by giving paid
+      // users nothing. A paid request must be offered PAID rows and must
+      // never be silently downgraded onto the free pool, which would be a
+      // quality regression disguised as a safety property.
+      const paid = await selectModelCandidates(
+        fastify, category, "pro", "v1.5", complexity,
+      );
+      paidChecks++;
+      if (paid.length === 0) { paidEmptyPools++; }
+      for (const c of paid) {
+        if (c.variant !== "paid" || c.pro_tier_allowed !== true) {
+          paidViolations++;
+          failures.push({ kind: "paid_got_free", message: message.slice(0, 70),
+                          category, complexity,
                           model: c.openrouter_model_id, variant: c.variant });
         }
       }
@@ -158,7 +180,10 @@ const elapsed = ((Date.now() - started) / 1000).toFixed(1);
 const rate = violations === 0 ? 100 : (1 - violations / checks) * 100;
 
 console.log();
-console.log(`selector invocations : ${checks}`);
+console.log(`free-tier invocations : ${checks}`);
+console.log(`paid-tier invocations : ${paidChecks}`);
+console.log(`paid models leaked to free : ${violations}`);
+console.log(`free models served to paid : ${paidViolations}`);
 console.log(`paid models offered  : ${violations}`);
 console.log(`empty pools (correct for media on free): ${emptyPools}`);
 console.log(`cost-safety guard trips: ${guardTrips.length}`);
@@ -171,9 +196,13 @@ if (process.env.ISOLATION_JSON_OUT) {
   const { writeFileSync } = await import("node:fs");
   writeFileSync(process.env.ISOLATION_JSON_OUT, JSON.stringify({
     selector_invocations: checks, violations, empty_pools: emptyPools,
+    paid_invocations: paidChecks, paid_violations: paidViolations,
+    paid_empty_pools: paidEmptyPools,
+    total_invocations: checks + paidChecks,
+    total_violations: violations + paidViolations,
     guard_trips: guardTrips.length, isolation_pct: rate,
     categories: Object.fromEntries(byCategory), failures, elapsed_s: Number(elapsed),
   }, null, 2));
 }
 
-process.exit(violations === 0 ? 0 : 1);
+process.exit(violations === 0 && paidViolations === 0 ? 0 : 1);

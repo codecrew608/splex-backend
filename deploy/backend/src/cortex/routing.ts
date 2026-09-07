@@ -231,6 +231,57 @@ export function scoreModels(
     .sort((a, b) => b.score - a.score);
 }
 
+// --- health guard -----------------------------------------------------------
+//
+// Applies to EVERY Cortex version, including v1.
+//
+// v1 deliberately does not blend live health into its scores (see
+// scoreModels above) — that is a real design choice about how much machinery
+// the Free tier carries, and it is preserved. But "does not fine-tune on
+// health" and "will happily dispatch to a model that has never once
+// succeeded" are different things, and only the first was intended.
+//
+// SFB v1.0 measured the second: google/gemma-4-31b-it:free sat at priority 10
+// for Free general traffic with 0 successes against 5 failures, while
+// minimax/minimax-m2.7:free — 57 successes, 0 failures — sat last. Free-tier
+// coding had two candidates and neither had ever recorded a success, which is
+// exactly what produced that run's coding provider-failures. The pool could
+// not self-correct because nothing on the v1 path ever read model_health.
+//
+// This is a floor, not a scoring input: a model is demoted only when it has
+// enough observations to be judged AND is failing almost every time. It is
+// demoted, never dropped — removing it could empty a category's pool
+// entirely, and a bad candidate still beats no candidate.
+const UNHEALTHY_ERROR_RATE = 0.8;
+const UNHEALTHY_MIN_OBSERVATIONS = 4;
+
+export function isDemonstrablyUnhealthy(health: ModelHealthRow | undefined): boolean {
+  if (!health) return false;
+  const total = health.success_count + health.failure_count + health.timeout_count;
+  if (total < UNHEALTHY_MIN_OBSERVATIONS) return false;
+  return (health.failure_count + health.timeout_count) / total >= UNHEALTHY_ERROR_RATE;
+}
+
+/**
+ * Moves demonstrably-failing models to the back of the ranking, preserving
+ * relative order within each group.
+ *
+ * Stable on purpose: within "healthy" and within "unhealthy" the scorer's
+ * ordering is untouched, so this changes which model is tried FIRST without
+ * rewriting the router's judgement about which is best.
+ */
+export function applyHealthGuard(
+  scored: ScoredModel[],
+  health: Map<string, ModelHealthRow>,
+): ScoredModel[] {
+  const healthy: ScoredModel[] = [];
+  const unhealthy: ScoredModel[] = [];
+  for (const s of scored) {
+    (isDemonstrablyUnhealthy(health.get(s.model.id)) ? unhealthy : healthy).push(s);
+  }
+  return healthy.concat(unhealthy);
+}
+
 // Prefer a different provider for the fallback candidate. OpenRouter's
 // failures cluster by upstream provider (a rate-limited shared :free pool,
 // a provider-wide outage) — retrying a second model from the same vendor

@@ -1,7 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import type { PlanTier, ComplexityLevel } from "@splex/shared-types";
 import type { ModelRegistryRow, ModelHealthRow } from "../types/index.js";
-import { scoreModels, pickCandidates } from "./routing.js";
+import { scoreModels, pickCandidates, applyHealthGuard } from "./routing.js";
 import type { CortexVersion } from "./version.js";
 
 // Candidate pool size fetched before scoring. Larger than the number
@@ -126,7 +126,11 @@ export async function selectModelCandidates(
 
   const health = await fetchHealth(fastify, pool.map((m) => m.id));
   const scored = scoreModels(pool, health, effectiveCategory, complexity, cortexVersion);
-  const picked = pickCandidates(scored, cortexVersion, effectiveLimit);
+  // Demote models that are demonstrably failing, on every Cortex version.
+  // scoreModels only consults health on v1.5; this guard is what stops a
+  // Free request being spent on a candidate that has never succeeded.
+  const guarded = applyHealthGuard(scored, health);
+  const picked = pickCandidates(guarded, cortexVersion, effectiveLimit);
 
   // Final, independent safety guard — deliberately redundant with
   // queryModelRegistry's own `.eq("variant", variant)` filter above, not a
