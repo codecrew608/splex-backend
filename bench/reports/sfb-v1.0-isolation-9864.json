@@ -1,0 +1,22 @@
+{
+  "selector_invocations": 9864,
+  "violations": 0,
+  "empty_pools": 2016,
+  "guard_trips": 0,
+  "isolation_pct": 100,
+  "categories": {
+    "general": 4320,
+    "writing": 1008,
+    "documents": 504,
+    "image": 504,
+    "ppt": 504,
+    "video": 504,
+    "audio": 504,
+    "web_search": 504,
+    "coding": 504,
+    "math": 504,
+    "reasoning": 504
+  },
+  "failures": [],
+  "elapsed_s": 1262.6
+}

@@ -200,28 +200,28 @@
       "violations": [],
       "pct": 100,
       "large_n": {
-        "selector_invocations": 2466,
+        "selector_invocations": 9864,
         "violations": 0,
-        "empty_pools": 504,
+        "empty_pools": 2016,
         "guard_trips": 0,
         "isolation_pct": 100,
         "categories": {
-          "general": 1080,
-          "writing": 252,
-          "documents": 126,
-          "image": 126,
-          "ppt": 126,
-          "video": 126,
-          "audio": 126,
-          "web_search": 126,
-          "coding": 126,
-          "math": 126,
-          "reasoning": 126
+          "general": 4320,
+          "writing": 1008,
+          "documents": 504,
+          "image": 504,
+          "ppt": 504,
+          "video": 504,
+          "audio": 504,
+          "web_search": 504,
+          "coding": 504,
+          "math": 504,
+          "reasoning": 504
         },
         "failures": [],
-        "elapsed_s": 334.9,
-        "wilson_lower_pct": 99.84446536805935,
-        "rule_of_three_upper_failure_pct": 0.12165450121654502
+        "elapsed_s": 1262.6,
+        "wilson_lower_pct": 99.96107093087655,
+        "rule_of_three_upper_failure_pct": 0.030413625304136254
       }
     },
     "cost_detail": {
