@@ -1,5 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import { INTENTS, GENERAL_FALLBACK_INTENT, type IntentDefinition } from "./intents.js";
+import { classifyByEvidence, hasAnyEvidence } from "./signals.js";
 import { completeOnceWithFallback } from "../openrouter/client.js";
 import { resolveClassifierModelCandidates } from "./classifierModel.js";
 import type { PlanTier } from "@splex/shared-types";
@@ -156,6 +157,26 @@ export function classifyDeterministic(message: string): ClassificationResult | n
     };
   }
 
+  // Accumulated evidence runs BEFORE the weak-keyword stage, and the order
+  // is the whole point. A weak keyword is a single incidental hit — "data"
+  // in "data analyst", "error" in a prose sentence — while the evidence
+  // layer only speaks when several signals corroborate. Running weak first
+  // let one stray word outrank a pile of agreeing ones: "Draft a
+  // two-paragraph cover letter for a junior data analyst role" routed to
+  // data-analysis on the word "data", and "What's wrong with this argument"
+  // never reached the reasoning signal that scores it 5.
+  const evidence = classifyByEvidence(message);
+  if (evidence) {
+    const evidenceIntent = INTENTS.find((i) => i.id === evidence.intentId);
+    return {
+      intentId: evidence.intentId,
+      category: evidence.category,
+      capabilities: evidenceIntent?.capabilities ?? GENERAL_FALLBACK_INTENT.capabilities,
+      reason: `Matched "${evidence.intentId}" from combined signals in your message.`,
+      usedFallback: false,
+    };
+  }
+
   if (withStrongHits.length === 0) {
     // Weak hits are ranked by count, then by specificity. Count first
     // because weak keywords are weak evidence and more of them is the
@@ -188,7 +209,30 @@ export function classifyDeterministic(message: string): ClassificationResult | n
     }
   }
 
-  // Zero matches, or a genuine tie between equally specific intents.
+  // Nothing matched anywhere: not a keyword, not a weak hit, not a single
+  // weighted signal. "can you help with this", "the thing we discussed",
+  // "make it better".
+  //
+  // Sending these to the LLM classifier costs a measured ~4s round trip to
+  // learn what is already knowable: a message carrying zero domain evidence
+  // is a general message, and the classifier has no more information than
+  // this function does. It is answered here instead.
+  //
+  // Guarded on TOTAL absence of signal, which is what keeps the old warning
+  // about "tts this" and "draw cat" satisfied — those carry weak media hits
+  // and so never reach this branch, and are still resolved above.
+  if (scored.every((x) => x.strongHits === 0 && x.weakHits === 0) && !hasAnyEvidence(message)) {
+    return {
+      intentId: GENERAL_FALLBACK_INTENT.id,
+      category: GENERAL_FALLBACK_INTENT.category,
+      capabilities: GENERAL_FALLBACK_INTENT.capabilities,
+      reason: "No specific capability was needed, so this was answered directly.",
+      usedFallback: false,
+    };
+  }
+
+  // Genuinely ambiguous: some signal exists but nothing decisive. The LLM
+  // classifier earns its round trip here.
   return null;
 }
 
