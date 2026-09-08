@@ -51,15 +51,15 @@ export async function fakeCheckout(fastify: FastifyInstance, userId: string): Pr
 
   const { error: userError } = await fastify.supabaseAdmin
     .from("users")
-    .update({ plan_tier: "pro" })
+    .update({ plan_tier: "starter" })  // ₹299 tier — see razorpay.ts's TIER RENAME note
     .eq("id", userId);
 
   if (userError) {
-    fastify.log.error({ userError }, "failed to flip plan_tier to pro");
+    fastify.log.error({ userError }, "failed to flip plan_tier to starter");
     return fail("Could not complete checkout. Please try again.", 500);
   }
 
-  return ok({ status: "active", planTier: "pro" });
+  return ok({ status: "active", planTier: "starter" });
 }
 
 export async function fakeCancel(fastify: FastifyInstance, userId: string): Promise<HandlerResult> {

@@ -223,14 +223,14 @@ describe("processRazorpayWebhook — idempotency", () => {
 
     await deliver(db, body, { eventId: "evt_dup" });
     const row1 = db.subscriptions.get("u1");
-    expect(row1?.plan_tier).toBe("pro");
+    expect(row1?.plan_tier).toBe("starter");
 
     // Simulate Razorpay retrying the identical delivery.
     await deliver(db, body, { eventId: "evt_dup" });
     expect(db.paymentEvents.size).toBe(1);
-    // Still exactly "pro" — a second application would be harmless here
+    // Still exactly "starter" — a second application would be harmless here
     // regardless, but the real assertion is that processing was skipped:
-    expect(row1?.plan_tier).toBe("pro");
+    expect(row1?.plan_tier).toBe("starter");
   });
 
   it("falls back to a composite key when no event-id header is present, stable across retries", async () => {
@@ -257,7 +257,7 @@ describe("processRazorpayWebhook — entitlement mapping (Section 6)", () => {
   it("subscription.activated grants pro", async () => {
     const db = makeDb(["u1"]);
     await deliver(db, makeBody({ event: "subscription.activated", status: "active", notes: { splex_user_id: "u1" } }));
-    expect(db.subscriptions.get("u1")?.plan_tier).toBe("pro");
+    expect(db.subscriptions.get("u1")?.plan_tier).toBe("starter");
   });
 
   it("subscription.cancelled revokes back to free", async () => {
@@ -265,7 +265,7 @@ describe("processRazorpayWebhook — entitlement mapping (Section 6)", () => {
     await deliver(db, makeBody({ event: "subscription.activated", status: "active", notes: { splex_user_id: "u1" }, createdAt: 100 }), {
       eventId: "evt_a",
     });
-    expect(db.subscriptions.get("u1")?.plan_tier).toBe("pro");
+    expect(db.subscriptions.get("u1")?.plan_tier).toBe("starter");
 
     await deliver(db, makeBody({ event: "subscription.cancelled", status: "cancelled", notes: { splex_user_id: "u1" }, createdAt: 200 }), {
       eventId: "evt_b",
@@ -282,7 +282,7 @@ describe("processRazorpayWebhook — entitlement mapping (Section 6)", () => {
     await deliver(db, makeBody({ event: "subscription.pending", status: "pending", notes: { splex_user_id: "u1" }, createdAt: 200 }), {
       eventId: "evt_b",
     });
-    expect(db.subscriptions.get("u1")?.plan_tier).toBe("pro"); // unchanged, not newly revoked
+    expect(db.subscriptions.get("u1")?.plan_tier).toBe("starter"); // unchanged, not newly revoked
     expect(db.subscriptions.get("u1")?.status).toBe("pending"); // but status itself is honest
   });
 });
@@ -367,5 +367,22 @@ describe("processRazorpayWebhook — out-of-order delivery (Section 11)", () => 
     );
     expect(db.subscriptions.get("u1")?.status).toBe("cancelled");
     expect(db.subscriptions.get("u1")?.plan_tier).toBe("free");
+  });
+});
+
+// TIER RENAME GUARD (2026-09-07). 'pro' now means SPLEX Pro (₹799), an
+// entirely different product from the ₹299 plan this webhook grants. If
+// this file ever goes back to writing "pro", a ₹299 subscriber silently
+// receives Pro entitlements they never paid for — a revenue and access
+// leak, not a cosmetic naming issue. Asserted as a negative so it fails
+// loudly rather than quietly granting too much.
+describe("tier rename — an active ₹299 subscription never grants SPLEX Pro", () => {
+  it("an active subscription resolves to starter, never pro", async () => {
+    const db = makeDb(["u1"]);
+    await deliver(db, makeBody({ event: "subscription.activated", status: "active", notes: { splex_user_id: "u1" } }), {
+      eventId: "evt_tier_guard",
+    });
+    expect(db.subscriptions.get("u1")?.plan_tier).not.toBe("pro");
+    expect(db.subscriptions.get("u1")?.plan_tier).toBe("starter");
   });
 });

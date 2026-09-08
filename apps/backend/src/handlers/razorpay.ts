@@ -31,8 +31,14 @@ function isKnownStatus(value: unknown): value is SubscriptionStatus {
 // progress (Razorpay keeps trying for days before halting) — neither is
 // "never grant" nor "instantly revoke," so the existing entitlement is
 // left alone until the status resolves one way or the other.
-function planTierForStatus(status: SubscriptionStatus): "pro" | "free" | null {
-  if (status === "active") return "pro";
+// TIER RENAME (2026-09-07). The ₹299 plan is now plan_tier='starter',
+// which is what the UI has always called it. It previously used the enum
+// value 'pro' — an inversion migration 0018 knowingly left in place — and
+// that value is now reserved for SPLEX Pro (₹799), an entirely different
+// product. Writing 'pro' here would hand a ₹299 subscriber Pro
+// entitlements they never bought. See db/migrations/0059-0061.
+function planTierForStatus(status: SubscriptionStatus): "starter" | "free" | null {
+  if (status === "active") return "starter";
   if (status === "halted" || status === "cancelled" || status === "completed" || status === "expired") return "free";
   return null;
 }

@@ -1,10 +1,20 @@
 import type { PlanTier } from "@splex/shared-types";
 
-// V1 has exactly two user-facing plans, Free and Starter (₹299/month). The
-// internal plan_tier value stays "pro" (see migration 0018's own comment —
-// renaming a live enum/column carries real migration risk for no user-
-// facing benefit) but nothing in the UI should ever say "Pro" again. Single
-// source of truth for that display mapping so it can't drift per-component.
-export function planDisplayName(planTier: PlanTier): "Free" | "Starter" {
-  return planTier === "free" ? "Free" : "Starter";
+// Single source of truth for plan display names, so the mapping cannot
+// drift per-component.
+//
+// TIER RENAME (2026-09-07). Until now the ₹299 plan used the enum value
+// 'pro' while being shown as "Starter", and this function collapsed
+// everything non-free to "Starter" accordingly. That is no longer safe:
+// 'pro' now means SPLEX Pro (₹799), an entirely different product, and the
+// old one-liner would have labelled a Pro subscriber "Starter".
+//
+// The enum now says what it means:
+//     free    -> Free
+//     starter -> Starter (₹299)
+//     pro     -> Pro     (₹799, SPLEX Pro — not launched yet)
+export function planDisplayName(planTier: PlanTier): "Free" | "Starter" | "Pro" {
+  if (planTier === "free") return "Free";
+  if (planTier === "pro") return "Pro";
+  return "Starter";
 }

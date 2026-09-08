@@ -34,7 +34,7 @@ function formatBytes(bytes: number): string {
   return `${Math.round(bytes / 1_048_576)} MB`;
 }
 
-function buildFeatures(v: Record<string, number | null>, tier: "free" | "pro"): string[] {
+function buildFeatures(v: Record<string, number | null>, tier: "free" | "starter"): string[] {
   const features = [
     v.projects === null ? "Unlimited projects" : `${v.projects ?? 0} project${v.projects === 1 ? "" : "s"}`,
     `${(v.file_uploads ?? 0).toLocaleString()} file uploads/month · ${formatBytes(v.storage_bytes ?? 0)} storage`,
@@ -43,7 +43,7 @@ function buildFeatures(v: Record<string, number | null>, tier: "free" | "pro"): 
     `Agent Workflows (up to ${v.workflow_steps ?? 0} steps)`,
   ];
 
-  if (tier === "pro") {
+  if (tier === "starter") {
     features.push(
       `${(v.deep_research ?? 0).toLocaleString()} Deep Research reports/day`,
       `${(v.audio_generations ?? 0).toLocaleString()} audio generations/day`,
@@ -71,13 +71,13 @@ export default async function UpgradePage() {
   const { data: limits, error: limitsError } = await supabase
     .from("plan_limits")
     .select("plan_tier, counter_type, limit_amount")
-    .in("plan_tier", ["free", "pro"])
+    .in("plan_tier", ["free", "starter"])
     .in("counter_type", COUNTER_TYPES);
   if (limitsError) console.error("upgrade page: plan_limits query failed", limitsError);
 
-  const byTier: Record<"free" | "pro", Record<string, number | null>> = { free: {}, pro: {} };
+  const byTier: Record<"free" | "starter", Record<string, number | null>> = { free: {}, starter: {} };
   for (const row of limits ?? []) {
-    const tier = row.plan_tier as "free" | "pro";
+    const tier = row.plan_tier as "free" | "starter";
     byTier[tier][row.counter_type as string] = row.limit_amount as number | null;
   }
 
@@ -99,8 +99,8 @@ export default async function UpgradePage() {
           name="Starter"
           price="₹299"
           period="/mo"
-          features={buildFeatures(byTier.pro, "pro")}
-          isCurrent={currentTier === "pro"}
+          features={buildFeatures(byTier.starter, "starter")}
+          isCurrent={currentTier === "starter"}
           highlighted
           cta={currentTier === "free" ? <UpgradeButton /> : undefined}
         />

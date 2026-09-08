@@ -61,7 +61,7 @@ export function UpgradeButton() {
 
     for (let attempt = 0; user && attempt < POLL_ATTEMPTS; attempt++) {
       const { data: profile } = await supabase.from("users").select("plan_tier").eq("id", user.id).single();
-      if (profile?.plan_tier === "pro") {
+      if (profile?.plan_tier === "starter") {
         setPhase("idle");
         router.refresh();
         return;
