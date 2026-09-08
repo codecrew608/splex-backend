@@ -1,0 +1,21 @@
+-- 0060 — Tier rename, STEP 2 of 3: move the ₹299 customers onto 'starter'.
+--
+-- Safe only because 0059 already copied all 28 of 'pro's limit rows onto
+-- 'starter' and verified them identical. Every entitlement these users have
+-- — credits, daily credits, messages/day, and every capability quota —
+-- resolves to exactly the same numbers before and after, so the change is
+-- invisible to them.
+--
+-- users.plan_tier is the single source of truth for entitlement; the
+-- subscriptions table carries only Razorpay state (status, plan id) and has
+-- no tier column, so nothing else needs moving.
+--
+-- VERIFIED IN PRODUCTION after applying: 19 free / 5 starter / 0 pro, and
+-- every moved user resolves to credits=100000, daily_credits=3300,
+-- daily_requests=75, web_searches=100 with check_credits() returning true —
+-- i.e. byte-identical to what they had as 'pro'.
+--
+-- Requires the code half to be deployed FIRST (razorpay/billing writing
+-- 'starter'), so a subscription completing during the window cannot land on
+-- a value that is about to change meaning.
+update public.users set plan_tier = 'starter' where plan_tier = 'pro';
