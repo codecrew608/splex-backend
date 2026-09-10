@@ -113,6 +113,20 @@ const INSERT_DEFAULTS: Record<string, Row> = {
   pro_artifacts: { status: "final", verification_state: "unreviewed", parent_artifact_ids: [] },
 };
 
+// The CHECK constraints migration 0061 puts on the `status` columns. The
+// fake enforces these so a write of a value the real DB would reject (a
+// live probe once caught execution.ts writing 'settling', which is not in
+// this set) fails loudly in-process instead of only under a live probe.
+const STATUS_ENUMS: Record<string, Set<string>> = {
+  pro_budget_reservations: new Set(["reserved", "settled", "released"]),
+  pro_workflows: new Set([
+    "CREATED", "PLANNING", "DECOMPOSING", "WAITING_FOR_TASKS", "RUNNING",
+    "REVIEWING", "VERIFYING", "WAITING_FOR_USER", "COMPLETED", "FAILED", "CANCELLED",
+  ]),
+  pro_tasks: new Set(["PENDING", "READY", "RUNNING", "COMPLETED", "FAILED", "BLOCKED", "CANCELLED"]),
+  pro_provider_runs: new Set(["pending", "running", "succeeded", "failed"]),
+};
+
 function keyedMap(state: ProFakeState, table: string): Map<string, Row> {
   switch (table) {
     case "pro_workflows": return state.workflows;
@@ -178,6 +192,13 @@ class Query implements PromiseLike<{ data: unknown; error: unknown }> {
     return rows;
   }
 
+  private assertStatusValid(patch: Row) {
+    const allowed = STATUS_ENUMS[this.table];
+    if (allowed && typeof patch.status === "string" && !allowed.has(patch.status)) {
+      throw new Error(`CHECK violation: ${this.table}.status = "${patch.status}" is not in {${[...allowed].join(", ")}}`);
+    }
+  }
+
   private execute(): unknown {
     const state = this.state;
 
@@ -185,6 +206,7 @@ class Query implements PromiseLike<{ data: unknown; error: unknown }> {
       const incoming = Array.isArray(this.payload) ? this.payload : [this.payload as Row];
       const inserted: Row[] = [];
       for (const raw of incoming) {
+        this.assertStatusValid(raw as Row);
         const row: Row = { ...(INSERT_DEFAULTS[this.table] ?? {}), ...raw };
         if (KEYED.has(this.table)) {
           if (!row.id) row.id = randomUUID();
@@ -203,6 +225,7 @@ class Query implements PromiseLike<{ data: unknown; error: unknown }> {
     const matching = tableRows(state, this.table).filter((r) => rowMatches(r, this.filters));
 
     if (this.op === "update") {
+      this.assertStatusValid(this.payload as Row);
       for (const row of matching) Object.assign(row, this.payload as Row);
       return this.shape(matching);
     }

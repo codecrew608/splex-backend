@@ -588,68 +588,87 @@ async function fetchWorkflowMemory(fastify: FastifyInstance, workflow: WorkflowR
 }
 
 async function finalizeWorkflow(fastify: FastifyInstance, user: AuthedUser, workflow: WorkflowRow, status: "COMPLETED" | "FAILED" | "CANCELLED"): Promise<void> {
-  // Settle EXACTLY ONCE. Two callers can reach this for one workflow in a
-  // concurrent window — a cancelProWorkflow and an executeWorkflowStep that
-  // completes (or times out, or exhausts the budget on) the same workflow.
-  // Without a claim they would both call consumeCredits (a real
-  // double-charge against the user's monthly pool) and both write a
-  // terminal status (the later one silently overwriting the other — a
-  // cancel lost, or a FAILED flipped to COMPLETED). The pro_budget_reservations
-  // row is the claim token: reserved -> settling is an atomic conditional
-  // UPDATE, and only the caller whose UPDATE matches a row does the rest.
-  // A workflow that never left WAITING_FOR_TASKS has no reservation row
-  // (nothing could have been spent) — that path still needs its status
-  // flipped, so it skips the claim and just writes the terminal status.
-  const hasReservation = workflow.reserved_credits > 0;
-  if (hasReservation) {
-    const { data: settleClaim } = await fastify.supabaseAdmin
-      .from("pro_budget_reservations")
-      .update({ status: "settling" })
-      .eq("workflow_id", workflow.id)
-      .eq("status", "reserved")
-      .select("id")
-      .maybeSingle();
-    if (!settleClaim) return; // another finalize already owns this workflow's settlement
-  }
-
+  // Settle EXACTLY ONCE. Several callers can reach this for one workflow in
+  // a concurrent window — a cancelProWorkflow, an executeWorkflowStep that
+  // completes / times out / exhausts the budget, and (see the two guards
+  // in executeWorkflowStep) a later poll that notices the workflow was
+  // cancelled out from under an in-flight step. Without a claim they would
+  // double-charge the user's monthly pool and fight over the terminal
+  // status.
+  //
+  // THE CLAIM IS THE SETTLE: one atomic conditional UPDATE flips the
+  // pro_budget_reservations row reserved -> settled and stamps the real
+  // amount. Only the caller whose UPDATE matches the still-'reserved' row
+  // charges the monthly pool. Keyed off the reservation ROW, not
+  // workflow.reserved_credits — that mirror column is written one
+  // statement after the row is inserted, so a concurrent cancel can see a
+  // row that the workflow column doesn't reflect yet. (Reservation status
+  // enum is exactly ('reserved','settled','released') — migration 0061's
+  // CHECK — so there is no 'settling'; the amount rides along in the flip.)
   const { data } = await fastify.supabaseAdmin.from("pro_provider_runs").select("cost_credits, cost_usd").eq("workflow_id", workflow.id);
   const runs = (data ?? []) as Array<{ cost_credits: number | null; cost_usd: number | null }>;
   const actualCost = runs.reduce((sum, r) => sum + (r.cost_credits ?? 0), 0);
   const actualCostUsd = runs.reduce((sum, r) => sum + (r.cost_usd ?? 0), 0);
 
-  // Item 23's "one coherent SPLEX usage record": a Pro workflow's spend is
-  // drawn from the user's MONTHLY 150,000-credit `credits` allowance — the
-  // pool the Pro plan is actually sold on — via the same consume_credits()
-  // path and the same credit_usage_logs ledger every other billable
-  // SPLEX action already writes to. skipDaily:true: Pro deliberately never
-  // touches the daily-credits pool ordinary chat uses. Charging a whole
-  // multi-thousand-credit workflow against the ~5,000/day pool would both
-  // wedge every workflow at the start (reserve_daily_credits hard-rejects
-  // any amount > the daily limit) and starve ordinary chat for the rest of
-  // the day — the exact ceiling-vs-daily-pool mismatch checkCredits.ts's
-  // own comments record hitting once already, with Deep Research.
-  if (actualCost > 0) {
-    await consumeCredits(fastify, {
-      userId: user.id,
-      creditCost: actualCost,
-      intent: "pro_workflow",
-      complexity: "complex",
-      openrouterModelId: "pro-multi",
-      realCostEstimate: actualCostUsd,
-      skipDaily: true,
-    });
-  }
-  if (hasReservation) {
+  const { data: settleClaim } = await fastify.supabaseAdmin
+    .from("pro_budget_reservations")
+    .update({ settled_credits: actualCost, status: "settled", settled_at: new Date().toISOString() })
+    .eq("workflow_id", workflow.id)
+    .eq("status", "reserved")
+    .select("id")
+    .maybeSingle();
+
+  if (settleClaim) {
+    // We own the settlement.
+    // Item 23's "one coherent SPLEX usage record": a Pro workflow's spend
+    // is drawn from the user's MONTHLY 150,000-credit `credits` allowance
+    // — the pool the Pro plan is actually sold on — via the same
+    // consume_credits() path and credit_usage_logs ledger every other
+    // billable SPLEX action already writes to. skipDaily:true: Pro
+    // deliberately never touches the daily pool. Charging a whole
+    // multi-thousand-credit workflow against the ~5,000/day pool would
+    // both wedge every workflow at the start (reserve_daily_credits
+    // hard-rejects any amount > the daily limit) and starve ordinary chat
+    // — the exact ceiling-vs-daily-pool mismatch checkCredits.ts's own
+    // comments record hitting once already, with Deep Research.
+    if (actualCost > 0) {
+      await consumeCredits(fastify, {
+        userId: user.id,
+        creditCost: actualCost,
+        intent: "pro_workflow",
+        complexity: "complex",
+        openrouterModelId: "pro-multi",
+        realCostEstimate: actualCostUsd,
+        // skipDaily: Pro never touches the daily-credits POOL (see above).
+        // skipDailyRequest: Pro also never touches the daily message-COUNT
+        // cap (plan_limits.daily_requests, 100/day for pro). A whole
+        // multi-AI workflow is not "a message"; its rate-limiting story is
+        // its own — the HTTP pro_create_workflow limit plus the intended
+        // pro_workflow_runs_monthly allowance — not the generic per-turn
+        // counter every ordinary chat message shares. Without this every
+        // finalize would silently burn one of the user's 100 daily
+        // requests. Verified live by bench/pro-live-atomicity.mts.
+        skipDaily: true,
+        skipDailyRequest: true,
+      });
+    }
     await fastify.supabaseAdmin
-      .from("pro_budget_reservations")
-      .update({ settled_credits: actualCost, status: "settled", settled_at: new Date().toISOString() })
-      .eq("workflow_id", workflow.id)
-      .eq("status", "settling");
+      .from("pro_workflows")
+      .update({ status, actual_cost_credits: actualCost, completed_at: new Date().toISOString() })
+      .eq("id", workflow.id);
+    return;
   }
+
+  // No reservation row was in 'reserved' state: either this workflow never
+  // began spending, or another finalize already settled it. Still make
+  // sure a terminal status is written — but never overwrite a terminal
+  // status a concurrent finalize just set, and never null out an
+  // actual_cost it recorded.
   await fastify.supabaseAdmin
     .from("pro_workflows")
-    .update({ status, actual_cost_credits: actualCost, completed_at: new Date().toISOString() })
-    .eq("id", workflow.id);
+    .update({ status, completed_at: new Date().toISOString() })
+    .eq("id", workflow.id)
+    .not("status", "in", `(${[...TERMINAL_WORKFLOW_STATUSES].join(",")})`);
 }
 
 // The one entry point a route calls, repeatedly, to drive a workflow to
@@ -684,6 +703,12 @@ export async function executeWorkflowStep(
   const workflow = workflowData as WorkflowRow;
 
   if (TERMINAL_WORKFLOW_STATUSES.has(workflow.status)) {
+    // A cancel can land while another request's step is mid-flight (that
+    // step reserved + dispatched a task, then returned RUNNING without
+    // finalizing). finalizeWorkflow is a no-op unless it finds a still
+    // -'reserved' row, so calling it here on every terminal poll settles
+    // exactly that stranded case and is harmless otherwise.
+    await finalizeWorkflow(fastify, user, workflow, workflow.status as "COMPLETED" | "FAILED" | "CANCELLED");
     return { workflowId, workflowStatus: workflow.status, tasksDispatched: 0, tasksCompleted: 0, tasksFailed: 0, message: "Workflow already finished." };
   }
 
@@ -809,6 +834,22 @@ export async function executeWorkflowStep(
   }
 
   const ready = budgetExhausted ? [] : findReadyTasks(tasks, dependencies).slice(0, workflow.max_parallel_branches);
+
+  // Last check before spending: a cancel could have won the CANCELLED
+  // claim any time after this step's own (stale) initial read. Dispatching
+  // now would record provider spend against a workflow the DB already
+  // considers terminal — and this step, on returning RUNNING, would not
+  // finalize it, so that spend + its reservation would strand. Settle and
+  // stop instead. (finalizeWorkflow no-ops if there is nothing to settle.)
+  if (ready.length > 0) {
+    const { data: freshBeforeDispatch } = await fastify.supabaseAdmin
+      .from("pro_workflows").select("status").eq("id", workflowId).maybeSingle();
+    const freshStatus = (freshBeforeDispatch as { status: string } | null)?.status;
+    if (freshStatus && TERMINAL_WORKFLOW_STATUSES.has(freshStatus)) {
+      await finalizeWorkflow(fastify, user, workflow, freshStatus as "COMPLETED" | "FAILED" | "CANCELLED");
+      return { workflowId, workflowStatus: freshStatus, tasksDispatched: 0, tasksCompleted: 0, tasksFailed: 0, message: "Workflow already finished." };
+    }
+  }
 
   let tasksCompleted = 0;
   let tasksFailed = 0;
@@ -1006,9 +1047,13 @@ export async function cancelProWorkflow(fastify: FastifyInstance, user: AuthedUs
     return { workflowId, workflowStatus: finalStatus, message: "Workflow already finished — nothing to cancel." };
   }
 
-  if (workflow.reserved_credits > 0) {
-    await finalizeWorkflow(fastify, user, workflow, "CANCELLED");
-  }
+  // Always run finalize — it keys off the reservation ROW (not the
+  // possibly-stale workflow.reserved_credits), atomically claims the
+  // reserved -> settled flip, and is a no-op when there is nothing to
+  // settle. A step that reserved concurrently with this cancel therefore
+  // can't leave an un-settled reservation, even if that step went on to
+  // dispatch a task and return RUNNING without finalizing itself.
+  await finalizeWorkflow(fastify, user, workflow, "CANCELLED");
 
   return { workflowId, workflowStatus: "CANCELLED", message: "Workflow cancelled." };
 }

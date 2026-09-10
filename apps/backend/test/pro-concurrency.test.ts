@@ -580,3 +580,340 @@ describe("§2 human-in-the-loop clarification", () => {
     expect(clar.length).toBe(1);
   });
 });
+
+// ===========================================================================
+// §5 — dedicated concurrent isolation: user / project / conversation memory
+// + workflow artifacts. Proves A-scope content can never surface in a
+// B-scope task context, with both scopes running at the same time.
+// ===========================================================================
+describe("§5 concurrent memory & artifact isolation (A must never leak into B)", () => {
+  function rootCtx(db: ProFakeDb, taskId: string): string {
+    return (db.state.tasks.get(taskId)!.input_context as { text: string } | undefined)?.text ?? "";
+  }
+
+  it("USER memory: A's facts never reach B's tasks, run concurrently", async () => {
+    const db = makeProFakeDb();
+    seedUser(db, "userA");
+    seedUser(db, "userB");
+    db.state.userMemories.push({ user_id: "userA", fact_key: "k1", fact: "USER_A_SECRET_PROFILE" });
+    db.state.userMemories.push({ user_id: "userB", fact_key: "k1", fact: "USER_B_SECRET_PROFILE" });
+    db.state.legacyUserMemory.set("userA", "legacy blob for A only");
+    const f = fastifyFor(db);
+    const wa = seedWorkflow(db, { userId: "userA", objective: "obj A", phases: LINEAR_5 });
+    const wb = seedWorkflow(db, { userId: "userB", objective: "obj B", phases: LINEAR_5 });
+    const reg = [scriptedProvider("openai", { kind: "ok" })];
+
+    metrics.scenarios++;
+    metrics.concurrentCalls += 2;
+    await Promise.all([
+      runToEnd(f, user("userA"), wa.workflowId, reg),
+      runToEnd(f, user("userB"), wb.workflowId, reg),
+    ]);
+
+    const ca = rootCtx(db, wa.taskIdByPhase.get("requirements")!);
+    const cb = rootCtx(db, wb.taskIdByPhase.get("requirements")!);
+    expect(ca).toContain("USER_A_SECRET_PROFILE");
+    expect(ca).not.toContain("USER_B_SECRET_PROFILE");
+    expect(cb).toContain("USER_B_SECRET_PROFILE");
+    expect(cb).not.toContain("USER_A_SECRET_PROFILE");
+    expect(cb).not.toContain("legacy blob for A only");
+    if (ca.includes("USER_B_SECRET_PROFILE") || cb.includes("USER_A_SECRET_PROFILE")) metrics.isolationViolations++;
+  });
+
+  it("PROJECT memory: Project A's facts never reach a Project B workflow, run concurrently", async () => {
+    const db = makeProFakeDb();
+    seedUser(db, "pmU1");
+    seedUser(db, "pmU2");
+    db.state.projectMemories.push({ project_id: "projA", fact_key: "p", fact: "PROJECT_A_ONLY_DECISION" });
+    db.state.projectMemories.push({ project_id: "projB", fact_key: "p", fact: "PROJECT_B_ONLY_DECISION" });
+    const f = fastifyFor(db);
+    const wa = seedWorkflow(db, { userId: "pmU1", projectId: "projA", objective: "svc A", phases: LINEAR_5 });
+    const wb = seedWorkflow(db, { userId: "pmU2", projectId: "projB", objective: "svc B", phases: LINEAR_5 });
+    const reg = [scriptedProvider("openai", { kind: "ok" })];
+
+    metrics.scenarios++;
+    metrics.concurrentCalls += 2;
+    await Promise.all([
+      runToEnd(f, user("pmU1"), wa.workflowId, reg),
+      runToEnd(f, user("pmU2"), wb.workflowId, reg),
+    ]);
+
+    const ca = rootCtx(db, wa.taskIdByPhase.get("requirements")!);
+    const cb = rootCtx(db, wb.taskIdByPhase.get("requirements")!);
+    expect(ca).toContain("PROJECT_A_ONLY_DECISION");
+    expect(ca).not.toContain("PROJECT_B_ONLY_DECISION");
+    expect(cb).toContain("PROJECT_B_ONLY_DECISION");
+    expect(cb).not.toContain("PROJECT_A_ONLY_DECISION");
+    if (ca.includes("PROJECT_B_ONLY_DECISION") || cb.includes("PROJECT_A_ONLY_DECISION")) metrics.isolationViolations++;
+  });
+
+  it("same user, two projects: project A memory does not bleed into that user's project B workflow", async () => {
+    const db = makeProFakeDb();
+    seedUser(db, "sharedU");
+    db.state.projectMemories.push({ project_id: "spA", fact_key: "p", fact: "SPA_FACT" });
+    db.state.projectMemories.push({ project_id: "spB", fact_key: "p", fact: "SPB_FACT" });
+    const f = fastifyFor(db);
+    const wa = seedWorkflow(db, { userId: "sharedU", projectId: "spA", phases: LINEAR_5 });
+    const wb = seedWorkflow(db, { userId: "sharedU", projectId: "spB", phases: LINEAR_5 });
+    const reg = [scriptedProvider("openai", { kind: "ok" })];
+
+    metrics.scenarios++;
+    await Promise.all([runToEnd(f, user("sharedU"), wa.workflowId, reg), runToEnd(f, user("sharedU"), wb.workflowId, reg)]);
+    const ca = rootCtx(db, wa.taskIdByPhase.get("requirements")!);
+    const cb = rootCtx(db, wb.taskIdByPhase.get("requirements")!);
+    expect(ca).toContain("SPA_FACT");
+    expect(ca).not.toContain("SPB_FACT");
+    expect(cb).toContain("SPB_FACT");
+    expect(cb).not.toContain("SPA_FACT");
+  });
+
+  it("CONVERSATION memory: a workflow linked to a conversation pulls in NOTHING conversation-scoped", async () => {
+    const db = makeProFakeDb();
+    seedUser(db, "cvU");
+    const f = fastifyFor(db);
+    const withConv = seedWorkflow(db, { userId: "cvU", objective: "linked", phases: LINEAR_5 });
+    const noConv = seedWorkflow(db, { userId: "cvU", objective: "linked", phases: LINEAR_5 });
+    db.state.workflows.get(withConv.workflowId)!.conversation_id = "conv-XYZ";
+    const reg = [scriptedProvider("openai", { kind: "ok" })];
+
+    metrics.scenarios++;
+    // If the engine tried to read a `conversations` / `messages` table the
+    // fake would throw "unmodeled table" — completing cleanly is itself the
+    // proof that Pro has no conversation-memory read path.
+    await runToEnd(f, user("cvU"), withConv.workflowId, reg);
+    await runToEnd(f, user("cvU"), noConv.workflowId, reg);
+    const a = rootCtx(db, withConv.taskIdByPhase.get("requirements")!);
+    const b = rootCtx(db, noConv.taskIdByPhase.get("requirements")!);
+    // conversation_id present vs absent makes no difference to the context.
+    expect(a.replace("conv-XYZ", "")).toBe(b);
+    expect(a).not.toContain("conv-XYZ");
+  });
+
+  it("WORKFLOW artifacts: same user, two workflows — W-A artifacts never enter a W-B task", async () => {
+    const db = makeProFakeDb();
+    seedUser(db, "wfU");
+    const f = fastifyFor(db);
+    const wa = seedWorkflow(db, { userId: "wfU", phases: LINEAR_5 });
+    const wb = seedWorkflow(db, { userId: "wfU", phases: LINEAR_5 });
+    // Distinct provider output per workflow so a leak is visible.
+    const regA = [scriptedProvider("openai", { kind: "ok", content: "ARTIFACT_FROM_WORKFLOW_A" })];
+    const regB = [scriptedProvider("openai", { kind: "ok", content: "ARTIFACT_FROM_WORKFLOW_B" })];
+
+    metrics.scenarios++;
+    metrics.concurrentCalls += 2;
+    await Promise.all([runToEnd(f, user("wfU"), wa.workflowId, regA), runToEnd(f, user("wfU"), wb.workflowId, regB)]);
+
+    // every non-root task's context in W-B may cite only W-B artifacts
+    for (const [, taskId] of wb.taskIdByPhase) {
+      const ctx = (db.state.tasks.get(taskId)!.input_context as { text: string } | undefined)?.text ?? "";
+      expect(ctx).not.toContain("ARTIFACT_FROM_WORKFLOW_A");
+    }
+    for (const [, taskId] of wa.taskIdByPhase) {
+      const ctx = (db.state.tasks.get(taskId)!.input_context as { text: string } | undefined)?.text ?? "";
+      expect(ctx).not.toContain("ARTIFACT_FROM_WORKFLOW_B");
+    }
+    // and every artifact row belongs to exactly one workflow
+    for (const art of db.state.artifacts.values()) {
+      expect([wa.workflowId, wb.workflowId]).toContain(art.workflow_id);
+    }
+  });
+});
+
+// ===========================================================================
+// §2/§3 — expanded failure injection. Every path must reach a terminal
+// state with a settled-or-absent reservation and no accounting drift.
+// ===========================================================================
+describe("§2/§3 expanded failure injection — always a clean terminal state", () => {
+  function assertCleanTerminal(db: ProFakeDb, workflowId: string) {
+    const wf = db.state.workflows.get(workflowId)!;
+    expect(["COMPLETED", "FAILED", "CANCELLED"]).toContain(wf.status);
+    const resv = db.state.budgetReservations.filter((r) => r.workflow_id === workflowId);
+    // 0 (never started spending) or exactly 1 settled — never a stranded 'reserved'
+    expect(resv.length === 0 || (resv.length === 1 && resv[0].status === "settled")).toBe(true);
+    const recorded = [...db.state.providerRuns.values()]
+      .filter((r) => r.workflow_id === workflowId)
+      .reduce((s, r) => s + ((r.cost_credits as number) ?? 0), 0);
+    const consumed = db.state.creditLedger
+      .filter((l) => l.intent === "pro_workflow")
+      .reduce((s, l) => s + ((l.credit_cost as number) ?? 0), 0);
+    // never charged more than recorded for this workflow's contribution
+    expect(consumed).toBeLessThanOrEqual(
+      [...db.state.providerRuns.values()].reduce((s, r) => s + ((r.cost_credits as number) ?? 0), 0),
+    );
+    return { recorded };
+  }
+
+  it("malformed provider output (non-ProviderCallError throw) → task fails, workflow terminal, clean", async () => {
+    const db = makeProFakeDb();
+    seedUser(db, "fi1");
+    const f = fastifyFor(db);
+    const { workflowId } = seedWorkflow(db, { userId: "fi1", phases: LINEAR_5 });
+    const bad: AIProvider = {
+      name: "openai",
+      capabilities: CAPS,
+      supports: () => true,
+      async call() {
+        throw new SyntaxError("Unexpected token < in JSON at position 0"); // not a ProviderCallError
+      },
+    };
+    metrics.scenarios++;
+    const last = await runToEnd(f, user("fi1"), workflowId, [bad]);
+    expect(last.workflowStatus).toBe("FAILED");
+    assertCleanTerminal(db, workflowId);
+    // the arbitrary throw was classified, a run row recorded, nothing stranded at RUNNING
+    expect([...db.state.tasks.values()].some((t) => t.status === "RUNNING")).toBe(false);
+  });
+
+  it("provider failure mid-workflow (task 3 of a chain) → downstream BLOCKED, workflow FAILED, clean", async () => {
+    const db = makeProFakeDb();
+    seedUser(db, "fi2");
+    const f = fastifyFor(db);
+    const { workflowId, taskIdByPhase } = seedWorkflow(db, { userId: "fi2", phases: LINEAR_5, budget: { max_retry_count: 1 } });
+    // openai fails only on the "code" (implementation) operation.
+    const prov: AIProvider = {
+      name: "openai",
+      capabilities: CAPS,
+      supports: () => true,
+      async call(p) {
+        if (p.operation === "code") throw new ProviderCallError("openai", "temporary", "mid-workflow outage");
+        return { content: "ok", model: "openai-model", inputTokens: 10, outputTokens: 5, costUsd: 0, latencyMs: 1 };
+      },
+    };
+    metrics.scenarios++;
+    const last = await runToEnd(f, user("fi2"), workflowId, [prov]);
+    expect(last.workflowStatus).toBe("FAILED");
+    expect(db.state.tasks.get(taskIdByPhase.get("requirements")!)!.status).toBe("COMPLETED"); // upstream survived
+    expect(db.state.tasks.get(taskIdByPhase.get("implementation")!)!.status).toBe("FAILED");
+    expect(db.state.tasks.get(taskIdByPhase.get("synthesis")!)!.status).toBe("BLOCKED");
+    assertCleanTerminal(db, workflowId);
+  });
+
+  it("failure during a PARALLEL branch → sibling still completes, workflow reaches terminal, clean", async () => {
+    const db = makeProFakeDb();
+    seedUser(db, "fi3");
+    const f = fastifyFor(db);
+    // requirements -> (research || architecture) -> synthesis
+    const phases = [
+      { phase: "requirements", operation: "analyze", requiredCapabilities: ["reasoning"], dependsOn: [] as string[] },
+      { phase: "research", operation: "research", requiredCapabilities: ["web_research"], dependsOn: ["requirements"] },
+      { phase: "architecture", operation: "plan", requiredCapabilities: ["planning"], dependsOn: ["requirements"] },
+      { phase: "synthesis", operation: "generate", requiredCapabilities: ["synthesis"], dependsOn: ["research", "architecture"] },
+    ];
+    const { workflowId, taskIdByPhase } = seedWorkflow(db, { userId: "fi3", phases, budget: { max_retry_count: 1 } });
+    const prov: AIProvider = {
+      name: "openai",
+      capabilities: CAPS,
+      supports: () => true,
+      async call(p) {
+        if (p.operation === "research") throw new ProviderCallError("openai", "rate_limit", "branch failure");
+        return { content: "ok", model: "openai-model", inputTokens: 10, outputTokens: 5, costUsd: 0, latencyMs: 1 };
+      },
+    };
+    metrics.scenarios++;
+    const last = await runToEnd(f, user("fi3"), workflowId, [prov]);
+    expect(["FAILED"]).toContain(last.workflowStatus);
+    expect(db.state.tasks.get(taskIdByPhase.get("architecture")!)!.status).toBe("COMPLETED"); // sibling unaffected
+    expect(db.state.tasks.get(taskIdByPhase.get("synthesis")!)!.status).toBe("BLOCKED");
+    assertCleanTerminal(db, workflowId);
+  });
+
+  it("failure during REVIEW → revision BLOCKED, workflow terminal, clean", async () => {
+    const db = makeProFakeDb();
+    seedUser(db, "fi4");
+    const f = fastifyFor(db);
+    const { workflowId, taskIdByPhase } = seedWorkflow(db, {
+      userId: "fi4",
+      phases: [
+        { phase: "requirements", operation: "analyze", requiredCapabilities: ["reasoning"], dependsOn: [] },
+        { phase: "implementation", operation: "code", requiredCapabilities: ["coding"], dependsOn: ["requirements"] },
+        { phase: "review", operation: "review", requiredCapabilities: ["review"], dependsOn: ["implementation"] },
+        { phase: "revision", operation: "code", requiredCapabilities: ["coding"], dependsOn: ["implementation", "review"] },
+        { phase: "synthesis", operation: "generate", requiredCapabilities: ["synthesis"], dependsOn: ["revision"] },
+      ],
+      budget: { max_retry_count: 1 },
+    });
+    const prov: AIProvider = {
+      name: "openai", capabilities: CAPS, supports: () => true,
+      async call(p) {
+        if (p.operation === "review") throw new ProviderCallError("openai", "temporary", "reviewer down");
+        return { content: "ok", model: "openai-model", inputTokens: 10, outputTokens: 5, costUsd: 0, latencyMs: 1 };
+      },
+    };
+    metrics.scenarios++;
+    const last = await runToEnd(f, user("fi4"), workflowId, [prov]);
+    expect(last.workflowStatus).toBe("FAILED");
+    expect(db.state.tasks.get(taskIdByPhase.get("revision")!)!.status).toBe("BLOCKED");
+    assertCleanTerminal(db, workflowId);
+  });
+
+  it("failure during VERIFICATION → synthesis BLOCKED, workflow terminal, clean", async () => {
+    const db = makeProFakeDb();
+    seedUser(db, "fi5");
+    const f = fastifyFor(db);
+    const { workflowId, taskIdByPhase } = seedWorkflow(db, {
+      userId: "fi5",
+      phases: [
+        { phase: "requirements", operation: "analyze", requiredCapabilities: ["reasoning"], dependsOn: [] },
+        { phase: "implementation", operation: "code", requiredCapabilities: ["coding"], dependsOn: ["requirements"] },
+        { phase: "verification", operation: "analyze", requiredCapabilities: ["verification"], dependsOn: ["implementation"] },
+        { phase: "synthesis", operation: "generate", requiredCapabilities: ["synthesis"], dependsOn: ["verification"] },
+      ],
+      budget: { max_retry_count: 1 },
+    });
+    // requirements and verification both use the "analyze" operation — pass
+    // the 1st analyze call (requirements), throw on the 2nd (verification).
+    let analyzeCalls = 0;
+    const prov: AIProvider = {
+      name: "openai", capabilities: CAPS, supports: () => true,
+      async call(p) {
+        if (p.operation === "analyze") {
+          analyzeCalls++;
+          if (analyzeCalls >= 2) throw new ProviderCallError("openai", "temporary", "verifier down");
+        }
+        return { content: "ok", model: "openai-model", inputTokens: 10, outputTokens: 5, costUsd: 0, latencyMs: 1 };
+      },
+    };
+    metrics.scenarios++;
+    const last = await runToEnd(f, user("fi5"), workflowId, [prov]);
+    expect(last.workflowStatus).toBe("FAILED");
+    expect(db.state.tasks.get(taskIdByPhase.get("synthesis")!)!.status).toBe("BLOCKED");
+    assertCleanTerminal(db, workflowId);
+  });
+
+  it("cancellation DURING provider execution (slow call) → terminal, settled once, no over-charge", async () => {
+    for (let t = 0; t < 5; t++) {
+      const db = makeProFakeDb();
+      seedUser(db, "fi6");
+      const f = fastifyFor(db);
+      const { workflowId } = seedWorkflow(db, { userId: "fi6", phases: LINEAR_5 });
+      const slow = [scriptedProvider("openai", { kind: "ok", costUsd: 0.01, delayMs: 5 })];
+      metrics.scenarios++;
+      metrics.concurrentCalls += 2;
+      await Promise.allSettled([
+        executeWorkflowStep(f, user("fi6"), workflowId, slow),
+        cancelProWorkflow(f, user("fi6"), workflowId),
+      ]);
+      // a follow-up poll (what a real caller's loop does) settles any
+      // stranded reservation left by an in-flight step
+      await executeWorkflowStep(f, user("fi6"), workflowId, slow);
+      assertCleanTerminal(db, workflowId);
+      const consumeCount = db.state.rpcCalls.filter((n) => n === "consume_credits").length;
+      expect(consumeCount).toBeLessThanOrEqual(1);
+    }
+  });
+
+  it("retry exhaustion in a MULTI-TASK workflow → terminal, downstream blocked, clean, no stranded reservation", async () => {
+    const db = makeProFakeDb();
+    seedUser(db, "fi7");
+    const f = fastifyFor(db);
+    const { workflowId, taskIdByPhase } = seedWorkflow(db, { userId: "fi7", phases: LINEAR_5, budget: { max_retry_count: 2 } });
+    // first task always fails transiently -> exhausts retries
+    const flaky = [scriptedProvider("openai", { kind: "throw", classification: "temporary" })];
+    metrics.scenarios++;
+    const last = await runToEnd(f, user("fi7"), workflowId, flaky);
+    expect(last.workflowStatus).toBe("FAILED");
+    expect(db.state.tasks.get(taskIdByPhase.get("requirements")!)!.status).toBe("FAILED");
+    expect(db.state.tasks.get(taskIdByPhase.get("synthesis")!)!.status).toBe("BLOCKED");
+    assertCleanTerminal(db, workflowId);
+  });
+});
