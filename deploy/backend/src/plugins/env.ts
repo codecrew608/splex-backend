@@ -25,7 +25,18 @@ const envSchema = z.object({
     .pipe(z.array(z.string().url()).min(1, "FRONTEND_ORIGIN must contain at least one valid URL")),
   SUPABASE_URL: z.string().url(),
   SUPABASE_SERVICE_ROLE_KEY: z.string().min(1, "SUPABASE_SERVICE_ROLE_KEY is required"),
+  // "API 1" — the ONE OpenRouter credential Free (:free models) and
+  // Starter/Paid (cheap paid-variant models) route through today. Required.
   OPENROUTER_API_KEY: z.string().min(1, "OPENROUTER_API_KEY is required"),
+  // "API 2" — a SEPARATE OpenRouter credential reserved exclusively for
+  // SPLEX Pro. NOT wired to any routing code (this task added the slot
+  // only); Pro itself stays feature-flagged off. Free and Starter MUST
+  // NEVER reach this credential — there is deliberately no code path that
+  // reads it, and openRouterHeaders() (openrouter/client.ts) uses only
+  // OPENROUTER_API_KEY. Optional, absent today, secret-only (never a
+  // wrangler.jsonc plaintext var), same posture as the 5 Pro provider keys
+  // below. See test/free-starter-failover.test.ts for the isolation pins.
+  OPENROUTER_API_KEY_2: z.string().min(1).optional(),
   OPENROUTER_BASE_URL: z.string().url().default("https://openrouter.ai/api/v1"),
   OPENROUTER_SITE_URL: z.string().url(),
   OPENROUTER_APP_NAME: z.string().default("SPLEX"),

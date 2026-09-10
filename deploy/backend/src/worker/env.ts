@@ -18,7 +18,14 @@ const workerEnvSchema = z.object({
     .pipe(z.array(z.string().url()).min(1, "FRONTEND_ORIGIN must contain at least one valid URL")),
   SUPABASE_URL: z.string().url(),
   SUPABASE_SERVICE_ROLE_KEY: z.string().min(1, "SUPABASE_SERVICE_ROLE_KEY is required"),
+  // "API 1" — the ONE OpenRouter credential Free and Starter/Paid route
+  // through today. Required. See plugins/env.ts's identical field for the
+  // full comment (this schema is kept in sync by hand).
   OPENROUTER_API_KEY: z.string().min(1, "OPENROUTER_API_KEY is required"),
+  // "API 2" — SEPARATE OpenRouter credential reserved for SPLEX Pro only.
+  // Slot only; not wired to any routing code, Pro stays flag-off. Free and
+  // Starter must never reach it. Optional, absent today, secret-only.
+  OPENROUTER_API_KEY_2: z.string().min(1).optional(),
   OPENROUTER_BASE_URL: z.string().url().default("https://openrouter.ai/api/v1"),
   OPENROUTER_SITE_URL: z.string().url(),
   OPENROUTER_APP_NAME: z.string().default("SPLEX"),

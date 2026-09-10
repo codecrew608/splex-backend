@@ -1,6 +1,7 @@
 import type { FastifyInstance } from "fastify";
-import { isBalanceExceededError, isModelUnavailableError, isFreeModelDailyCapExceededError } from "../openrouter/client.js";
+import { isBalanceExceededError, isModelUnavailableError, isFreeModelDailyCapExceededError, isAuthError, OpenRouterError } from "../openrouter/client.js";
 import { markModelCapacityExhausted, isFairShareExceededError } from "../openrouter/capacity.js";
+import { recordOpenRouterCredentialSuccess, recordOpenRouterCredentialFailure } from "../openrouter/health.js";
 
 export type ModelOutcome = "success" | "failure" | "timeout";
 
@@ -38,6 +39,14 @@ export function recordModelOutcome(
   latencyMs?: number,
   costUsd = 0,
 ): void {
+  // G5: a successful model dispatch is also proof the API 1 credential is
+  // currently working — stamp last_success_at on openrouter_credential_health
+  // so "the key recovered" is observable. Never gated on tier/variant: a
+  // success on ANY OpenRouter model (Free :free, Starter paid, media) went
+  // through the same OPENROUTER_API_KEY.
+  if (outcome === "success") {
+    recordOpenRouterCredentialSuccess(fastify);
+  }
   runBackground(
     fastify,
     fastify.supabaseAdmin.rpc("record_model_health", {
@@ -92,6 +101,26 @@ export function recordModelFailure(
   // against, silently defeating the reactive layer).
   openrouterModelId?: string,
 ): void {
+  if (isAuthError(err)) {
+    // G2: an OpenRouter auth/credential failure (rejected or disabled key,
+    // account not authorized). Same principle as the balance branch below:
+    // every model sits behind the same credential, so this says nothing
+    // about THIS model's quality and must not be recorded against its
+    // routing health. Retrying is pointless (the loop's own
+    // isRetryableOpenRouterError already excludes 401, so it doesn't).
+    // What this DOES do: emit a distinct, loud, structured observability
+    // signal, and stamp openrouter_credential_health so a dashboard/log
+    // can see the API 1 key is the thing that broke and when it last
+    // worked. NOT a Groq-fallback trigger — an auth misconfiguration is an
+    // ops condition, not a capacity condition (see groq/fallback.ts).
+    const status = err instanceof OpenRouterError ? err.status : 401;
+    fastify.log.error(
+      { modelId, openrouterModelId, status, credential: "api1" },
+      "OPENROUTER CREDENTIAL REJECTED (API 1) — check OPENROUTER_API_KEY; not counting against model health, not falling back to Groq",
+    );
+    recordOpenRouterCredentialFailure(fastify, status, "auth");
+    return;
+  }
   if (isBalanceExceededError(err)) {
     fastify.log.warn({ modelId }, "OpenRouter balance exceeded — not counting against model health");
     return;

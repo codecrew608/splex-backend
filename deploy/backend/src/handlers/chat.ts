@@ -39,7 +39,7 @@ import { checkAndReserveCredits, settleDailyReservation, resolveCreditRejectionM
 import { consumeCredits } from "../credits/consumeCredits.js";
 import { resolveCreditGateEstimate } from "../credits/costBand.js";
 import { computeRealCost } from "../credits/realCost.js";
-import { streamCompletion, isRetryableOpenRouterError, isBalanceExceededError, isModelUnavailableError, isFreeModelDailyCapExceededError, type ChatContentPart, describeError } from "../openrouter/client.js";
+import { streamCompletion, isRetryableOpenRouterError, isBalanceExceededError, isModelUnavailableError, isFreeModelDailyCapExceededError, isAuthError, type ChatContentPart, describeError } from "../openrouter/client.js";
 import { isFairShareExceededError } from "../openrouter/capacity.js";
 import { attemptGroqFallback, isProviderBusyError } from "../groq/fallback.js";
 import { resolveMaxTokens } from "../cortex/tokenBudget.js";
@@ -819,8 +819,16 @@ export async function runChat(
           // comment) that a user sees normal product-style limit language,
           // never internal infrastructure terms.
           "You've reached today's limit for instant replies. Please try again tomorrow."
-        : isBalanceExceededError(err) || isModelUnavailableError(err) || isFreeModelDailyCapExceededError(err)
-          ? // Model-unavailable reaching here means the fallback chain was
+        : isBalanceExceededError(err) || isModelUnavailableError(err) || isFreeModelDailyCapExceededError(err) || isAuthError(err)
+          ? // G2: isAuthError reaching here means the API 1 credential was
+            // rejected — recordModelFailure has already emitted the loud
+            // "OPENROUTER CREDENTIAL REJECTED" observability signal and
+            // stamped openrouter_credential_health. The USER sees the same
+            // honest, non-specific "temporarily unavailable" as every other
+            // provider-side condition — never the word "key", "auth", or
+            // any credential detail.
+            //
+            // Model-unavailable reaching here means the fallback chain was
             // exhausted and even the LAST candidate was retired upstream —
             // an availability problem on our side, not a mystery. Say so
             // honestly rather than hiding a known cause behind the generic

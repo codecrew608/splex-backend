@@ -13,11 +13,24 @@
 -- organization-wide (not per-key), currently 1,000 requests/day and 8,000
 -- tokens/minute for the openai/gpt-oss-20b/120b family.
 --
+-- CORRECTION (2026-09-11, re-verified live): the "1,000 requests/day"
+-- above is a MISREAD. The measured header is
+-- `x-ratelimit-limit-requests: 1000` with `reset: 1m26.4s` — a rolling
+-- ~86-SECOND request window, NOT a per-day cap. Groq exposes no daily
+-- (RPD) header at all. The real sustained ceiling is token-bound (8,000
+-- per rolling window → ~7,600 typical turns/day). GROQ_TOTAL_DAILY_CAPACITY
+-- (shipped default 3,000, NOT 1,000) is therefore a SPLEX-chosen fairness
+-- ceiling, not a vendor number — see apps/backend/src/groq/capacity.ts's
+-- header for the full current analysis. Everything below still stands: an
+-- unbounded Groq funnel under load is the real risk, and this admission
+-- gate is how it's bounded.
+--
 -- WHY THIS MIGRATION EXISTS
--- That 1,000/day cap is shared across ALL of SPLEX's Groq fallback traffic,
--- org-wide — a stretch where OpenRouter's own free capacity is exhausted
--- would otherwise funnel every Free-tier request into Groq with zero
--- admission control, easily exceeding it within minutes under real load.
+-- Groq's shared org-wide limits are hit by ALL of SPLEX's Groq fallback
+-- traffic at once — a stretch where OpenRouter's own free capacity is
+-- exhausted would otherwise funnel every Free-tier request into Groq with
+-- zero admission control, exhausting the token window within minutes under
+-- real load.
 -- This mirrors migration 0054's OpenRouter capacity admission design
 -- exactly (same two-layer shape: proactive per-model + per-user counters,
 -- checked atomically before any real dispatch; reactive correction on a

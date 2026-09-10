@@ -66,13 +66,54 @@ export interface StreamCompletionResult {
 // The body is truncated and carries only what OpenRouter returned about
 // the REQUEST's failure — never the Authorization header, never the
 // prompt, never user content.
+// Parsed from OpenRouter's response headers at throw time (G3). OpenRouter
+// sends X-RateLimit-Limit / X-RateLimit-Remaining and an X-RateLimit-Reset
+// that is a unix-ms timestamp (verified: a 429 returned 1788825600000 =
+// 2026-09-08T00:00:00Z, exactly UTC midnight). resetMs below is that
+// timestamp minus now — a large positive value means "resets far away"
+// (a daily/account window), a sub-minute value means "resets almost
+// immediately" (a per-minute throttle). null = the header was absent.
+export interface RateLimitInfo {
+  limit: number | null;
+  remaining: number | null;
+  resetMs: number | null;
+}
+
+function parseRateLimit(headers: Headers | undefined): RateLimitInfo | null {
+  if (!headers?.get) return null;
+  const num = (name: string): number | null => {
+    const raw = headers.get(name);
+    if (raw == null || raw === "") return null;
+    const n = Number(raw);
+    return Number.isFinite(n) ? n : null;
+  };
+  const limit = num("x-ratelimit-limit");
+  const remaining = num("x-ratelimit-remaining");
+  const resetRaw = num("x-ratelimit-reset");
+  if (limit == null && remaining == null && resetRaw == null) return null;
+  // OpenRouter's reset is an absolute unix-ms timestamp; convert to a
+  // "how long until it resets" delta. Guard against a seconds-based value
+  // by treating anything below ~10^11 as seconds.
+  let resetMs: number | null = null;
+  if (resetRaw != null) {
+    const asMs = resetRaw < 1e11 ? resetRaw * 1000 : resetRaw;
+    resetMs = Math.max(0, asMs - Date.now());
+  }
+  return { limit, remaining, resetMs };
+}
+
 export class OpenRouterError extends Error {
   readonly status: number;
   readonly body: string;
   readonly model: string | null;
   readonly kind: "stream" | "classifier";
+  // Present only when the failing response carried X-RateLimit-* headers
+  // (G3). Lets isFreeModelDailyCapExceededError below distinguish a real
+  // daily/account exhaustion from a transient per-minute 429 even if
+  // OpenRouter rewords its error body.
+  readonly rateLimit: RateLimitInfo | null;
 
-  constructor(kind: "stream" | "classifier", status: number, body: string, model: string | null) {
+  constructor(kind: "stream" | "classifier", status: number, body: string, model: string | null, headers?: Headers) {
     // Message shape preserved EXACTLY — isRetryableOpenRouterError,
     // isBalanceExceededError and isModelUnavailableError all regex this
     // string, and existing tests assert on it.
@@ -82,6 +123,7 @@ export class OpenRouterError extends Error {
     this.body = body.slice(0, 500);
     this.model = model;
     this.kind = kind;
+    this.rateLimit = parseRateLimit(headers);
   }
 }
 
@@ -98,13 +140,16 @@ export function describeError(err: unknown): Record<string, unknown> {
       // one that was missing during the outage.
       providerBody: err.body,
       model: err.model,
+      rateLimit: err.rateLimit,
       retryable: isRetryableOpenRouterError(err),
       modelUnavailable: isModelUnavailableError(err),
       balanceExceeded: isBalanceExceededError(err),
+      authError: isAuthError(err),
+      dailyCapExceeded: isFreeModelDailyCapExceededError(err),
     };
   }
   if (err instanceof Error) {
-    return { errorName: err.name, errorMessage: err.message, errorStack: err.stack?.slice(0, 600) };
+    return { errorName: err.name, errorMessage: err.message, errorStack: err.stack?.slice(0, 600), transientNetwork: isTransientNetworkError(err) };
   }
   return { errorName: typeof err, errorMessage: String(err) };
 }
@@ -174,7 +219,7 @@ export async function streamCompletion(opts: StreamCompletionOptions): Promise<S
 
   if (!response.ok || !response.body) {
     const text = await response.text().catch(() => "");
-    throw new OpenRouterError("stream", response.status, text, model);
+    throw new OpenRouterError("stream", response.status, text, model, response.headers);
   }
 
   const reader = response.body.getReader();
@@ -346,13 +391,13 @@ export async function completeOnce(opts: {
         signal: withDeadline(opts.signal, COMPLETE_TIMEOUT_MS),
       });
     } else {
-      throw new OpenRouterError("classifier", response.status, text, model);
+      throw new OpenRouterError("classifier", response.status, text, model, response.headers);
     }
   }
 
   if (!response.ok) {
     const text = await response.text().catch(() => "");
-    throw new OpenRouterError("classifier", response.status, text, model);
+    throw new OpenRouterError("classifier", response.status, text, model, response.headers);
   }
 
   const json = (await response.json()) as {
@@ -422,8 +467,57 @@ export function isRetryableOpenRouterError(err: unknown): boolean {
     // keep going. Without this a single stale registry row aborted the
     // whole request — see isModelUnavailableError below for the live
     // incident this comes from.
-    isModelUnavailableError(err)
+    isModelUnavailableError(err) ||
+    // G4: a raw transport failure (connection reset, DNS, an upstream
+    // deadline) to OpenRouter says nothing about the NEXT candidate and
+    // clears on its own — the fallback loop should try the next model,
+    // same as a 5xx. NOT a client abort (that's handled separately and
+    // must never be retried).
+    isTransientNetworkError(err)
   );
+}
+
+// G4 — a genuine transport-level failure reaching OpenRouter (or Groq),
+// as opposed to an HTTP error response (those are OpenRouterError with a
+// status) or a client disconnect (AbortError — the user walked away, not
+// a provider fault, and must never be retried or failed over). Kept
+// deliberately tight: only the fetch/deadline failure shapes, never a
+// blanket "any Error".
+export function isTransientNetworkError(err: unknown): boolean {
+  if (!(err instanceof Error)) return false;
+  if (err.name === "AbortError") return false;
+  if (err instanceof OpenRouterError) return false; // it got an HTTP response — classify by status, not here
+  return (
+    err.name === "TimeoutError" ||
+    (err.name === "TypeError" && /fetch failed|failed to fetch|load failed|network/i.test(err.message)) ||
+    /ECONNRESET|ECONNREFUSED|ETIMEDOUT|EAI_AGAIN|socket hang up|network error|terminated/i.test(err.message)
+  );
+}
+
+// G2 — an authentication / credential / configuration failure from
+// OpenRouter (a rejected or disabled API key, an account-not-authorized
+// state). Distinct from every other class: retrying cannot help (every
+// model sits behind the same credential), and it must NOT be laundered
+// into per-model health data (same principle as the 402 branch in
+// recordModelFailure) — it is an account-level ops condition, surfaced as
+// its own observability signal, never a Groq-fallback trigger (an auth
+// misconfiguration is not a capacity condition).
+//
+// 401 is always auth. 403 is only auth when the body clearly points at
+// the key/account rather than a specific model — the existing
+// isModelAccessDeniedError handles the model-scoped 403 ("only available
+// on agentic harnesses") and must keep its retry-next-candidate behavior.
+export function isAuthError(err: unknown): boolean {
+  if (!(err instanceof Error)) return false;
+  if (/OpenRouter (request|classifier request) failed \(401\)/.test(err.message)) return true;
+  if (
+    /OpenRouter (request|classifier request) failed \(403\)/.test(err.message) &&
+    /no auth credentials|invalid api key|api key|expired token|disabled|user not found|not authori[sz]ed|unauthori[sz]ed|account.*(suspend|blocked)/i.test(err.message) &&
+    !/only available on|no endpoints/i.test(err.message)
+  ) {
+    return true;
+  }
+  return false;
 }
 
 // FIX (live bug, reproduced 2026-09-04): resolveClassifierModel's three
@@ -523,9 +617,26 @@ export function isBalanceExceededError(err: unknown): boolean {
 // handling, by design: from the caller's point of view a pre-emptively
 // denied dispatch and a live 429 from OpenRouter itself are the same
 // event, just caught one network round trip earlier.
+//
+// G3: also true when the 429 response's OWN rate-limit headers say the
+// window is genuinely daily/account-scoped. Deliberately NOT "remaining:0
+// alone" — a per-minute throttle can also report remaining:0, and marking
+// a model day-long-exhausted for that would recreate exactly the
+// regression groq/capacity.ts's removal note documents. It counts as a
+// daily cap only when the reset is far away (a per-minute window clears
+// in seconds; the verified real free-models-per-day 429 carried a reset
+// pointing at UTC midnight), OR when a reset is far away regardless of the
+// remaining count. This keeps the per-model exhaustion marking correct
+// even if OpenRouter rewords its error body away from "free-models-per-day".
+const DAILY_RESET_MIN_MS = 10 * 60_000;
 export function isFreeModelDailyCapExceededError(err: unknown): boolean {
   if (!(err instanceof OpenRouterError)) return false;
-  return err.status === 429 && /free-models-per-day|provider_capacity_exhausted/.test(err.body);
+  if (err.status !== 429) return false;
+  if (/free-models-per-day|provider_capacity_exhausted/.test(err.body)) return true;
+  const rl = err.rateLimit;
+  if (!rl || rl.resetMs == null) return false;
+  const resetIsFarAway = rl.resetMs >= DAILY_RESET_MIN_MS;
+  return resetIsFarAway && (rl.remaining === 0 || rl.remaining == null);
 }
 
 // Binary media endpoints (currently /audio/speech) return raw bytes with no

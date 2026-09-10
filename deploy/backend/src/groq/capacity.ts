@@ -2,12 +2,28 @@ import type { FastifyInstance } from "fastify";
 import type { PlanTier } from "../shared-types.js";
 import { GroqError } from "./client.js";
 
-// Admission control for Groq's fallback-model daily capacity — see
-// db/migrations/0056's header comment for what was verified live before
-// this was designed (the key is a genuine Groq — not xAI Grok — key;
-// Groq's free tier is real but organization-wide, currently 1,000
-// requests/day for the openai/gpt-oss family, confirmed via a live probe
-// against the actual account, not assumed from documentation alone).
+// Admission control for the Groq fallback model's SPLEX-SIDE daily budget.
+//
+// WHAT GROQ ACTUALLY LIMITS (measured live against this exact key —
+// 2026-09-07 and re-confirmed 2026-09-11, openai/gpt-oss-120b, HTTP 200):
+//   x-ratelimit-limit-requests: 1000   reset: 1m26.4s   (rolling ~86s window)
+//   x-ratelimit-limit-tokens:   8000   reset: <1s       (rolling token window)
+// There is NO x-ratelimit-*-day / RPD header — Groq's free developer tier
+// (genuine: no card, no per-token charge) publishes no hard daily request
+// cap. The "1,000" is a per-~86-second REQUEST window, not a day, and the
+// binding real-world constraint is the token window: at a typical
+// ~1,500-token turn, ~5 turns clear per window → ~7,600 turns/day
+// theoretical sustained throughput.
+//
+// GROQ_TOTAL_DAILY_CAPACITY is therefore a SPLEX-CHOSEN fairness/sanity
+// ceiling, not a vendor number — its only jobs are (a) sit safely under
+// the real ~7,600/day throughput ceiling and (b) never itself become the
+// limit that caps a user below their ADVERTISED entitlement. The shipped
+// default 3,000 satisfies both; an earlier 1,000 (a misread of the
+// rolling-window header as "per day") violated (b) — it capped Free at 26
+// Groq messages/day against a promised 50, and a real user hit exactly
+// that. See db/migrations/0056's header for the original account
+// identification (Groq, Inc. — not xAI Grok — confirmed by both APIs).
 //
 // EXTENDED to serve BOTH tiers (previously Free-only) at the user's
 // explicit direction: Paid dispatch failures today are almost entirely 402
@@ -55,21 +71,26 @@ interface TierBudget {
   perUserDailyCap: number;
 }
 
-// Splits ONE real, shared Groq daily ceiling into two independent tier
-// budgets that can never together exceed it — deriving both from the same
-// total rather than configuring them separately, which is what would let
-// them silently sum past the real account limit.
+// Splits ONE SPLEX-side shared Groq daily budget into two independent tier
+// slices that can never together exceed it — deriving both from the same
+// total (free = bufferedTotal - paidSlice) rather than configuring them
+// separately, which is what would let them silently sum past the ceiling.
 //
-// Defaults (all explicitly policy choices, not measured facts, exactly
-// like OPENROUTER_PER_USER_SHARE_PCT's own doc comment says of itself):
-//   GROQ_TOTAL_DAILY_CAPACITY   1000  — verified live account limit
-//   GROQ_SAFETY_BUFFER_PCT      20%   — buffered total: 800/day
-//   GROQ_PAID_SHARE_PCT         35%   — Paid's slice: ~280/day
-//   (Free gets the remaining 65%: ~520/day)
+// Defaults (all policy choices, not vendor facts — see this file's header
+// for why GROQ_TOTAL_DAILY_CAPACITY is a SPLEX-chosen number, Groq
+// publishing no daily cap). Worked against the SHIPPED default 3,000:
+//   GROQ_TOTAL_DAILY_CAPACITY   3000  — SPLEX fairness ceiling (< ~7,600/day real throughput)
+//   GROQ_SAFETY_BUFFER_PCT      20%   — buffered total: 2,400/day
+//   GROQ_PAID_SHARE_PCT         35%   — Paid's slice: ~840/day
+//   (Free gets the remaining 65%: ~1,560/day)
 //   GROQ_PER_USER_SHARE_PCT        5% (of Free's slice) — many Free users
 //   GROQ_PER_USER_SHARE_PCT_PAID  25% (of Paid's slice) — far fewer Paid
 //     users expected, and losing service for a paying customer costs more,
 //     so each one is guaranteed a much larger individual share.
+// Both tier caps stay well above the advertised entitlements (Free 50/day,
+// Starter 75/day), so this counter never becomes the binding limit on
+// what SPLEX promises — the per-user clamp below (against plan_limits'
+// daily_requests) enforces that explicitly too.
 export async function resolveTierBudget(fastify: FastifyInstance, planTier: PlanTier): Promise<TierBudget> {
   const bufferedTotal = Math.max(
     1,
