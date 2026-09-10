@@ -520,3 +520,91 @@ describe("SPLEX Pro — unlaunched, and the disablement is enforced server-side 
     }
   });
 });
+
+describe("Prompt Optimizer — Pro-only by explicit product decision (source-level)", () => {
+  it("handlers/chat.ts only calls maybeOptimizePrompt inside an explicit planTier === 'pro' guard", () => {
+    const src = read("handlers/chat.ts");
+    const guardIdx = src.indexOf('if (user.planTier === "pro") {');
+    const callIdx = src.indexOf("await maybeOptimizePrompt({");
+    expect(guardIdx).toBeGreaterThan(-1);
+    expect(callIdx).toBeGreaterThan(guardIdx);
+    // Close enough together that the call is inside THIS guard, not some
+    // later unrelated one — the whole block is ~15 lines.
+    expect(callIdx - guardIdx).toBeLessThan(600);
+  });
+
+  it("the optimizer call site is skipped entirely when an image is attached — never fed a ChatContentPart[] as if it were a string", () => {
+    const src = read("handlers/chat.ts");
+    const block = src.slice(src.indexOf('if (user.planTier === "pro") {'), src.indexOf("let model = modelCandidates[0];"));
+    expect(block).toContain('typeof lastMessage.content === "string"');
+  });
+
+  it("no new feature flag exists for this — it reuses SPLEX_PRO_ENABLED via isProEnabled, the same single source of truth as every other pro/ surface", () => {
+    const src = read("optimizer/index.ts");
+    expect(src).toContain('import { isProEnabled } from "../pro/gate.js";');
+    expect(src).toContain("if (!isProEnabled(fastify))");
+    expect(src).not.toMatch(/PROMPT_OPTIMIZER_ENABLED/);
+  });
+
+  it("isPlanTierEligibleForOptimization is the FIRST check in maybeOptimizePrompt, before the flag, before Layer A, before any DB call", () => {
+    const src = read("optimizer/index.ts");
+    const fnStart = src.indexOf("export async function maybeOptimizePrompt(");
+    const eligibleIdx = src.indexOf("isPlanTierEligibleForOptimization(planTier)");
+    const flagIdx = src.indexOf("isProEnabled(fastify)");
+    const detIdx = src.indexOf("applyDeterministicOptimization(protectedText)");
+    expect(eligibleIdx).toBeGreaterThan(fnStart);
+    expect(flagIdx).toBeGreaterThan(eligibleIdx);
+    expect(detIdx).toBeGreaterThan(flagIdx);
+  });
+
+  it("only 'pro' is eligible — 'free' and 'starter' are both excluded explicitly, not by a default-else", () => {
+    const src = read("optimizer/decision.ts");
+    expect(src).toContain('return planTier === "pro";');
+  });
+
+  it("the optimizer's own model resolver never returns the paid model for a free-tier caller, mirroring classifierModel.ts exactly", () => {
+    const src = read("optimizer/model.ts");
+    const guardAt = src.indexOf('if (planTier !== "free")');
+    const paidAt = src.indexOf("return [fastify.config.PROMPT_OPTIMIZER_MODEL_ID];");
+    expect(guardAt).toBeGreaterThan(-1);
+    expect(paidAt).toBeGreaterThan(guardAt);
+    expect(paidAt - guardAt).toBeLessThan(80);
+  });
+
+  it("a registry error on the free-tier lookup yields an empty list, never the paid model — same invariant as resolveClassifierModel", () => {
+    const src = read("optimizer/model.ts");
+    const errBranch = src.slice(src.indexOf("if (error || !data || data.length === 0)"));
+    expect(errBranch.slice(0, 400)).toContain("return [];");
+    expect(errBranch.slice(0, errBranch.indexOf("return [];"))).not.toContain("PROMPT_OPTIMIZER_MODEL_ID");
+  });
+
+  it("PROMPT_OPTIMIZER_MODEL_ID is independently configurable, not hardcoded to CORTEX_CLASSIFIER_MODEL_ID (spec item 23)", () => {
+    for (const f of ["plugins/env.ts", "worker/env.ts"]) {
+      expect(read(f)).toContain("PROMPT_OPTIMIZER_MODEL_ID: z.string().min(1)");
+    }
+  });
+
+  it("validation failure and negligible-savings both fall back to deterministic-only text, never the unvalidated/uneconomical semantic output", () => {
+    const src = read("optimizer/index.ts");
+    const validationBranch = src.slice(src.indexOf("if (!validation.passed) {"), src.indexOf("const optimizedTokensEst = estimateTokens(restoredFinalText);"));
+    expect(validationBranch).toContain("deterministicOnlyOutcome(");
+    expect(validationBranch).not.toContain("text: restoredFinalText");
+  });
+
+  it("protected content is extracted from the RAW original before Layer A runs, before the semantic call, and restored after", () => {
+    // Ordering regression test for a real bug this session found live:
+    // extracting AFTER Layer A's whitespace normalization let that pass
+    // collapse significant whitespace (e.g. Python indentation) inside a
+    // code block before it was ever protected. Extraction must be the
+    // very first thing that happens to the raw text.
+    const src = read("optimizer/index.ts");
+    const extractIdx = src.indexOf("extractProtectedContent(text)");
+    const deterministicIdx = src.indexOf("applyDeterministicOptimization(protectedText)");
+    const semanticIdx = src.indexOf("runSemanticOptimization(");
+    const restoreIdx = src.indexOf("restoreProtectedContent(semanticResult.output, spans)");
+    expect(extractIdx).toBeGreaterThan(-1);
+    expect(deterministicIdx).toBeGreaterThan(extractIdx);
+    expect(semanticIdx).toBeGreaterThan(deterministicIdx);
+    expect(restoreIdx).toBeGreaterThan(semanticIdx);
+  });
+});

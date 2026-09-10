@@ -192,6 +192,7 @@ OPENROUTER_BASE_URL=https://openrouter.ai/api/v1
 OPENROUTER_SITE_URL=
 OPENROUTER_APP_NAME=SPLEX
 CORTEX_CLASSIFIER_MODEL_ID=
+PROMPT_OPTIMIZER_MODEL_ID=qwen/qwen-2.5-72b-instruct
 CREDITS_PER_USD=120000
 GROQ_API_KEY=
 GROQ_BASE_URL=https://api.groq.com/openai/v1
@@ -285,6 +286,7 @@ cat > "$OUT/wrangler.jsonc" <<'EOF'
     "OPENROUTER_SITE_URL": "https://splex-ai.vercel.app",
     "OPENROUTER_APP_NAME": "SPLEX",
     "CORTEX_CLASSIFIER_MODEL_ID": "qwen/qwen-2.5-72b-instruct",
+    "PROMPT_OPTIMIZER_MODEL_ID": "qwen/qwen-2.5-72b-instruct",
     "CREDITS_PER_USD": "120000",
     // OpenRouter free-model capacity admission control (migration 0054).
     // 50 is the CURRENTLY VERIFIED live value (X-RateLimit-Limit on the
@@ -351,6 +353,7 @@ OPENROUTER_BASE_URL=https://openrouter.ai/api/v1
 OPENROUTER_SITE_URL=http://localhost:3000
 OPENROUTER_APP_NAME=SPLEX
 CORTEX_CLASSIFIER_MODEL_ID=
+PROMPT_OPTIMIZER_MODEL_ID=qwen/qwen-2.5-72b-instruct
 CREDITS_PER_USD=120000
 GROQ_API_KEY=
 GROQ_BASE_URL=https://api.groq.com/openai/v1

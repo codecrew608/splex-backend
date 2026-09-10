@@ -50,6 +50,7 @@
     "OPENROUTER_SITE_URL": "https://splex-ai.vercel.app",
     "OPENROUTER_APP_NAME": "SPLEX",
     "CORTEX_CLASSIFIER_MODEL_ID": "qwen/qwen-2.5-72b-instruct",
+    "PROMPT_OPTIMIZER_MODEL_ID": "qwen/qwen-2.5-72b-instruct",
     "CREDITS_PER_USD": "120000",
     // OpenRouter free-model capacity admission control (migration 0054).
     // 50 is the CURRENTLY VERIFIED live value (X-RateLimit-Limit on the

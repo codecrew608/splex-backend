@@ -114,18 +114,27 @@ describe("every provider call site derives its model from a tier-guarded source"
   // uses for indirection (pin the known callers' exact call shape, then a
   // whole-tree sweep so an UNDOCUMENTED new caller can't silently satisfy
   // this suite by never being checked at all).
-  it("completeOnceWithFallback's candidate list always comes from the tier-guarded resolver", () => {
+  it("completeOnceWithFallback's candidate list always comes from a tier-guarded resolver", () => {
+    // Third element is the resolver function name — resolveClassifierModelCandidates
+    // for everything routing through the classifier's own model pool, or
+    // resolveOptimizerModelCandidates for the Prompt Optimizer's independent
+    // pool (its own PROMPT_OPTIMIZER_MODEL_ID rather than
+    // CORTEX_CLASSIFIER_MODEL_ID — see optimizer/model.ts's own header for
+    // why it's a separate resolver rather than a shared one). Either
+    // resolver mirrors the exact same free/paid isolation shape; which one
+    // a given caller uses is a wiring detail, not a weaker guarantee.
     const KNOWN_CALLERS = [
-      ["cortex/classify.ts", "classifierCandidates"],
-      ["cortex/workflow/plan.ts", "plannerCandidates"],
-      ["memory/extractMemory.ts", "memoryModelCandidates"],
-      ["cortex/followUpSuggestions.ts", "candidates"],
+      ["cortex/classify.ts", "classifierCandidates", "resolveClassifierModelCandidates"],
+      ["cortex/workflow/plan.ts", "plannerCandidates", "resolveClassifierModelCandidates"],
+      ["memory/extractMemory.ts", "memoryModelCandidates", "resolveClassifierModelCandidates"],
+      ["cortex/followUpSuggestions.ts", "candidates", "resolveClassifierModelCandidates"],
+      ["optimizer/semantic.ts", "optimizerCandidates", "resolveOptimizerModelCandidates"],
     ] as const;
 
-    for (const [file, varName] of KNOWN_CALLERS) {
+    for (const [file, varName, resolverFn] of KNOWN_CALLERS) {
       const src = read(file);
-      expect(src, `${file} must declare ${varName} from the tier-guarded resolver`).toContain(
-        `const ${varName} = await resolveClassifierModelCandidates(fastify, planTier);`,
+      expect(src, `${file} must declare ${varName} from a tier-guarded resolver`).toContain(
+        `const ${varName} = await ${resolverFn}(fastify, planTier);`,
       );
       expect(src, `${file} must pass ${varName} straight into completeOnceWithFallback`).toContain(
         `completeOnceWithFallback(fastify, ${varName}, {`,

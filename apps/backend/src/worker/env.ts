@@ -23,6 +23,9 @@ const workerEnvSchema = z.object({
   OPENROUTER_SITE_URL: z.string().url(),
   OPENROUTER_APP_NAME: z.string().default("SPLEX"),
   CORTEX_CLASSIFIER_MODEL_ID: z.string().min(1),
+  // Prompt Optimizer's semantic-layer model (Pro-tier only) — see
+  // plugins/env.ts's identical field for the full rationale.
+  PROMPT_OPTIMIZER_MODEL_ID: z.string().min(1).default("qwen/qwen-2.5-72b-instruct"),
   CREDITS_PER_USD: z.coerce.number().positive().default(120_000),
   // --- OpenRouter free-model capacity admission control (migration 0054) ---
   //

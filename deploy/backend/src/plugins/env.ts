@@ -30,6 +30,13 @@ const envSchema = z.object({
   OPENROUTER_SITE_URL: z.string().url(),
   OPENROUTER_APP_NAME: z.string().default("SPLEX"),
   CORTEX_CLASSIFIER_MODEL_ID: z.string().min(1),
+  // Which model runs the Prompt Optimizer's semantic (Layer B) compression
+  // call for Pro-tier requests — see optimizer/model.ts. Independently
+  // configurable from CORTEX_CLASSIFIER_MODEL_ID (spec item 23: "never
+  // hardcode a single provider permanently"), defaulted to the same model
+  // since both are cheap, reliable, structured-output-friendly internal
+  // calls with an identical cost profile.
+  PROMPT_OPTIMIZER_MODEL_ID: z.string().min(1).default("qwen/qwen-2.5-72b-instruct"),
   // SPLEX Credits <-> USD conversion rate. Deliberately NOT a token=credit
   // mapping — see credits/realCost.ts. Tunable without changing what users see.
   CREDITS_PER_USD: z.coerce.number().positive().default(120_000),

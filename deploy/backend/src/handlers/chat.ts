@@ -48,6 +48,7 @@ import { retrieveFileContext } from "../intelligence/retrieve.js";
 import { shouldUseWorkflow } from "../cortex/workflow/trigger.js";
 import { getActiveWorkflow, cancelActiveWorkflow, startWorkflow, resumeWorkflow } from "../cortex/workflow/orchestrator.js";
 import { recordModelOutcome, recordModelFailure } from "../cortex/modelHealth.js";
+import { maybeOptimizePrompt } from "../optimizer/index.js";
 import { generateFollowUpSuggestions } from "../cortex/followUpSuggestions.js";
 import { generateImage } from "../images/generate.js";
 import { generateSpeech, estimateAudioRequestMinutes, MAX_AUDIO_MINUTES_PER_REQUEST } from "../audio/generate.js";
@@ -581,6 +582,31 @@ export async function runChat(
           { type: "text", text: lastMessage.content },
           ...imageParts.map((url): ChatContentPart => ({ type: "image_url", image_url: { url } })),
         ];
+      }
+    }
+
+    // Prompt Optimizer — Pro-tier only (explicit product decision, not an
+    // engineering default: see optimizer/decision.ts's own doc comment).
+    // Compresses THIS turn's message only, never history/memory/system
+    // prompt above. Skipped outright when an image is attached
+    // (lastMessage.content is then a ChatContentPart[], not a string) —
+    // multimodal content is a documented gap for this pass, not silently
+    // mishandled. Runs after model selection (model-aware, per spec item
+    // 7) and reuses the SAME SPLEX_PRO_ENABLED flag pro/gate.ts already
+    // gates every other Pro surface with, rather than a second flag.
+    if (user.planTier === "pro") {
+      const lastMessage = completionMessages[completionMessages.length - 1];
+      if (typeof lastMessage.content === "string") {
+        const optimization = await maybeOptimizePrompt({
+          fastify,
+          planTier: user.planTier,
+          userId: user.id,
+          messageId: assistantMessageId,
+          text: lastMessage.content,
+          targetModel: modelCandidates[0],
+          signal: abortController.signal,
+        });
+        lastMessage.content = optimization.text;
       }
     }
 
