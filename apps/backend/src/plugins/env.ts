@@ -124,6 +124,21 @@ const envSchema = z.object({
   // far fewer of them are expected, and losing service for a paying
   // customer costs more than for a Free one.
   GROQ_PER_USER_SHARE_PCT_PAID: z.coerce.number().min(0.1).max(100).default(25),
+  // --- SPLEX Pro (₹799/month, multi-AI collaboration) — NOT LAUNCHED ---
+  //
+  // Single source of truth for whether Pro is reachable at all. Defaults
+  // to false so a fresh deploy — this one included — never ships Pro
+  // active by accident; someone has to deliberately flip it. Every Pro
+  // route/handler calls pro/gate.ts's assertProEnabled(), which reads
+  // this and refuses BEFORE touching any pro_* table, regardless of the
+  // caller's plan_tier — this is the backend enforcement item 31/32 asks
+  // for specifically because "the frontend must never control... without
+  // backend authorization", and a hidden button is not that.
+  SPLEX_PRO_ENABLED: z
+    .string()
+    .optional()
+    .transform((v) => v === "true")
+    .pipe(z.boolean()),
   // Local FastAPI sidecar — Tesseract OCR + BGE-small embeddings. See
   // services/intelligence/main.py.
   INTELLIGENCE_SERVICE_URL: z.string().url().default("http://127.0.0.1:8100"),

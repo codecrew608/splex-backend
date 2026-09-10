@@ -1,6 +1,7 @@
 import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import { isNextInternalControlFlowError } from "@/lib/supabase/env";
+import { fetchProStatus } from "@/lib/proStatus";
 import { LandingPage } from "@/components/landing/LandingPage";
 
 export default async function RootPage() {
@@ -28,9 +29,16 @@ export default async function RootPage() {
   // before asking for credentials.
   if (user) redirect("/chat");
 
+  // Fetched server-side (not in the client LandingPage component) so the
+  // Pro section never flashes a fallback before real data arrives, and so
+  // a slow/unreachable backend can't add a client-side waterfall to a
+  // marketing page's first paint — fetchProStatus's own fallback keeps
+  // this from ever failing the page.
+  const proStatus = await fetchProStatus();
+
   // The 500ms splash floor that used to live here is gone with the
   // redirect it existed to justify — app/loading.tsx still covers the
   // genuine wait, and deliberately delaying a page that now renders real
   // content would just be a slower first paint.
-  return <LandingPage />;
+  return <LandingPage proStatus={proStatus} />;
 }

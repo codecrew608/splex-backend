@@ -64,6 +64,13 @@ const workerEnvSchema = z.object({
   GROQ_PAID_SHARE_PCT: z.coerce.number().min(0).max(100).default(35),
   GROQ_PER_USER_SHARE_PCT: z.coerce.number().min(0.1).max(100).default(5),
   GROQ_PER_USER_SHARE_PCT_PAID: z.coerce.number().min(0.1).max(100).default(25),
+  // SPLEX Pro (₹799/month) — NOT LAUNCHED. Same schema and rationale as
+  // the Fastify plugin above; see that file for the full comment.
+  SPLEX_PRO_ENABLED: z
+    .string()
+    .optional()
+    .transform((v) => v === "true")
+    .pipe(z.boolean()),
   // Optional here (unlike the Fastify schema, which defaults to a
   // loopback URL) — on Workers there is no "same machine" to default to;
   // an unset value means the intelligence service is genuinely

@@ -23,6 +23,11 @@ export const RATE_LIMITS = {
   billing_cancel: { max: 5, windowMs: 60_000 },
   billing_create_subscription: { max: 5, windowMs: 60_000 },
   media_status: { max: 30, windowMs: 60_000 },
+  // SPLEX Pro — not launched. Low ceiling is intentional: this route is
+  // refused (403) before it does any real work while SPLEX_PRO_ENABLED is
+  // false, so the limit only matters as a floor against probing, not
+  // against real usage that doesn't exist yet.
+  pro_create_workflow: { max: 10, windowMs: 60_000 },
   feedback_submit: { max: 10, windowMs: 60_000 },
 } as const;
 

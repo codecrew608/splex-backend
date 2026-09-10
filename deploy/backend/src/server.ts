@@ -16,6 +16,7 @@ import accountRoutes from "./routes/account.js";
 import mediaRoutes from "./routes/media.js";
 import entitlementsRoutes from "./routes/entitlements.js";
 import feedbackRoutes from "./routes/feedback.js";
+import proRoutes from "./routes/pro.js";
 
 async function main() {
   const fastify = Fastify({
@@ -62,6 +63,7 @@ async function main() {
   await fastify.register(mediaRoutes);
   await fastify.register(entitlementsRoutes);
   await fastify.register(feedbackRoutes);
+  await fastify.register(proRoutes);
 
   await fastify.listen({ port: fastify.config.PORT, host: "0.0.0.0" });
 }

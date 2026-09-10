@@ -20,6 +20,7 @@ import {
 } from "./routes/account.js";
 import { handleMediaStatus } from "./routes/media.js";
 import { handleGetEntitlements } from "./routes/entitlements.js";
+import { handleGetProStatus, handleCreateProWorkflowWorker } from "./routes/pro.js";
 import { handleSubmitFeedback } from "./routes/feedback.js";
 import type { AuthedUser } from "../types/index.js";
 import { describeError } from "../openrouter/client.js";
@@ -189,6 +190,22 @@ async function route(request: Request, ctx: WorkerCtx, execCtx: ExecutionContext
     const auth = await requireAuth(request, ctx);
     if (auth instanceof Response) return auth;
     return handleGetEntitlements(ctx, auth);
+  }
+
+  // SPLEX Pro — not launched. /pro/status is deliberately unauthenticated
+  // (see handlers/pro.ts's own comment); /pro/workflows requires auth AND
+  // rate limiting like every other write route, then is refused by
+  // assertProAccess inside the shared handler regardless of who's asking.
+  if (method === "GET" && pathname === "/pro/status") {
+    return handleGetProStatus(ctx);
+  }
+
+  if (method === "POST" && pathname === "/pro/workflows") {
+    const auth = await requireAuth(request, ctx);
+    if (auth instanceof Response) return auth;
+    const limited = await requireRateLimit(ctx, "pro_create_workflow", auth.id);
+    if (limited) return limited;
+    return handleCreateProWorkflowWorker(request, ctx, auth);
   }
 
   if (method === "POST" && pathname === "/feedback") {

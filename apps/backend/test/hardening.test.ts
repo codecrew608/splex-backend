@@ -460,3 +460,63 @@ describe("accuracy verification wiring (source-level)", () => {
     expect(completionIdx).toBeGreaterThan(appendIdx);
   });
 });
+
+describe("SPLEX Pro — unlaunched, and the disablement is enforced server-side (source-level)", () => {
+  it("/pro/status is unauthenticated on BOTH runtimes — the one surface that must be reachable while everything else is gated", () => {
+    const fastifyRoutes = read("routes/pro.ts");
+    const workerIndex = read("worker/index.ts");
+    expect(fastifyRoutes).toMatch(/fastify\.get\(\s*"\/pro\/status"/);
+    // No preHandler array precedes the /pro/status registration.
+    const statusIdx = fastifyRoutes.indexOf('"/pro/status"');
+    const preHandlerIdx = fastifyRoutes.indexOf("preHandler");
+    expect(preHandlerIdx === -1 || preHandlerIdx > statusIdx).toBe(true);
+    const workerStatusBlock = workerIndex.slice(
+      workerIndex.indexOf('pathname === "/pro/status"'),
+      workerIndex.indexOf('pathname === "/pro/workflows"'),
+    );
+    expect(workerStatusBlock).not.toContain("requireAuth");
+  });
+
+  it("/pro/workflows requires auth AND rate limiting on BOTH runtimes — never reachable unauthenticated", () => {
+    const fastifyRoutes = read("routes/pro.ts");
+    const workerIndex = read("worker/index.ts");
+    expect(fastifyRoutes).toMatch(/fastify\.authenticate/);
+    expect(fastifyRoutes).toMatch(/rateLimitByUser\("pro_create_workflow"/);
+    const workerWorkflowsBlock = workerIndex.slice(workerIndex.indexOf('pathname === "/pro/workflows"'));
+    expect(workerWorkflowsBlock).toContain("requireAuth");
+    expect(workerWorkflowsBlock).toContain('requireRateLimit(ctx, "pro_create_workflow"');
+  });
+
+  it("assertProAccess is the FIRST statement in handleCreateProWorkflow — before body parsing, before any DB call", () => {
+    const src = read("handlers/pro.ts");
+    const fnStart = src.indexOf("export async function handleCreateProWorkflow(");
+    const gateIdx = src.indexOf("assertProAccess(fastify, user)");
+    const objectiveIdx = src.indexOf("const objective =");
+    const createIdx = src.indexOf("await createProWorkflow(");
+    expect(gateIdx).toBeGreaterThan(fnStart);
+    expect(objectiveIdx).toBeGreaterThan(gateIdx);
+    expect(createIdx).toBeGreaterThan(objectiveIdx);
+  });
+
+  it("createProWorkflow itself also calls assertProAccess — the orchestrator never trusts a caller to have gated already", () => {
+    const src = read("pro/orchestrator.ts");
+    expect(src).toContain("assertProAccess(fastify, user)");
+  });
+
+  it("no real provider adapter is wired into the Pro registry — every one is the unconnected stub (item 38: no real spend while unlaunched)", () => {
+    const providers = read("pro/providers.ts");
+    for (const name of ["OPENAI", "ANTHROPIC", "GEMINI", "PERPLEXITY", "XAI"]) {
+      expect(providers).toMatch(new RegExp(`export const ${name}_PROVIDER: AIProvider = unconnectedProvider\\(`));
+    }
+  });
+
+  it("SPLEX_PRO_ENABLED defaults to false in both runtime env schemas — an absent env var never accidentally enables Pro", () => {
+    for (const f of ["plugins/env.ts", "worker/env.ts"]) {
+      const src = read(f);
+      const fieldIdx = src.indexOf("SPLEX_PRO_ENABLED");
+      expect(fieldIdx).toBeGreaterThan(-1);
+      const nearby = src.slice(fieldIdx, fieldIdx + 200);
+      expect(nearby).toMatch(/v === "true"/);
+    }
+  });
+});

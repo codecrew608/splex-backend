@@ -201,6 +201,7 @@ GROQ_SAFETY_BUFFER_PCT=20
 GROQ_PAID_SHARE_PCT=35
 GROQ_PER_USER_SHARE_PCT=5
 GROQ_PER_USER_SHARE_PCT_PAID=25
+SPLEX_PRO_ENABLED=false
 INTELLIGENCE_SERVICE_URL=
 INTELLIGENCE_SERVICE_TOKEN=
 LOG_LEVEL=info
@@ -320,6 +321,13 @@ cat > "$OUT/wrangler.jsonc" <<'EOF'
     "GROQ_PAID_SHARE_PCT": "35",
     "GROQ_PER_USER_SHARE_PCT": "5",
     "GROQ_PER_USER_SHARE_PCT_PAID": "25",
+    // SPLEX Pro (₹799/month) — NOT LAUNCHED. Explicit "false" string, not
+    // an absent var: Cloudflare vars are always strings, and an absent
+    // value would ALSO parse as disabled (SPLEX_PRO_ENABLED's schema
+    // treats anything but the literal string "true" as false), but
+    // writing it out means a future "enable Pro" change is a one-line
+    // diff here, not a var someone has to remember to add.
+    "SPLEX_PRO_ENABLED": "false",
     // Not secret — a plan identifier. RAZORPAY_WEBHOOK_SECRET stays
     // `wrangler secret put` only, same rule as SUPABASE_SERVICE_ROLE_KEY
     // above — never add it here.
@@ -352,6 +360,7 @@ GROQ_SAFETY_BUFFER_PCT=20
 GROQ_PAID_SHARE_PCT=35
 GROQ_PER_USER_SHARE_PCT=5
 GROQ_PER_USER_SHARE_PCT_PAID=25
+SPLEX_PRO_ENABLED=false
 INTELLIGENCE_SERVICE_URL=
 INTELLIGENCE_SERVICE_TOKEN=
 LOG_LEVEL=info

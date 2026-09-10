@@ -3,7 +3,7 @@
 import { useRef, type MouseEvent, type ReactNode } from "react";
 import Link from "next/link";
 import { motion, useMotionTemplate, useReducedMotion, useScroll, useSpring, useTransform, type Variants } from "framer-motion";
-import { ArrowRight, Check, Cpu, GitBranch, Receipt, Wallet } from "lucide-react";
+import { ArrowRight, Check, Cpu, GitBranch, Receipt, Sparkles, Wallet } from "lucide-react";
 import { Logo } from "@/components/ui/Logo";
 import { ThemeToggle } from "@/components/ui/ThemeToggle";
 import { RoutingDemo } from "./RoutingDemo";
@@ -170,7 +170,22 @@ function TiltCard({
   );
 }
 
-export function LandingPage() {
+// Pulled live from GET /pro/status (fetched server-side in app/page.tsx,
+// not here) — same reasoning as /upgrade's plan numbers: this app already
+// shipped stale marketing copy once. Pro is NOT launched; this section is
+// a teaser only — no pricing CTA, no checkout, matching the "Coming Soon"
+// card on /upgrade (backend pro/gate.ts is the actual, independent
+// enforcement this copy can't get ahead of either way).
+interface LandingPageProps {
+  proStatus: {
+    enabled: boolean;
+    priceInrPerMonth: number;
+    monthlyCredits: number;
+    engineName: string;
+  };
+}
+
+export function LandingPage({ proStatus }: LandingPageProps) {
   const reduceMotion = useReducedMotion();
   const heroRef = useRef<HTMLElement>(null);
 
@@ -255,6 +270,11 @@ export function LandingPage() {
   const { scrollYProgress: pricingProgress } = useScroll({ target: pricingRef, offset: ["start end", "end start"] });
   const pricingGlowY = useTransform(pricingProgress, [0, 1], [-60, 60]);
   const pricingGlowScale = useTransform(pricingProgress, [0, 0.5, 1], [0.9, 1.1, 0.9]);
+
+  const proRef = useRef<HTMLElement>(null);
+  const { scrollYProgress: proProgress } = useScroll({ target: proRef, offset: ["start end", "end start"] });
+  const proGlowY = useTransform(proProgress, [0, 1], [60, -60]);
+  const proGlowScale = useTransform(proProgress, [0, 0.5, 1], [0.85, 1.1, 0.85]);
 
   // The closing section's glow behaves differently on purpose: it GROWS
   // and brightens as the CTA arrives (rather than drifting past), so the
@@ -575,6 +595,80 @@ export function LandingPage() {
                 </motion.div>
               ))}
             </div>
+          </motion.div>
+        </div>
+      </section>
+
+      {/* ----------------------------------------------------------- SPLEX Pro */}
+      <section ref={proRef} className="relative overflow-hidden border-t border-border bg-surface/40">
+        <motion.div
+          aria-hidden
+          style={reduceMotion ? undefined : { y: proGlowY, scale: proGlowScale }}
+          className="pointer-events-none absolute left-1/2 top-0 h-[360px] w-[720px] max-w-[140vw] -translate-x-1/2 rounded-full opacity-[0.12] blur-[100px]"
+        >
+          <div className="h-full w-full rounded-full" style={{ background: "var(--accent-gradient)" }} />
+        </motion.div>
+        <div className="relative mx-auto max-w-3xl px-4 py-16 text-center sm:px-6 sm:py-24">
+          <motion.div variants={container} {...inView}>
+            <motion.span
+              variants={rise}
+              className="inline-flex items-center gap-2 rounded-full border border-border bg-surface px-3 py-1.5 font-mono text-[10px] uppercase tracking-[0.13em] text-muted-foreground"
+            >
+              <Sparkles size={11} className="text-accent" />
+              Coming soon
+            </motion.span>
+
+            <motion.h2
+              variants={rise}
+              className="mx-auto mt-5 max-w-[19ch] text-balance font-display text-[27px] italic leading-tight tracking-[-0.015em] text-foreground sm:text-4xl"
+            >
+              One objective. Five AI systems. <span className="text-accent">{proStatus.engineName}</span> coordinates.
+            </motion.h2>
+            <motion.p variants={rise} className="mx-auto mt-3 max-w-lg text-[15px] leading-relaxed text-muted-foreground">
+              SPLEX Pro sends your objective to OpenAI, Anthropic, Gemini, Perplexity and xAI at once.{" "}
+              {proStatus.engineName} — the successor to the Cortex engine above — plans the work, hands each
+              provider the piece it does best, and brings the result back as one answer.
+            </motion.p>
+
+            <motion.div
+              variants={riseCard}
+              whileHover={reduceMotion ? undefined : { y: -3 }}
+              transition={{ duration: 0.2, ease: EASE }}
+              className="mx-auto mt-10 max-w-sm overflow-hidden rounded-2xl border border-dashed border-border bg-surface-raised text-left"
+              style={{ perspective: 1000 }}
+            >
+              <TiltCard maxDeg={7} className="p-6">
+                <div className="flex items-center justify-between">
+                  <span className="font-display text-lg text-foreground">Pro</span>
+                  <span className="rounded-full border border-border px-2 py-0.5 text-[11px] text-muted-foreground">
+                    Coming soon
+                  </span>
+                </div>
+                <p className="mt-2">
+                  <span className="font-display text-3xl text-foreground sm:text-4xl">
+                    ₹{proStatus.priceInrPerMonth.toLocaleString()}
+                  </span>
+                  <span className="text-sm text-muted-foreground">/mo</span>
+                </p>
+                {/* No raw credit number — SPLEX credits are an internal
+                    metering unit, never shown to users, same rule the
+                    Free/Starter cards already follow (see
+                    hidden-credit-economics.test.ts). */}
+                <ul className="mt-5 space-y-2.5">
+                  {[
+                    "Multi-AI Collaboration across 5 provider ecosystems",
+                    "Generous monthly usage across all 5 AI providers",
+                    "Parallel + sequential task execution",
+                    "Human-in-the-loop checkpoints",
+                  ].map((f) => (
+                    <li key={f} className="flex items-start gap-2 text-[13.5px] text-foreground">
+                      <Check size={15} className="mt-0.5 shrink-0 text-accent" />
+                      <span>{f}</span>
+                    </li>
+                  ))}
+                </ul>
+              </TiltCard>
+            </motion.div>
           </motion.div>
         </div>
       </section>
