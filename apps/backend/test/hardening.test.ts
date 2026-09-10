@@ -503,10 +503,30 @@ describe("SPLEX Pro — unlaunched, and the disablement is enforced server-side 
     expect(src).toContain("assertProAccess(fastify, user)");
   });
 
-  it("no real provider adapter is wired into the Pro registry — every one is the unconnected stub (item 38: no real spend while unlaunched)", () => {
-    const providers = read("pro/providers.ts");
-    for (const name of ["OPENAI", "ANTHROPIC", "GEMINI", "PERPLEXITY", "XAI"]) {
-      expect(providers).toMatch(new RegExp(`export const ${name}_PROVIDER: AIProvider = unconnectedProvider\\(`));
+  it("every real provider adapter checks its OWN API key and falls back to the unconnected stub when absent — self-activating, never a hard-wired real call (item 38)", () => {
+    const files: Array<[string, string]> = [
+      ["pro/providers/openai.ts", "OPENAI_API_KEY"],
+      ["pro/providers/anthropic.ts", "ANTHROPIC_API_KEY"],
+      ["pro/providers/gemini.ts", "GEMINI_API_KEY"],
+      ["pro/providers/perplexity.ts", "PERPLEXITY_API_KEY"],
+      ["pro/providers/xai.ts", "XAI_API_KEY"],
+    ];
+    for (const [file, keyVar] of files) {
+      const src = read(file);
+      const keyIdx = src.indexOf(`fastify.config.${keyVar}`);
+      const fallbackIdx = src.indexOf("if (!apiKey) return unconnectedProvider(");
+      expect(keyIdx, `${file} must read fastify.config.${keyVar}`).toBeGreaterThan(-1);
+      expect(fallbackIdx, `${file} must fall back to unconnectedProvider when the key is absent`).toBeGreaterThan(keyIdx);
+      expect(fallbackIdx - keyIdx).toBeLessThan(60); // the very next real statement, not buried later
+    }
+  });
+
+  it("no provider API key is actually configured anywhere in this codebase right now — production gets 5 real stubs today, exactly as before these adapters existed", () => {
+    for (const f of ["plugins/env.ts", "worker/env.ts"]) {
+      const src = read(f);
+      for (const keyVar of ["OPENAI_API_KEY", "ANTHROPIC_API_KEY", "GEMINI_API_KEY", "PERPLEXITY_API_KEY", "XAI_API_KEY"]) {
+        expect(src, `${f}'s ${keyVar} must stay optional with no default value`).toMatch(new RegExp(`${keyVar}: z\\.string\\(\\)\\.min\\(1\\)\\.optional\\(\\)`));
+      }
     }
   });
 

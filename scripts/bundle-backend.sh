@@ -203,6 +203,16 @@ GROQ_PAID_SHARE_PCT=35
 GROQ_PER_USER_SHARE_PCT=5
 GROQ_PER_USER_SHARE_PCT_PAID=25
 SPLEX_PRO_ENABLED=false
+OPENAI_API_KEY=
+OPENAI_MODEL_ID=gpt-4o
+ANTHROPIC_API_KEY=
+ANTHROPIC_MODEL_ID=claude-sonnet-4-5-20250929
+GEMINI_API_KEY=
+GEMINI_MODEL_ID=gemini-2.5-flash
+PERPLEXITY_API_KEY=
+PERPLEXITY_MODEL_ID=sonar-pro
+XAI_API_KEY=
+XAI_MODEL_ID=grok-4
 INTELLIGENCE_SERVICE_URL=
 INTELLIGENCE_SERVICE_TOKEN=
 LOG_LEVEL=info
@@ -330,6 +340,20 @@ cat > "$OUT/wrangler.jsonc" <<'EOF'
     // writing it out means a future "enable Pro" change is a one-line
     // diff here, not a var someone has to remember to add.
     "SPLEX_PRO_ENABLED": "false",
+    // Pro's 5 real provider MODEL IDs — not secret, just a name, same
+    // category as CORTEX_CLASSIFIER_MODEL_ID above. The matching API KEY
+    // for each (OPENAI_API_KEY, ANTHROPIC_API_KEY, GEMINI_API_KEY,
+    // PERPLEXITY_API_KEY, XAI_API_KEY) is NEVER added here — same rule as
+    // RAZORPAY_WEBHOOK_SECRET/SUPABASE_SERVICE_ROLE_KEY below: a real
+    // credential is `wrangler secret put` only. None of the 5 exist yet
+    // (verified: no such secret is configured on this Worker today), so
+    // every real adapter still constructs as the unconnected stub in
+    // production, identically to before these vars existed.
+    "OPENAI_MODEL_ID": "gpt-4o",
+    "ANTHROPIC_MODEL_ID": "claude-sonnet-4-5-20250929",
+    "GEMINI_MODEL_ID": "gemini-2.5-flash",
+    "PERPLEXITY_MODEL_ID": "sonar-pro",
+    "XAI_MODEL_ID": "grok-4",
     // Not secret — a plan identifier. RAZORPAY_WEBHOOK_SECRET stays
     // `wrangler secret put` only, same rule as SUPABASE_SERVICE_ROLE_KEY
     // above — never add it here.
@@ -364,6 +388,16 @@ GROQ_PAID_SHARE_PCT=35
 GROQ_PER_USER_SHARE_PCT=5
 GROQ_PER_USER_SHARE_PCT_PAID=25
 SPLEX_PRO_ENABLED=false
+OPENAI_API_KEY=
+OPENAI_MODEL_ID=gpt-4o
+ANTHROPIC_API_KEY=
+ANTHROPIC_MODEL_ID=claude-sonnet-4-5-20250929
+GEMINI_API_KEY=
+GEMINI_MODEL_ID=gemini-2.5-flash
+PERPLEXITY_API_KEY=
+PERPLEXITY_MODEL_ID=sonar-pro
+XAI_API_KEY=
+XAI_MODEL_ID=grok-4
 INTELLIGENCE_SERVICE_URL=
 INTELLIGENCE_SERVICE_TOKEN=
 LOG_LEVEL=info

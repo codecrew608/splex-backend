@@ -20,7 +20,7 @@ import {
 } from "./routes/account.js";
 import { handleMediaStatus } from "./routes/media.js";
 import { handleGetEntitlements } from "./routes/entitlements.js";
-import { handleGetProStatus, handleCreateProWorkflowWorker } from "./routes/pro.js";
+import { handleGetProStatus, handleCreateProWorkflowWorker, handleStepProWorkflowWorker, handleClarifyProWorkflowWorker, handleGetProWorkflowWorker } from "./routes/pro.js";
 import { handleSubmitFeedback } from "./routes/feedback.js";
 import type { AuthedUser } from "../types/index.js";
 import { describeError } from "../openrouter/client.js";
@@ -206,6 +206,33 @@ async function route(request: Request, ctx: WorkerCtx, execCtx: ExecutionContext
     const limited = await requireRateLimit(ctx, "pro_create_workflow", auth.id);
     if (limited) return limited;
     return handleCreateProWorkflowWorker(request, ctx, auth);
+  }
+
+  const proWorkflowStepMatch = pathname.match(/^\/pro\/workflows\/([^/]+)\/step$/);
+  if (method === "POST" && proWorkflowStepMatch) {
+    const auth = await requireAuth(request, ctx);
+    if (auth instanceof Response) return auth;
+    const limited = await requireRateLimit(ctx, "pro_step_workflow", auth.id);
+    if (limited) return limited;
+    return handleStepProWorkflowWorker(ctx, auth, proWorkflowStepMatch[1]);
+  }
+
+  const proWorkflowClarifyMatch = pathname.match(/^\/pro\/workflows\/([^/]+)\/clarify$/);
+  if (method === "POST" && proWorkflowClarifyMatch) {
+    const auth = await requireAuth(request, ctx);
+    if (auth instanceof Response) return auth;
+    const limited = await requireRateLimit(ctx, "pro_clarify_workflow", auth.id);
+    if (limited) return limited;
+    return handleClarifyProWorkflowWorker(request, ctx, auth, proWorkflowClarifyMatch[1]);
+  }
+
+  const proWorkflowGetMatch = pathname.match(/^\/pro\/workflows\/([^/]+)$/);
+  if (method === "GET" && proWorkflowGetMatch) {
+    const auth = await requireAuth(request, ctx);
+    if (auth instanceof Response) return auth;
+    const limited = await requireRateLimit(ctx, "pro_get_workflow", auth.id);
+    if (limited) return limited;
+    return handleGetProWorkflowWorker(ctx, auth, proWorkflowGetMatch[1]);
   }
 
   if (method === "POST" && pathname === "/feedback") {

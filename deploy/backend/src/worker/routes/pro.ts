@@ -1,4 +1,4 @@
-import { getProStatus, handleCreateProWorkflow } from "../../handlers/pro.js";
+import { getProStatus, handleCreateProWorkflow, handleStepProWorkflow, handleClarifyProWorkflow, handleGetProWorkflow } from "../../handlers/pro.js";
 import type { WorkerCtx } from "../context.js";
 import { asFastifyInstance } from "../context.js";
 import type { AuthedUser } from "../../types/index.js";
@@ -18,4 +18,22 @@ export async function handleCreateProWorkflowWorker(request: Request, ctx: Worke
     return errorResponse("Invalid JSON body.", 400);
   }
   return respondWithResult(await handleCreateProWorkflow(asFastifyInstance(ctx), user, (body ?? {}) as Record<string, unknown>));
+}
+
+export async function handleStepProWorkflowWorker(ctx: WorkerCtx, user: AuthedUser, workflowId: string): Promise<Response> {
+  return respondWithResult(await handleStepProWorkflow(asFastifyInstance(ctx), user, workflowId));
+}
+
+export async function handleClarifyProWorkflowWorker(request: Request, ctx: WorkerCtx, user: AuthedUser, workflowId: string): Promise<Response> {
+  let body: unknown;
+  try {
+    body = await parseJsonBody(request);
+  } catch {
+    return errorResponse("Invalid JSON body.", 400);
+  }
+  return respondWithResult(await handleClarifyProWorkflow(asFastifyInstance(ctx), user, workflowId, (body ?? {}) as Record<string, unknown>));
+}
+
+export async function handleGetProWorkflowWorker(ctx: WorkerCtx, user: AuthedUser, workflowId: string): Promise<Response> {
+  return respondWithResult(await handleGetProWorkflow(asFastifyInstance(ctx), user, workflowId));
 }

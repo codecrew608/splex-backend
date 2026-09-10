@@ -58,12 +58,21 @@ describe("buildTaskExecutionGraph — items 6/7/8", () => {
     expect(graph.phases.some((p) => p.phase === "verification")).toBe(false);
   });
 
-  it("sequential tail: review depends on implementation, verification depends on review (item 8)", () => {
+  it("sequential tail: review depends on implementation, and — since both implementation and review are present — a revision phase (item 14's review-as-loop) sits between review and verification", () => {
     const graph = buildTaskExecutionGraph("Build the backend, review the code, and verify it's ready to deploy.");
     const review = graph.phases.find((p) => p.phase === "review");
+    const revision = graph.phases.find((p) => p.phase === "revision");
     const verification = graph.phases.find((p) => p.phase === "verification");
     expect(review?.dependsOn).toEqual(["implementation"]);
-    expect(verification?.dependsOn).toEqual(["review"]);
+    expect(revision?.dependsOn).toEqual(expect.arrayContaining(["implementation", "review"]));
+    expect(verification?.dependsOn).toEqual(["revision"]);
+  });
+
+  it("without a review phase, verification depends directly on implementation — no revision loop with nothing to revise against", () => {
+    const graph = buildTaskExecutionGraph("Build the backend and verify it's ready to deploy.");
+    expect(graph.phases.some((p) => p.phase === "revision")).toBe(false);
+    const verification = graph.phases.find((p) => p.phase === "verification");
+    expect(verification?.dependsOn).toEqual(["implementation"]);
   });
 
   it("every non-requirements, non-synthesis phase has a capability-matched operation from item 4's set", () => {
@@ -72,6 +81,35 @@ describe("buildTaskExecutionGraph — items 6/7/8", () => {
     for (const phase of graph.phases) {
       expect(validOps.has(phase.operation)).toBe(true);
     }
+  });
+});
+
+describe("buildTaskExecutionGraph — item 14's Debate pattern", () => {
+  it("without debate language, architecture stays a single phase", () => {
+    const graph = buildTaskExecutionGraph("Design the system architecture for a new service.");
+    expect(graph.phases.filter((p) => p.phase === "architecture" || p.phase === "architecture_alt").map((p) => p.phase)).toEqual(["architecture"]);
+    expect(graph.phases.some((p) => p.phase === "debate_synthesis")).toBe(false);
+  });
+
+  it("debate language splits architecture into two parallel branches on two DIFFERENT preferred providers, judged by a third", () => {
+    const graph = buildTaskExecutionGraph("Compare two approaches to the system architecture and tell me which approach is better.");
+    const a = graph.phases.find((p) => p.phase === "architecture");
+    const b = graph.phases.find((p) => p.phase === "architecture_alt");
+    const synth = graph.phases.find((p) => p.phase === "debate_synthesis");
+    expect(a?.dependsOn).toEqual(["requirements"]);
+    expect(b?.dependsOn).toEqual(["requirements"]);
+    expect(a?.preferredProvider).toBeDefined();
+    expect(b?.preferredProvider).toBeDefined();
+    expect(a?.preferredProvider).not.toBe(b?.preferredProvider);
+    expect(synth?.dependsOn).toEqual(expect.arrayContaining(["architecture", "architecture_alt"]));
+  });
+
+  it("downstream implementation depends on the JUDGED debate result, never on either raw branch directly", () => {
+    const graph = buildTaskExecutionGraph("Compare two approaches to the architecture, then build it.");
+    const implementation = graph.phases.find((p) => p.phase === "implementation");
+    expect(implementation?.dependsOn).toContain("debate_synthesis");
+    expect(implementation?.dependsOn).not.toContain("architecture");
+    expect(implementation?.dependsOn).not.toContain("architecture_alt");
   });
 });
 

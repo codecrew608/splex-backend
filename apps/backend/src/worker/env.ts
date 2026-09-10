@@ -74,6 +74,18 @@ const workerEnvSchema = z.object({
     .optional()
     .transform((v) => v === "true")
     .pipe(z.boolean()),
+  // Pro's 5 real provider credentials — same schema and rationale as the
+  // Fastify plugin above; see that file for the full comment.
+  OPENAI_API_KEY: z.string().min(1).optional(),
+  OPENAI_MODEL_ID: z.string().default("gpt-4o"),
+  ANTHROPIC_API_KEY: z.string().min(1).optional(),
+  ANTHROPIC_MODEL_ID: z.string().default("claude-sonnet-4-5-20250929"),
+  GEMINI_API_KEY: z.string().min(1).optional(),
+  GEMINI_MODEL_ID: z.string().default("gemini-2.5-flash"),
+  PERPLEXITY_API_KEY: z.string().min(1).optional(),
+  PERPLEXITY_MODEL_ID: z.string().default("sonar-pro"),
+  XAI_API_KEY: z.string().min(1).optional(),
+  XAI_MODEL_ID: z.string().default("grok-4"),
   // Optional here (unlike the Fastify schema, which defaults to a
   // loopback URL) — on Workers there is no "same machine" to default to;
   // an unset value means the intelligence service is genuinely

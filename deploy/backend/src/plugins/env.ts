@@ -146,6 +146,26 @@ const envSchema = z.object({
     .optional()
     .transform((v) => v === "true")
     .pipe(z.boolean()),
+  // Pro's 5 real provider credentials — every one optional, all absent
+  // today (verified: no such key exists anywhere in this codebase or its
+  // deployed secrets). pro/providers.ts checks each at call time: absent
+  // -> the same "no credential configured" stub behavior as before this
+  // ever existed; present -> a real API call. This is what lets a real
+  // adapter activate by setting one secret, with zero further code
+  // change or redeploy needed beyond that.
+  OPENAI_API_KEY: z.string().min(1).optional(),
+  OPENAI_MODEL_ID: z.string().default("gpt-4o"),
+  ANTHROPIC_API_KEY: z.string().min(1).optional(),
+  // PROVISIONAL default — verify against Anthropic's current model
+  // catalogue before this is ever actually called; not something this
+  // codebase can confirm live without a credential to test against.
+  ANTHROPIC_MODEL_ID: z.string().default("claude-sonnet-4-5-20250929"),
+  GEMINI_API_KEY: z.string().min(1).optional(),
+  GEMINI_MODEL_ID: z.string().default("gemini-2.5-flash"),
+  PERPLEXITY_API_KEY: z.string().min(1).optional(),
+  PERPLEXITY_MODEL_ID: z.string().default("sonar-pro"),
+  XAI_API_KEY: z.string().min(1).optional(),
+  XAI_MODEL_ID: z.string().default("grok-4"),
   // Local FastAPI sidecar — Tesseract OCR + BGE-small embeddings. See
   // services/intelligence/main.py.
   INTELLIGENCE_SERVICE_URL: z.string().url().default("http://127.0.0.1:8100"),

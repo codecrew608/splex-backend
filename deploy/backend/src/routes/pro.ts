@@ -1,5 +1,5 @@
 import type { FastifyPluginAsync } from "fastify";
-import { getProStatus, handleCreateProWorkflow } from "../handlers/pro.js";
+import { getProStatus, handleCreateProWorkflow, handleStepProWorkflow, handleClarifyProWorkflow, handleGetProWorkflow } from "../handlers/pro.js";
 import { RATE_LIMITS } from "../handlers/rateLimits.js";
 import { sendResult } from "./sendResult.js";
 
@@ -21,6 +21,40 @@ const proRoutes: FastifyPluginAsync = async (fastify) => {
       ],
     },
     async (request, reply) => sendResult(reply, await handleCreateProWorkflow(fastify, request.user, request.body as Record<string, unknown>)),
+  );
+
+  fastify.post(
+    "/pro/workflows/:id/step",
+    {
+      preHandler: [
+        fastify.authenticate,
+        fastify.rateLimitByUser("pro_step_workflow", RATE_LIMITS.pro_step_workflow.max, RATE_LIMITS.pro_step_workflow.windowMs),
+      ],
+    },
+    async (request, reply) => sendResult(reply, await handleStepProWorkflow(fastify, request.user, (request.params as { id: string }).id)),
+  );
+
+  fastify.post(
+    "/pro/workflows/:id/clarify",
+    {
+      preHandler: [
+        fastify.authenticate,
+        fastify.rateLimitByUser("pro_clarify_workflow", RATE_LIMITS.pro_clarify_workflow.max, RATE_LIMITS.pro_clarify_workflow.windowMs),
+      ],
+    },
+    async (request, reply) =>
+      sendResult(reply, await handleClarifyProWorkflow(fastify, request.user, (request.params as { id: string }).id, request.body as Record<string, unknown>)),
+  );
+
+  fastify.get(
+    "/pro/workflows/:id",
+    {
+      preHandler: [
+        fastify.authenticate,
+        fastify.rateLimitByUser("pro_get_workflow", RATE_LIMITS.pro_get_workflow.max, RATE_LIMITS.pro_get_workflow.windowMs),
+      ],
+    },
+    async (request, reply) => sendResult(reply, await handleGetProWorkflow(fastify, request.user, (request.params as { id: string }).id)),
   );
 };
 

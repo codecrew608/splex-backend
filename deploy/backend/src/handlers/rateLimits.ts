@@ -28,6 +28,17 @@ export const RATE_LIMITS = {
   // false, so the limit only matters as a floor against probing, not
   // against real usage that doesn't exist yet.
   pro_create_workflow: { max: 10, windowMs: 60_000 },
+  // Higher ceiling than pro_create_workflow — a caller is expected to
+  // call this repeatedly (poll-to-drive-forward, see pro/execution.ts's
+  // own header) to advance a single workflow step by step, not once per
+  // workflow. Still refused (403) before any real work while
+  // SPLEX_PRO_ENABLED is false, same as every other pro_* route.
+  pro_step_workflow: { max: 30, windowMs: 60_000 },
+  pro_clarify_workflow: { max: 10, windowMs: 60_000 },
+  // A read, so the most generous of the pro_* limits — a status-polling
+  // caller is expected to check this more often than it advances the
+  // workflow itself.
+  pro_get_workflow: { max: 60, windowMs: 60_000 },
   feedback_submit: { max: 10, windowMs: 60_000 },
 } as const;
 

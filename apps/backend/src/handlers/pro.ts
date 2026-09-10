@@ -3,6 +3,7 @@ import type { AuthedUser } from "../types/index.js";
 import { ok, fail, type HandlerResult } from "./result.js";
 import { isProEnabled, assertProAccess, ProUnavailableError } from "../pro/gate.js";
 import { createProWorkflow } from "../pro/orchestrator.js";
+import { executeWorkflowStep, resumeProWorkflowWithClarification, getProWorkflowStatus, type ExecutionStepResult, type ProWorkflowStatus } from "../pro/execution.js";
 
 // Runtime-agnostic Pro handlers — written once, exposed by both
 // routes/pro.ts (Fastify) and worker/routes/pro.ts (Worker), matching the
@@ -71,4 +72,119 @@ export async function handleCreateProWorkflow(
 
   const result = await createProWorkflow(fastify, user, objective);
   return ok(result, 201);
+}
+
+// POST /pro/workflows/:id/step — advances one Pro workflow by a single
+// execution step (see pro/execution.ts's own header for why this is
+// step-based rather than a single call that runs a workflow to
+// completion). Idempotent to call repeatedly: a finished workflow just
+// reports its already-terminal status back rather than erroring, so a
+// caller can poll this on a fixed interval without tracking completion
+// itself.
+export async function handleStepProWorkflow(
+  fastify: FastifyInstance,
+  user: AuthedUser,
+  workflowId: string,
+): Promise<HandlerResult<ExecutionStepResult>> {
+  try {
+    assertProAccess(fastify, user);
+  } catch (err) {
+    if (err instanceof ProUnavailableError) {
+      return fail(err.message, 403);
+    }
+    throw err;
+  }
+
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(workflowId)) {
+    return fail("Invalid workflow id.", 400);
+  }
+
+  try {
+    const result = await executeWorkflowStep(fastify, user, workflowId);
+    return ok(result);
+  } catch (err) {
+    if (err instanceof Error && err.message === "Workflow not found.") {
+      return fail("Workflow not found.", 404);
+    }
+    throw err;
+  }
+}
+
+interface ClarifyWorkflowBody {
+  answer?: unknown;
+}
+
+// POST /pro/workflows/:id/clarify — item 27's resume half. Answers a
+// workflow currently WAITING_FOR_USER and immediately advances it one
+// step (see resumeProWorkflowWithClarification's own doc comment) so the
+// caller gets the same ExecutionStepResult shape /step already returns,
+// rather than requiring two calls (answer, then step) for one logical
+// action.
+export async function handleClarifyProWorkflow(
+  fastify: FastifyInstance,
+  user: AuthedUser,
+  workflowId: string,
+  body: ClarifyWorkflowBody,
+): Promise<HandlerResult<ExecutionStepResult>> {
+  try {
+    assertProAccess(fastify, user);
+  } catch (err) {
+    if (err instanceof ProUnavailableError) {
+      return fail(err.message, 403);
+    }
+    throw err;
+  }
+
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(workflowId)) {
+    return fail("Invalid workflow id.", 400);
+  }
+
+  const answer = typeof body.answer === "string" ? body.answer.trim() : "";
+  if (answer.length === 0 || answer.length > 4000) {
+    return fail("answer is required and must be under 4000 characters.", 400);
+  }
+
+  try {
+    const result = await resumeProWorkflowWithClarification(fastify, user, workflowId, answer);
+    return ok(result);
+  } catch (err) {
+    if (err instanceof Error && err.message === "Workflow not found.") {
+      return fail("Workflow not found.", 404);
+    }
+    throw err;
+  }
+}
+
+// GET /pro/workflows/:id — a basic read path for a workflow's current
+// state (see getProWorkflowStatus's own doc comment for scope). The only
+// GET among the Pro workflow routes, and — like every other one — scoped
+// to the caller's own workflows via getProWorkflowStatus's own
+// user_id-filtered query, never trusting the id alone.
+export async function handleGetProWorkflow(
+  fastify: FastifyInstance,
+  user: AuthedUser,
+  workflowId: string,
+): Promise<HandlerResult<ProWorkflowStatus>> {
+  try {
+    assertProAccess(fastify, user);
+  } catch (err) {
+    if (err instanceof ProUnavailableError) {
+      return fail(err.message, 403);
+    }
+    throw err;
+  }
+
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(workflowId)) {
+    return fail("Invalid workflow id.", 400);
+  }
+
+  try {
+    const result = await getProWorkflowStatus(fastify, user, workflowId);
+    return ok(result);
+  } catch (err) {
+    if (err instanceof Error && err.message === "Workflow not found.") {
+      return fail("Workflow not found.", 404);
+    }
+    throw err;
+  }
 }
