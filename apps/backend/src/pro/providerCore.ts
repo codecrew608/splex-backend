@@ -14,6 +14,38 @@ export type ProviderName = "openai" | "anthropic" | "gemini" | "perplexity" | "x
 // so the orchestrator can check before ever constructing a call.
 export type ProviderOperation = "plan" | "reason" | "generate" | "analyze" | "review" | "research" | "code" | "tool_call";
 
+// TOOL PERMISSIONS — deliberately NOT implemented yet (hardening spec §7).
+//
+// "tool_call" is a reserved operation slot with NO execution path: nothing
+// in execution.ts inspects it, there is no tool registry, no MCP client,
+// no shell/filesystem/HTTP tool. A provider that returns tool-call-shaped
+// output today is treated as ordinary text — its result is wrapped by
+// wrapArtifactAsUntrusted like any other artifact and never acted on.
+// Building a full tool framework now, for a feature with zero live users,
+// is exactly the over-engineering §7 says to avoid.
+//
+// The boundary any FUTURE tool layer MUST sit behind — none of these are
+// new infrastructure, they are the controls the engine already enforces
+// for provider calls, and a tool call is just another kind of dispatch:
+//   1. assertProAccess (pro/gate.ts) — a tool runs only inside a workflow
+//      that already passed the flag + plan_tier gate. No separate entry.
+//   2. Ownership — every pro_* read in execution.ts is scoped to
+//      `user_id = user.id`; a tool must resolve its own targets the same
+//      way and never accept a caller-supplied user/workflow id.
+//   3. Budget — a tool call costs. It goes through the SAME
+//      pro_provider_runs row + the SAME max_provider_calls / max_token_budget
+//      / max_estimated_cost_credits ceilings checked in executeWorkflowStep,
+//      settled through finalizeWorkflow against the monthly pool. No tool
+//      gets an un-metered side channel.
+//   4. Untrusted I/O — a tool's inputs come from prior AI output (already
+//      run through stripInjectionPatterns + wrapArtifactAsUntrusted) and
+//      its outputs feed the next task the same way. A tool must never be
+//      handed raw upstream text as an instruction, and its result is an
+//      artifact, not a command.
+//   5. Least privilege — a tool must not reach anything the workflow's
+//      owner could not reach directly (their rows, their storage, their
+//      rate limits) — no ambient service-role capability leaks through it.
+
 export interface ProviderCapabilities {
   operations: ProviderOperation[];
   modalities: ("text" | "vision" | "audio")[];

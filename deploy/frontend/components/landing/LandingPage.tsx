@@ -3,7 +3,21 @@
 import { useRef, type MouseEvent, type ReactNode } from "react";
 import Link from "next/link";
 import { motion, useMotionTemplate, useReducedMotion, useScroll, useSpring, useTransform, type Variants } from "framer-motion";
-import { ArrowRight, Check, Cpu, GitBranch, Receipt, Sparkles, Wallet } from "lucide-react";
+import {
+  ArrowRight,
+  Boxes,
+  Brain,
+  Check,
+  Cpu,
+  GitBranch,
+  GitPullRequestArrow,
+  Receipt,
+  ShieldCheck,
+  Sparkles,
+  Users,
+  Wallet,
+  Workflow,
+} from "lucide-react";
 import { Logo } from "@/components/ui/Logo";
 import { ThemeToggle } from "@/components/ui/ThemeToggle";
 import { RoutingDemo } from "./RoutingDemo";
@@ -104,6 +118,58 @@ const PLANS = [
       "Agent Workflows up to 10 steps",
     ],
     highlighted: true,
+  },
+];
+
+// SPLEX Pro — NOT LAUNCHED. This whole block is "Coming soon" marketing
+// only; the backend (pro/gate.ts) refuses every Pro call while
+// SPLEX_PRO_ENABLED is false, independent of anything rendered here. No
+// control below purchases, subscribes, activates, or links to Pro
+// functionality — there is nothing to link to. Deliberately no raw SPLEX
+// credit number anywhere (hidden-credit-economics.test.ts enforces this
+// for the landing page): SPLEX credits are an internal metering unit, so
+// the plan's allowance is described by capability, exactly like Free and
+// Starter above.
+const PRO_FLOW: { label: string; sub?: string }[] = [
+  { label: "Your objective" },
+  { label: "SPLEX orchestrator", sub: "plans & delegates" },
+  { label: "Research · Reasoning · Coding · Analysis", sub: "in parallel" },
+  { label: "Multiple AI systems", sub: "each on its strongest task" },
+  { label: "Cross-review & verification", sub: "one AI checks another" },
+  { label: "Refinement", sub: "revise against the critique" },
+  { label: "One final result" },
+];
+
+const PRO_CAPABILITIES: { icon: typeof Boxes; title: string; body: string }[] = [
+  {
+    icon: Boxes,
+    title: "Multiple leading AI systems",
+    body: "OpenAI, Anthropic, Gemini, Perplexity and xAI, coordinated as one. SPLEX assigns each part of the work to the system best suited to it.",
+  },
+  {
+    icon: Workflow,
+    title: "Intelligent task delegation",
+    body: "The orchestrator breaks an objective into a dependency graph — research, architecture, implementation, review, verification — and routes each node independently.",
+  },
+  {
+    icon: Users,
+    title: "Parallel collaboration",
+    body: "Independent steps run at the same time, not one after another, then feed a shared context the next stage builds on.",
+  },
+  {
+    icon: GitPullRequestArrow,
+    title: "AI-to-AI review",
+    body: "One system's output is critiqued by a different one, then handed back for revision — a produce · critique · improve loop, not a single pass.",
+  },
+  {
+    icon: ShieldCheck,
+    title: "Independent verification",
+    body: "A separate system checks the result for correctness and completeness — never the one that produced it.",
+  },
+  {
+    icon: Brain,
+    title: "Shared context & project memory",
+    body: "Every step works from the same understanding of your objective and your project, so the final answer is one coherent piece of work.",
   },
 ];
 
@@ -608,39 +674,105 @@ export function LandingPage({ proStatus }: LandingPageProps) {
         >
           <div className="h-full w-full rounded-full" style={{ background: "var(--accent-gradient)" }} />
         </motion.div>
-        <div className="relative mx-auto max-w-3xl px-4 py-16 text-center sm:px-6 sm:py-24">
+        <div className="relative mx-auto max-w-5xl px-4 py-16 sm:px-6 sm:py-24">
           <motion.div variants={container} {...inView}>
-            <motion.span
-              variants={rise}
-              className="inline-flex items-center gap-2 rounded-full border border-border bg-surface px-3 py-1.5 font-mono text-[10px] uppercase tracking-[0.13em] text-muted-foreground"
-            >
-              <Sparkles size={11} className="text-accent" />
-              Coming soon
-            </motion.span>
+            <div className="text-center">
+              <motion.span
+                variants={rise}
+                className="inline-flex items-center gap-2 rounded-full border border-border bg-surface px-3 py-1.5 font-mono text-[10px] uppercase tracking-[0.13em] text-muted-foreground"
+              >
+                <Sparkles size={11} className="text-accent" />
+                SPLEX Pro · Coming soon
+              </motion.span>
 
-            <motion.h2
+              <motion.h2
+                variants={rise}
+                className="mx-auto mt-5 max-w-[20ch] text-balance font-display text-[27px] leading-tight tracking-[-0.015em] text-foreground sm:text-4xl"
+              >
+                Don&rsquo;t choose an AI. Give <span className="text-accent">SPLEX</span> the objective.
+              </motion.h2>
+              <motion.p variants={rise} className="mx-auto mt-4 max-w-xl text-[15px] leading-relaxed text-muted-foreground">
+                One AI answers a prompt. SPLEX Pro brings multiple leading AI systems together — planning,
+                building, reviewing and verifying — to work through the whole objective, and returns one
+                coherent result. Multiple AI systems, one objective.
+              </motion.p>
+            </div>
+
+            {/* Workflow visualisation — how a Pro run flows, end to end.
+                Vertical rail on phones, horizontal wrap on wider screens.
+                Static at rest (readable in the first frame); the only
+                motion is the section's shared rise/stagger. */}
+            <motion.div variants={rise} className="mx-auto mt-12 max-w-3xl">
+              <p className="text-center font-mono text-[10px] uppercase tracking-[0.13em] text-muted-foreground">
+                How a Pro workflow runs
+              </p>
+              <ol className="mt-5 flex flex-col items-stretch gap-2 sm:flex-row sm:flex-wrap sm:items-center sm:justify-center sm:gap-1.5">
+                {PRO_FLOW.map((step, i) => (
+                  <li key={step.label} className="flex items-center gap-1.5 sm:contents">
+                    <div className="flex-1 rounded-xl border border-border bg-surface-raised px-3 py-2 text-center sm:flex-none">
+                      <span className="block text-[12px] font-medium leading-tight text-foreground">
+                        {step.label}
+                      </span>
+                      {step.sub && (
+                        <span className="mt-0.5 block font-mono text-[9.5px] uppercase tracking-[0.1em] text-muted-foreground">
+                          {step.sub}
+                        </span>
+                      )}
+                    </div>
+                    {i < PRO_FLOW.length - 1 && (
+                      <ArrowRight
+                        size={13}
+                        aria-hidden
+                        className="shrink-0 rotate-90 text-accent/60 sm:rotate-0"
+                      />
+                    )}
+                  </li>
+                ))}
+              </ol>
+            </motion.div>
+
+            {/* Capability grid — same holographic-card treatment as the
+                pillars section above. */}
+            <motion.p
               variants={rise}
-              className="mx-auto mt-5 max-w-[19ch] text-balance font-display text-[27px] italic leading-tight tracking-[-0.015em] text-foreground sm:text-4xl"
+              className="mx-auto mt-16 max-w-xl text-center text-[15px] text-muted-foreground"
             >
-              One objective. Five AI systems. <span className="text-accent">{proStatus.engineName}</span> coordinates.
-            </motion.h2>
-            <motion.p variants={rise} className="mx-auto mt-3 max-w-lg text-[15px] leading-relaxed text-muted-foreground">
-              SPLEX Pro sends your objective to OpenAI, Anthropic, Gemini, Perplexity and xAI at once.{" "}
-              {proStatus.engineName} — the successor to the Cortex engine above — plans the work, hands each
-              provider the piece it does best, and brings the result back as one answer.
+              SPLEX coordinates the right intelligence for each part of the job:
             </motion.p>
+            <div className="mt-6 grid gap-4 sm:grid-cols-2 sm:gap-5 lg:grid-cols-3" style={{ perspective: 1000 }}>
+              {PRO_CAPABILITIES.map(({ icon: Icon, title, body }) => (
+                <motion.div
+                  key={title}
+                  variants={riseCard}
+                  whileHover={reduceMotion ? undefined : { y: -3 }}
+                  transition={{ duration: 0.2, ease: EASE }}
+                  className="group overflow-hidden rounded-2xl border border-border bg-surface-raised transition-colors hover:border-accent"
+                >
+                  <TiltCard maxDeg={9} className="p-5 sm:p-6">
+                    <span className="inline-flex h-9 w-9 items-center justify-center rounded-lg bg-accent-soft text-accent transition-transform duration-200 group-hover:scale-105">
+                      <Icon size={17} strokeWidth={1.6} />
+                    </span>
+                    <h3 className="mt-4 font-display text-[18px] tracking-[-0.01em] text-foreground">{title}</h3>
+                    <p className="mt-2 text-[13.5px] leading-relaxed text-muted-foreground">{body}</p>
+                  </TiltCard>
+                </motion.div>
+              ))}
+            </div>
 
+            {/* Pricing — presentational only. Dashed border marks it as
+                not-yet-real; there is no checkout, no waitlist (none
+                exists), and no control that activates anything. */}
             <motion.div
               variants={riseCard}
               whileHover={reduceMotion ? undefined : { y: -3 }}
               transition={{ duration: 0.2, ease: EASE }}
-              className="mx-auto mt-10 max-w-sm overflow-hidden rounded-2xl border border-dashed border-border bg-surface-raised text-left"
+              className="mx-auto mt-12 max-w-sm overflow-hidden rounded-2xl border border-dashed border-border-strong bg-surface-raised text-left"
               style={{ perspective: 1000 }}
             >
               <TiltCard maxDeg={7} className="p-6">
                 <div className="flex items-center justify-between">
                   <span className="font-display text-lg text-foreground">Pro</span>
-                  <span className="rounded-full border border-border px-2 py-0.5 text-[11px] text-muted-foreground">
+                  <span className="rounded-full border border-accent/40 bg-accent-soft px-2 py-0.5 font-mono text-[10px] uppercase tracking-[0.1em] text-accent">
                     Coming soon
                   </span>
                 </div>
@@ -653,12 +785,15 @@ export function LandingPage({ proStatus }: LandingPageProps) {
                 {/* No raw credit number — SPLEX credits are an internal
                     metering unit, never shown to users, same rule the
                     Free/Starter cards already follow (see
-                    hidden-credit-economics.test.ts). */}
+                    hidden-credit-economics.test.ts). The allowance is
+                    described by capability instead. */}
                 <ul className="mt-5 space-y-2.5">
                   {[
-                    "Multi-AI Collaboration across 5 provider ecosystems",
-                    "Generous monthly usage across all 5 AI providers",
+                    "Everything in Starter, plus:",
+                    "Multi-AI collaboration across 5 provider ecosystems",
+                    "Generous monthly usage across all 5 AI systems",
                     "Parallel + sequential task execution",
+                    "AI-to-AI review and independent verification",
                     "Human-in-the-loop checkpoints",
                   ].map((f) => (
                     <li key={f} className="flex items-start gap-2 text-[13.5px] text-foreground">
@@ -667,6 +802,9 @@ export function LandingPage({ proStatus }: LandingPageProps) {
                     </li>
                   ))}
                 </ul>
+                <p className="mt-6 border-t border-border pt-4 text-[12.5px] leading-relaxed text-muted-foreground">
+                  SPLEX Pro isn&rsquo;t available to buy or activate yet. It opens here when it&rsquo;s ready.
+                </p>
               </TiltCard>
             </motion.div>
           </motion.div>
