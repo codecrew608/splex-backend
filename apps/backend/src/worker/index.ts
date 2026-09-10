@@ -20,7 +20,7 @@ import {
 } from "./routes/account.js";
 import { handleMediaStatus } from "./routes/media.js";
 import { handleGetEntitlements } from "./routes/entitlements.js";
-import { handleGetProStatus, handleCreateProWorkflowWorker, handleStepProWorkflowWorker, handleClarifyProWorkflowWorker, handleGetProWorkflowWorker } from "./routes/pro.js";
+import { handleGetProStatus, handleCreateProWorkflowWorker, handleStepProWorkflowWorker, handleClarifyProWorkflowWorker, handleGetProWorkflowWorker, handleCancelProWorkflowWorker } from "./routes/pro.js";
 import { handleSubmitFeedback } from "./routes/feedback.js";
 import type { AuthedUser } from "../types/index.js";
 import { describeError } from "../openrouter/client.js";
@@ -224,6 +224,15 @@ async function route(request: Request, ctx: WorkerCtx, execCtx: ExecutionContext
     const limited = await requireRateLimit(ctx, "pro_clarify_workflow", auth.id);
     if (limited) return limited;
     return handleClarifyProWorkflowWorker(request, ctx, auth, proWorkflowClarifyMatch[1]);
+  }
+
+  const proWorkflowCancelMatch = pathname.match(/^\/pro\/workflows\/([^/]+)\/cancel$/);
+  if (method === "POST" && proWorkflowCancelMatch) {
+    const auth = await requireAuth(request, ctx);
+    if (auth instanceof Response) return auth;
+    const limited = await requireRateLimit(ctx, "pro_cancel_workflow", auth.id);
+    if (limited) return limited;
+    return handleCancelProWorkflowWorker(ctx, auth, proWorkflowCancelMatch[1]);
   }
 
   const proWorkflowGetMatch = pathname.match(/^\/pro\/workflows\/([^/]+)$/);

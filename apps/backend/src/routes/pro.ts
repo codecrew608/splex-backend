@@ -1,5 +1,5 @@
 import type { FastifyPluginAsync } from "fastify";
-import { getProStatus, handleCreateProWorkflow, handleStepProWorkflow, handleClarifyProWorkflow, handleGetProWorkflow } from "../handlers/pro.js";
+import { getProStatus, handleCreateProWorkflow, handleStepProWorkflow, handleClarifyProWorkflow, handleGetProWorkflow, handleCancelProWorkflow } from "../handlers/pro.js";
 import { RATE_LIMITS } from "../handlers/rateLimits.js";
 import { sendResult } from "./sendResult.js";
 
@@ -44,6 +44,17 @@ const proRoutes: FastifyPluginAsync = async (fastify) => {
     },
     async (request, reply) =>
       sendResult(reply, await handleClarifyProWorkflow(fastify, request.user, (request.params as { id: string }).id, request.body as Record<string, unknown>)),
+  );
+
+  fastify.post(
+    "/pro/workflows/:id/cancel",
+    {
+      preHandler: [
+        fastify.authenticate,
+        fastify.rateLimitByUser("pro_cancel_workflow", RATE_LIMITS.pro_cancel_workflow.max, RATE_LIMITS.pro_cancel_workflow.windowMs),
+      ],
+    },
+    async (request, reply) => sendResult(reply, await handleCancelProWorkflow(fastify, request.user, (request.params as { id: string }).id)),
   );
 
   fastify.get(

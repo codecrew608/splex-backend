@@ -1,7 +1,28 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi, beforeEach } from "vitest";
+
+// Same reasoning as optimizer-pipeline.test.ts: completeOnceWithFallback
+// is mocked directly (not completeOnce) because it calls completeOnce
+// internally, within the same module — a same-module self-call vi.mock's
+// spread-and-replace pattern does not reliably intercept.
+vi.mock("../src/openrouter/client.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../src/openrouter/client.js")>();
+  return { ...actual, completeOnceWithFallback: vi.fn() };
+});
+
+import { completeOnceWithFallback } from "../src/openrouter/client.js";
 import { classifyObjectiveComplexity, buildTaskExecutionGraph, createProWorkflow } from "../src/pro/orchestrator.js";
 import { ProUnavailableError } from "../src/pro/gate.js";
 import type { AuthedUser } from "../src/types/index.js";
+
+const mockedComplete = vi.mocked(completeOnceWithFallback);
+
+beforeEach(() => {
+  mockedComplete.mockReset();
+});
+
+function completeResult(content: string) {
+  return { content, usage: { prompt_tokens: 120, completion_tokens: 40, total_tokens: 160 }, generationId: "gen-orch", citations: [] };
+}
 
 function user(overrides: Partial<AuthedUser> = {}): AuthedUser {
   return { id: "u1", email: "u1@example.com", planTier: "pro", orgId: null, timezone: "UTC", ...overrides };
@@ -169,6 +190,17 @@ function makeProDbStub() {
           },
         };
       }
+      // Reached by optimizeProObjective's resolveOptimizerModelPricing
+      // lookup whenever a mocked semantic call actually succeeds — always
+      // "not found", which resolveOptimizerModelPricing's own graceful
+      // fallback (a small nominal rate) already handles, matching
+      // production's real behavior for a model with no registry row.
+      if (table === "model_registry") {
+        const api: Record<string, unknown> = {};
+        const chain = () => api;
+        Object.assign(api, { select: chain, eq: chain, order: chain, maybeSingle: async () => ({ data: null, error: null }) });
+        return api;
+      }
       throw new Error(`unexpected table in pro DB stub: ${table}`);
     },
   };
@@ -177,7 +209,8 @@ function makeProDbStub() {
 }
 
 function fastifyWith(enabled: boolean, db = makeProDbStub()) {
-  return { config: { SPLEX_PRO_ENABLED: enabled }, supabaseAdmin: db.supabaseAdmin } as never;
+  const log = { error: () => {}, warn: () => {}, info: () => {}, debug: () => {} };
+  return { config: { SPLEX_PRO_ENABLED: enabled, PROMPT_OPTIMIZER_MODEL_ID: "test/optimizer-model" }, supabaseAdmin: db.supabaseAdmin, log } as never;
 }
 
 describe("createProWorkflow — the gate runs BEFORE anything else", () => {
@@ -241,5 +274,65 @@ describe("createProWorkflow — collaborative objectives persist a real graph", 
     const db = makeProDbStub();
     const result = await createProWorkflow(fastifyWith(true, db), user(), "Research, design and implement a system.");
     expect(db.workflows[result.workflowId!]?.status).toBe("WAITING_FOR_TASKS");
+  });
+});
+
+describe("createProWorkflow — Prompt Optimizer integration (spec item 8)", () => {
+  // Long enough to clear MIN_TOKENS_FOR_SEMANTIC (80 tokens ~320 chars)
+  // with real margin, and carries every research/architecture/
+  // implementation/review/verification signal word buildTaskExecutionGraph
+  // depends on, so the graph-shape assertions below have something real
+  // to check regardless of what the (mocked) optimizer returns.
+  const VERBOSE_OBJECTIVE =
+    "Please research current best practices thoroughly, then design a proper system architecture, " +
+    "then implement and build the actual solution, then review the code carefully for issues, and " +
+    "finally verify and test that everything is genuinely production-ready before we consider this done. " +
+    "I want this done really well since it matters a lot for the team and the timeline is somewhat tight.";
+
+  it("a short objective passes through unoptimized — below the semantic threshold, same as chat", async () => {
+    const db = makeProDbStub();
+    const result = await createProWorkflow(fastifyWith(true, db), user(), "Research and build a small tool.");
+    expect(result.workflowId).toBeDefined();
+    expect(db.workflows[result.workflowId!]?.objective).toBe("Research and build a small tool.");
+    expect(mockedComplete).not.toHaveBeenCalled();
+  });
+
+  it("a genuinely verbose objective is compressed before being stored — the STORED objective differs from the raw input", async () => {
+    mockedComplete.mockResolvedValue(
+      completeResult("TASK: Research best practices, design architecture, implement, review, and verify production-readiness."),
+    );
+    const db = makeProDbStub();
+    const result = await createProWorkflow(fastifyWith(true, db), user(), VERBOSE_OBJECTIVE);
+    expect(mockedComplete).toHaveBeenCalled();
+    const storedObjective = db.workflows[result.workflowId!]?.objective as string;
+    expect(storedObjective).not.toBe(VERBOSE_OBJECTIVE);
+    expect(storedObjective).toContain("Research");
+  });
+
+  it("the graph SHAPE is decided from the ORIGINAL wording, not a possibly-compressed paraphrase — every signaled phase is still present even when the optimizer aggressively rewords the objective", async () => {
+    // Deliberately drops every recognizable signal word an optimizer
+    // might legitimately produce as a "cleaner" paraphrase, to prove the
+    // graph shape does NOT depend on what the optimizer returns.
+    mockedComplete.mockResolvedValue(completeResult("Do the needful across the whole lifecycle end to end."));
+    const db = makeProDbStub();
+    const result = await createProWorkflow(fastifyWith(true, db), user(), VERBOSE_OBJECTIVE);
+    const phaseNames = (db.workflows[result.workflowId!]?.plan as { phases: string[] }).phases;
+    expect(phaseNames).toEqual(expect.arrayContaining(["research", "architecture", "implementation", "review", "verification"]));
+  });
+
+  it("original-prompt fallback: a failed semantic call still produces a real, working workflow — never blocks workflow creation", async () => {
+    mockedComplete.mockRejectedValue(new Error("optimizer upstream down"));
+    const db = makeProDbStub();
+    const result = await createProWorkflow(fastifyWith(true, db), user(), VERBOSE_OBJECTIVE);
+    expect(result.workflowId).toBeDefined();
+    expect(db.workflows[result.workflowId!]?.objective).toBe(VERBOSE_OBJECTIVE);
+  });
+
+  it("bypass-when-unnecessary: a SIMPLE objective never reaches the optimizer at all — no workflow, no optimization attempt", async () => {
+    const db = makeProDbStub();
+    const result = await createProWorkflow(fastifyWith(true, db), user(), "What is 2 + 2?");
+    expect(result.complexity).toBe("simple");
+    expect(result.workflowId).toBeUndefined();
+    expect(mockedComplete).not.toHaveBeenCalled();
   });
 });

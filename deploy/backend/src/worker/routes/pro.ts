@@ -1,4 +1,4 @@
-import { getProStatus, handleCreateProWorkflow, handleStepProWorkflow, handleClarifyProWorkflow, handleGetProWorkflow } from "../../handlers/pro.js";
+import { getProStatus, handleCreateProWorkflow, handleStepProWorkflow, handleClarifyProWorkflow, handleGetProWorkflow, handleCancelProWorkflow } from "../../handlers/pro.js";
 import type { WorkerCtx } from "../context.js";
 import { asFastifyInstance } from "../context.js";
 import type { AuthedUser } from "../../types/index.js";
@@ -36,4 +36,8 @@ export async function handleClarifyProWorkflowWorker(request: Request, ctx: Work
 
 export async function handleGetProWorkflowWorker(ctx: WorkerCtx, user: AuthedUser, workflowId: string): Promise<Response> {
   return respondWithResult(await handleGetProWorkflow(asFastifyInstance(ctx), user, workflowId));
+}
+
+export async function handleCancelProWorkflowWorker(ctx: WorkerCtx, user: AuthedUser, workflowId: string): Promise<Response> {
+  return respondWithResult(await handleCancelProWorkflow(asFastifyInstance(ctx), user, workflowId));
 }

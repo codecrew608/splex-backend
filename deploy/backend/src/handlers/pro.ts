@@ -3,7 +3,7 @@ import type { AuthedUser } from "../types/index.js";
 import { ok, fail, type HandlerResult } from "./result.js";
 import { isProEnabled, assertProAccess, ProUnavailableError } from "../pro/gate.js";
 import { createProWorkflow } from "../pro/orchestrator.js";
-import { executeWorkflowStep, resumeProWorkflowWithClarification, getProWorkflowStatus, type ExecutionStepResult, type ProWorkflowStatus } from "../pro/execution.js";
+import { executeWorkflowStep, resumeProWorkflowWithClarification, getProWorkflowStatus, cancelProWorkflow, type ExecutionStepResult, type ProWorkflowStatus, type CancelWorkflowResult } from "../pro/execution.js";
 
 // Runtime-agnostic Pro handlers — written once, exposed by both
 // routes/pro.ts (Fastify) and worker/routes/pro.ts (Worker), matching the
@@ -146,6 +146,39 @@ export async function handleClarifyProWorkflow(
 
   try {
     const result = await resumeProWorkflowWithClarification(fastify, user, workflowId, answer);
+    return ok(result);
+  } catch (err) {
+    if (err instanceof Error && err.message === "Workflow not found.") {
+      return fail("Workflow not found.", 404);
+    }
+    throw err;
+  }
+}
+
+// POST /pro/workflows/:id/cancel — see cancelProWorkflow's own doc comment
+// (pro/execution.ts) for exactly what cancellation does and does not stop.
+// Idempotent like /step: cancelling an already-terminal workflow reports
+// its current status back rather than erroring.
+export async function handleCancelProWorkflow(
+  fastify: FastifyInstance,
+  user: AuthedUser,
+  workflowId: string,
+): Promise<HandlerResult<CancelWorkflowResult>> {
+  try {
+    assertProAccess(fastify, user);
+  } catch (err) {
+    if (err instanceof ProUnavailableError) {
+      return fail(err.message, 403);
+    }
+    throw err;
+  }
+
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(workflowId)) {
+    return fail("Invalid workflow id.", 400);
+  }
+
+  try {
+    const result = await cancelProWorkflow(fastify, user, workflowId);
     return ok(result);
   } catch (err) {
     if (err instanceof Error && err.message === "Workflow not found.") {

@@ -1,7 +1,8 @@
 import { createHash } from "node:crypto";
 import type { FastifyInstance } from "fastify";
 import type { AuthedUser } from "../types/index.js";
-import { checkAndReserveCredits, settleDailyReservation } from "../credits/checkCredits.js";
+import { checkCredits } from "../credits/checkCredits.js";
+import { consumeCredits } from "../credits/consumeCredits.js";
 import { stripInjectionPatterns } from "../research/security.js";
 import { fetchMemoryFacts, buildMemorySummary, fetchProjectMemoryFacts, buildProjectMemorySummary } from "../memory/extractMemory.js";
 import { defaultProviderRegistry, ProviderCallError, type AIProvider, type ProviderFailureClass, type ProviderOperation } from "./providers.js";
@@ -586,19 +587,65 @@ async function fetchWorkflowMemory(fastify: FastifyInstance, workflow: WorkflowR
   return { userSummary, projectSummary, factCount: facts.length + projectFactCount };
 }
 
-async function finalizeWorkflow(fastify: FastifyInstance, user: AuthedUser, workflow: WorkflowRow, status: "COMPLETED" | "FAILED"): Promise<void> {
-  const { data } = await fastify.supabaseAdmin.from("pro_provider_runs").select("cost_credits").eq("workflow_id", workflow.id);
-  const actualCost = ((data ?? []) as Array<{ cost_credits: number | null }>).reduce((sum, r) => sum + (r.cost_credits ?? 0), 0);
+async function finalizeWorkflow(fastify: FastifyInstance, user: AuthedUser, workflow: WorkflowRow, status: "COMPLETED" | "FAILED" | "CANCELLED"): Promise<void> {
+  // Settle EXACTLY ONCE. Two callers can reach this for one workflow in a
+  // concurrent window — a cancelProWorkflow and an executeWorkflowStep that
+  // completes (or times out, or exhausts the budget on) the same workflow.
+  // Without a claim they would both call consumeCredits (a real
+  // double-charge against the user's monthly pool) and both write a
+  // terminal status (the later one silently overwriting the other — a
+  // cancel lost, or a FAILED flipped to COMPLETED). The pro_budget_reservations
+  // row is the claim token: reserved -> settling is an atomic conditional
+  // UPDATE, and only the caller whose UPDATE matches a row does the rest.
+  // A workflow that never left WAITING_FOR_TASKS has no reservation row
+  // (nothing could have been spent) — that path still needs its status
+  // flipped, so it skips the claim and just writes the terminal status.
+  const hasReservation = workflow.reserved_credits > 0;
+  if (hasReservation) {
+    const { data: settleClaim } = await fastify.supabaseAdmin
+      .from("pro_budget_reservations")
+      .update({ status: "settling" })
+      .eq("workflow_id", workflow.id)
+      .eq("status", "reserved")
+      .select("id")
+      .maybeSingle();
+    if (!settleClaim) return; // another finalize already owns this workflow's settlement
+  }
 
-  // Settles against the SAME daily-credits pool every ordinary chat turn
-  // uses (credits/checkCredits.ts) — item 23's "one coherent SPLEX usage
-  // record", never a parallel accounting system.
-  await settleDailyReservation(fastify, user.id, workflow.reserved_credits, actualCost);
-  await fastify.supabaseAdmin
-    .from("pro_budget_reservations")
-    .update({ settled_credits: actualCost, status: "settled", settled_at: new Date().toISOString() })
-    .eq("workflow_id", workflow.id)
-    .eq("status", "reserved");
+  const { data } = await fastify.supabaseAdmin.from("pro_provider_runs").select("cost_credits, cost_usd").eq("workflow_id", workflow.id);
+  const runs = (data ?? []) as Array<{ cost_credits: number | null; cost_usd: number | null }>;
+  const actualCost = runs.reduce((sum, r) => sum + (r.cost_credits ?? 0), 0);
+  const actualCostUsd = runs.reduce((sum, r) => sum + (r.cost_usd ?? 0), 0);
+
+  // Item 23's "one coherent SPLEX usage record": a Pro workflow's spend is
+  // drawn from the user's MONTHLY 150,000-credit `credits` allowance — the
+  // pool the Pro plan is actually sold on — via the same consume_credits()
+  // path and the same credit_usage_logs ledger every other billable
+  // SPLEX action already writes to. skipDaily:true: Pro deliberately never
+  // touches the daily-credits pool ordinary chat uses. Charging a whole
+  // multi-thousand-credit workflow against the ~5,000/day pool would both
+  // wedge every workflow at the start (reserve_daily_credits hard-rejects
+  // any amount > the daily limit) and starve ordinary chat for the rest of
+  // the day — the exact ceiling-vs-daily-pool mismatch checkCredits.ts's
+  // own comments record hitting once already, with Deep Research.
+  if (actualCost > 0) {
+    await consumeCredits(fastify, {
+      userId: user.id,
+      creditCost: actualCost,
+      intent: "pro_workflow",
+      complexity: "complex",
+      openrouterModelId: "pro-multi",
+      realCostEstimate: actualCostUsd,
+      skipDaily: true,
+    });
+  }
+  if (hasReservation) {
+    await fastify.supabaseAdmin
+      .from("pro_budget_reservations")
+      .update({ settled_credits: actualCost, status: "settled", settled_at: new Date().toISOString() })
+      .eq("workflow_id", workflow.id)
+      .eq("status", "settling");
+  }
   await fastify.supabaseAdmin
     .from("pro_workflows")
     .update({ status, actual_cost_credits: actualCost, completed_at: new Date().toISOString() })
@@ -611,7 +658,20 @@ async function finalizeWorkflow(fastify: FastifyInstance, user: AuthedUser, work
 // and this function additionally scopes every read to `user_id = user.id`
 // itself, so it can never touch another user's workflow regardless of
 // what a caller passes.
-export async function executeWorkflowStep(fastify: FastifyInstance, user: AuthedUser, workflowId: string): Promise<ExecutionStepResult> {
+// registryOverride: test-only dependency-injection seam, added
+// specifically for real concurrency/stress/failure/security testing
+// against the actual execution engine (spec: "do not merely write tests,
+// actually run them") — every real caller omits it and gets the exact
+// same defaultProviderRegistry(fastify) construction as before this
+// param existed. No behavior change for production; it exists purely so
+// a test harness can substitute a controllable Mock/fault-injecting
+// registry without touching provider credentials or real network calls.
+export async function executeWorkflowStep(
+  fastify: FastifyInstance,
+  user: AuthedUser,
+  workflowId: string,
+  registryOverride?: AIProvider[],
+): Promise<ExecutionStepResult> {
   const { data: workflowData } = await fastify.supabaseAdmin
     .from("pro_workflows")
     .select("*")
@@ -647,26 +707,29 @@ export async function executeWorkflowStep(fastify: FastifyInstance, user: Authed
     return { workflowId, workflowStatus: "FAILED", tasksDispatched: 0, tasksCompleted: 0, tasksFailed: 0, message: "Workflow exceeded its maximum execution time." };
   }
 
-  // First step for this workflow: reserve its credit budget up front
-  // (item 22 — enforced BEFORE any provider call, not just observed
-  // after). Sized to the workflow's own max_estimated_cost_credits
-  // ceiling, which already mirrors the plan's pro_workflow_cost limit by
-  // default (migration 0061) — not re-clamped against a live plan_limits
-  // read in this pass, a reasonable simplification while those numbers
-  // are still provisional and undifferentiated per-workflow.
+  // First step for this workflow: gate its credit budget up front (item 22
+  // — enforced BEFORE any provider call, not just observed after). Checked
+  // against the MONTHLY 150,000-credit pool only (monthlyOnly:true), sized
+  // to the workflow's own max_estimated_cost_credits ceiling — see
+  // finalizeWorkflow's own comment for why Pro draws on the monthly
+  // allowance and never the daily pool. checkCredits is a pure read here
+  // (the actual charge happens once, at finalize, from real provider
+  // spend) — so the pro_budget_reservations row written below is an audit
+  // record of the ceiling, not a hold on a counter, and nothing needs
+  // releasing if the workflow later fails or is cancelled before spending.
   //
-  // Claimed ATOMICALLY via a conditional UPDATE (status = 'RUNNING' WHERE
-  // status = 'WAITING_FOR_TASKS'), not a plain "if reserved_credits === 0"
-  // check — a row-level UPDATE...WHERE is atomic in Postgres, so two
-  // near-simultaneous step calls for the SAME workflow (a real
-  // possibility: nothing stops a caller from firing two requests close
-  // together) cannot both pass a read-then-write check and reserve
-  // credits twice. Only the caller whose UPDATE actually matches a row
-  // proceeds to reserve; the other re-reads the now-current row and
-  // continues from whatever the winner already set up. Same class of race
-  // this session already found and fixed for ordinary chat (migration
-  // 0055's reserve_daily_request) — closed here from the start rather
-  // than shipped and discovered later.
+  // The status transition itself is claimed ATOMICALLY via a conditional
+  // UPDATE (status = 'RUNNING' WHERE status = 'WAITING_FOR_TASKS'), not a
+  // plain "if reserved_credits === 0" check — a row-level UPDATE...WHERE is
+  // atomic in Postgres, so two near-simultaneous step calls for the SAME
+  // workflow (a real possibility: nothing stops a caller from firing two
+  // requests close together) cannot both pass a read-then-write check and
+  // both proceed to run the start gate. Only the caller whose UPDATE
+  // actually matches a row proceeds; the other re-reads the now-current
+  // row and continues from whatever the winner already set up. Same class
+  // of race this session already found and fixed for ordinary chat
+  // (migration 0055's reserve_daily_request) — closed here from the start
+  // rather than shipped and discovered later.
   if (workflow.status === "WAITING_FOR_TASKS") {
     const { data: claimed } = await fastify.supabaseAdmin
       .from("pro_workflows")
@@ -677,21 +740,40 @@ export async function executeWorkflowStep(fastify: FastifyInstance, user: Authed
       .maybeSingle();
 
     if (claimed) {
-      const gate = await checkAndReserveCredits(fastify, user.id, workflow.max_estimated_cost_credits);
-      if (!gate.allowed) {
+      const affordable = await checkCredits(fastify, user.id, workflow.max_estimated_cost_credits, { monthlyOnly: true });
+      if (!affordable) {
         await fastify.supabaseAdmin.from("pro_workflows").update({ status: "FAILED" }).eq("id", workflowId);
         return { workflowId, workflowStatus: "FAILED", tasksDispatched: 0, tasksCompleted: 0, tasksFailed: 0, message: "Insufficient credits to start this workflow." };
       }
-      await fastify.supabaseAdmin.from("pro_budget_reservations").insert({ workflow_id: workflowId, reserved_credits: gate.dailyReserved });
-      await fastify.supabaseAdmin.from("pro_workflows").update({ reserved_credits: gate.dailyReserved }).eq("id", workflowId);
-      workflow.reserved_credits = gate.dailyReserved;
+      await fastify.supabaseAdmin.from("pro_budget_reservations").insert({ workflow_id: workflowId, reserved_credits: workflow.max_estimated_cost_credits });
+      await fastify.supabaseAdmin.from("pro_workflows").update({ reserved_credits: workflow.max_estimated_cost_credits }).eq("id", workflowId);
+      workflow.reserved_credits = workflow.max_estimated_cost_credits;
+      workflow.status = "RUNNING";
     } else {
       // Lost the claim race (or the status had already moved on) — the
       // winner's write is authoritative, not our stale in-memory copy.
       const { data: refreshed } = await fastify.supabaseAdmin.from("pro_workflows").select("*").eq("id", workflowId).maybeSingle();
       if (refreshed) Object.assign(workflow, refreshed as WorkflowRow);
+      // The winner of that race might have been a CANCEL (or a step that
+      // already failed the workflow), not another ordinary step — found by
+      // this session's own concurrency suite: forcing status to "RUNNING"
+      // unconditionally here would let this step go on to dispatch tasks
+      // and record real provider spend against a workflow the database
+      // already considers terminal, spend that finalizeWorkflow would then
+      // never settle. Bail out honestly instead. (Read via a fresh local:
+      // TS narrows workflow.status to the literal checked above and can't
+      // see the Object.assign widen it.)
+      const currentStatus: string = (refreshed as { status?: string } | null)?.status ?? workflow.status;
+      if (TERMINAL_WORKFLOW_STATUSES.has(currentStatus)) {
+        return { workflowId, workflowStatus: currentStatus, tasksDispatched: 0, tasksCompleted: 0, tasksFailed: 0, message: "Workflow already finished." };
+      }
+      if (currentStatus === "WAITING_FOR_USER") {
+        return {
+          workflowId, workflowStatus: "WAITING_FOR_USER", tasksDispatched: 0, tasksCompleted: 0, tasksFailed: 0,
+          message: workflow.clarification_question ?? "Workflow is waiting for clarification.",
+        };
+      }
     }
-    workflow.status = "RUNNING";
   }
 
   const [{ data: tasksData }, { data: depsData }, { data: runsData }] = await Promise.all([
@@ -731,7 +813,7 @@ export async function executeWorkflowStep(fastify: FastifyInstance, user: Authed
   let tasksCompleted = 0;
   let tasksFailed = 0;
   if (ready.length > 0) {
-    const registry = defaultProviderRegistry(fastify);
+    const registry = registryOverride ?? defaultProviderRegistry(fastify);
     const creditsPerUsd = fastify.config.CREDITS_PER_USD ?? 120000;
     const memory = await fetchWorkflowMemory(fastify, workflow);
     const outcomes = await Promise.all(ready.map((task) => dispatchTask(fastify, workflow, task, dependencies, registry, creditsPerUsd, memory)));
@@ -805,6 +887,7 @@ export async function resumeProWorkflowWithClarification(
   user: AuthedUser,
   workflowId: string,
   answer: string,
+  registryOverride?: AIProvider[],
 ): Promise<ExecutionStepResult> {
   const { data: workflowData } = await fastify.supabaseAdmin
     .from("pro_workflows")
@@ -835,12 +918,99 @@ export async function resumeProWorkflowWithClarification(
   // WAITING_FOR_TASKS (executeWorkflowStep's own atomic-claim block), and
   // routing back through that same state would re-enter the claim check
   // and reserve a second time for one workflow.
-  await fastify.supabaseAdmin
+  //
+  // Claimed CONDITIONALLY on status still being WAITING_FOR_USER — the
+  // same atomic-UPDATE pattern the first-step claim uses. Two things can
+  // race this write: a second concurrent resume (only one should append a
+  // clarification and advance), and a cancel that lands between this
+  // function's initial read and this write (an unconditional flip here
+  // would resurrect a CANCELLED workflow back to RUNNING). Whichever
+  // resume's UPDATE matches a row wins; everyone else re-reads and reports
+  // the current state without advancing.
+  const { data: resumed } = await fastify.supabaseAdmin
     .from("pro_workflows")
     .update({ status: "RUNNING", plan: updatedPlan, clarification_question: null, clarification_task_id: null })
-    .eq("id", workflowId);
+    .eq("id", workflowId)
+    .eq("status", "WAITING_FOR_USER")
+    .select("id")
+    .maybeSingle();
 
-  return executeWorkflowStep(fastify, user, workflowId);
+  if (!resumed) {
+    const { data: refreshed } = await fastify.supabaseAdmin.from("pro_workflows").select("status").eq("id", workflowId).maybeSingle();
+    const status = (refreshed as { status: string } | null)?.status ?? workflow.status;
+    return {
+      workflowId, workflowStatus: status, tasksDispatched: 0, tasksCompleted: 0, tasksFailed: 0,
+      message: "This workflow is not currently waiting for a clarification.",
+    };
+  }
+
+  return executeWorkflowStep(fastify, user, workflowId, registryOverride);
+}
+
+export interface CancelWorkflowResult {
+  workflowId: string;
+  workflowStatus: string;
+  message: string;
+}
+
+// Verified missing while designing this pass's own concurrency tests
+// (spec section 1's "workflow cancellation during execution" needed
+// something real to actually run against) — Pro had no cancellation path
+// at all before this, unlike ordinary chat's Agent Workflow
+// (cortex/workflow/orchestrator.ts's cancelActiveWorkflow, whose exact
+// shape this mirrors: a conditional UPDATE only on non-terminal statuses,
+// nothing more).
+//
+// Same honest limitation as that existing function, stated explicitly
+// rather than silently assumed: this stops FUTURE steps from dispatching
+// (executeWorkflowStep's own terminal-status guard refuses once
+// CANCELLED) but cannot abort a dispatchTask call already in flight
+// inside another concurrent request — there is no cancellation-token/
+// queue infrastructure in this codebase to interrupt live work, matching
+// cortex/workflow/orchestrator.ts's own documented behavior for the same
+// reason. Settles whatever was actually spent via the same
+// finalizeWorkflow path completion/failure already use — a cancelled
+// workflow is never left holding an un-settled credit reservation.
+export async function cancelProWorkflow(fastify: FastifyInstance, user: AuthedUser, workflowId: string): Promise<CancelWorkflowResult> {
+  const { data: workflowData } = await fastify.supabaseAdmin
+    .from("pro_workflows")
+    .select("*")
+    .eq("id", workflowId)
+    .eq("user_id", user.id)
+    .maybeSingle();
+  if (!workflowData) {
+    throw new Error("Workflow not found.");
+  }
+  const workflow = workflowData as WorkflowRow;
+
+  if (TERMINAL_WORKFLOW_STATUSES.has(workflow.status)) {
+    return { workflowId, workflowStatus: workflow.status, message: "Workflow already finished — nothing to cancel." };
+  }
+
+  // Same atomic conditional-UPDATE shape as the WAITING_FOR_TASKS claim
+  // above — only the caller whose UPDATE actually matches a (still
+  // non-terminal) row wins the cancellation; a concurrent cancel from two
+  // callers, or a cancel racing a step that just completed the workflow,
+  // can never both "win".
+  const { data: claimed } = await fastify.supabaseAdmin
+    .from("pro_workflows")
+    .update({ status: "CANCELLED" })
+    .eq("id", workflowId)
+    .not("status", "in", `(${[...TERMINAL_WORKFLOW_STATUSES].join(",")})`)
+    .select("id")
+    .maybeSingle();
+
+  if (!claimed) {
+    const { data: refreshed } = await fastify.supabaseAdmin.from("pro_workflows").select("status").eq("id", workflowId).maybeSingle();
+    const finalStatus = (refreshed as { status: string } | null)?.status ?? workflow.status;
+    return { workflowId, workflowStatus: finalStatus, message: "Workflow already finished — nothing to cancel." };
+  }
+
+  if (workflow.reserved_credits > 0) {
+    await finalizeWorkflow(fastify, user, workflow, "CANCELLED");
+  }
+
+  return { workflowId, workflowStatus: "CANCELLED", message: "Workflow cancelled." };
 }
 
 export interface ProWorkflowStatus {

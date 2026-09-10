@@ -39,6 +39,9 @@ export const RATE_LIMITS = {
   // caller is expected to check this more often than it advances the
   // workflow itself.
   pro_get_workflow: { max: 60, windowMs: 60_000 },
+  // Same low ceiling as pro_clarify_workflow — a one-shot action per
+  // workflow, not a poll target.
+  pro_cancel_workflow: { max: 10, windowMs: 60_000 },
   feedback_submit: { max: 10, windowMs: 60_000 },
 } as const;
 

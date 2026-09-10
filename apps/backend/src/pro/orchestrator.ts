@@ -2,6 +2,7 @@ import type { FastifyInstance } from "fastify";
 import type { AuthedUser } from "../types/index.js";
 import { assertProAccess } from "./gate.js";
 import { defaultProviderRegistry, selectProviderFor, type ProviderOperation } from "./providers.js";
+import { optimizeProObjective } from "./objectiveOptimization.js";
 
 // SPLEX Pro Executive Orchestrator — items 5-8, 14, 21. Complexity
 // classification and Task Execution Graph construction, fully offline and
@@ -218,12 +219,25 @@ export async function createProWorkflow(
     };
   }
 
+  // Both classification above and graph-shaping below read the objective
+  // by REGEX SIGNAL (research/architecture/implementation/review/
+  // verification keywords) — the same reason handlers/chat.ts always
+  // classifies on the ORIGINAL message before any optimization touches
+  // it (see that file's own classificationPromise comment). Building the
+  // graph from a possibly-compressed paraphrase risks losing the exact
+  // wording those signals depend on; optimizing only AFTER the graph
+  // shape is already decided avoids that risk while still compressing
+  // what actually gets stored/sent downstream — see
+  // objectiveOptimization.ts's own header for why this is a direct
+  // primitive-reuse integration, not a duplicate of the chat-message
+  // optimizer.
   const graph = buildTaskExecutionGraph(objective);
+  const { text: optimizedObjective } = await optimizeProObjective(fastify, user.planTier, user.id, objective);
   const registry = defaultProviderRegistry(fastify);
 
   const { data: workflow, error: workflowError } = await fastify.supabaseAdmin
     .from("pro_workflows")
-    .insert({ user_id: user.id, objective, status: "DECOMPOSING", plan: { phases: graph.phases.map((p) => p.phase) } })
+    .insert({ user_id: user.id, objective: optimizedObjective, status: "DECOMPOSING", plan: { phases: graph.phases.map((p) => p.phase) } })
     .select("id")
     .single();
   if (workflowError || !workflow) {
