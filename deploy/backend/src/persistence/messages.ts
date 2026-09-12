@@ -26,6 +26,14 @@ export interface InsertMessageParams {
   // migrated to the upfront-insert/finalize pattern. Pass 'streaming'
   // explicitly when inserting a not-yet-finished placeholder.
   status?: MessageStatus;
+  // True ONLY for chat.ts's plain-chat branch, which is the sole call site
+  // that calls reserveDailyRequest() for this turn (see checkCredits.ts's
+  // own doc comment) — every other branch (image/audio/ppt/video/
+  // web_search/deep_research/workflow) must leave this false (the
+  // default). Read exclusively by reap_stale_streaming_messages() (db/
+  // migrations/0066_*.sql) to decide whether a stale 'streaming' row also
+  // needs its daily_requests reservation released.
+  reservedDailyRequest?: boolean;
 }
 
 export async function insertMessage(fastify: FastifyInstance, params: InsertMessageParams): Promise<string> {
@@ -40,6 +48,7 @@ export async function insertMessage(fastify: FastifyInstance, params: InsertMess
       credits_charged: params.creditsCharged ?? null,
       routed_model: params.routedModel ?? null,
       status: params.status ?? "complete",
+      reserved_daily_request: params.reservedDailyRequest ?? false,
     })
     .select("id")
     .single();

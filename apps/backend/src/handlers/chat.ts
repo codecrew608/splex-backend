@@ -13,6 +13,7 @@ import {
   persistRefusal,
 } from "../persistence/messages.js";
 import { insertCortexDecision } from "../persistence/cortexDecisions.js";
+import { reapStaleStreamingMessages } from "../persistence/staleMessages.js";
 import {
   runCortexClassification,
   selectModelCandidates,
@@ -130,6 +131,12 @@ export async function runChat(
   // diverge on which version a given plan tier gets.
   const cortexVersion = resolveCortexVersion(user.planTier);
   const requestStartedAt = Date.now();
+
+  // Opportunistic sweep for any assistant message stuck in 'streaming' from
+  // a PAST, unrelated turn whose whole request died abnormally — see
+  // reapStaleStreamingMessages' own doc comment. Never awaited, never
+  // allowed to affect or slow THIS request.
+  reapStaleStreamingMessages(fastify, scheduleBackground);
 
   try {
     const seedMessage = body.message ?? "New chat";
@@ -545,6 +552,10 @@ export async function runChat(
       intent: decision.intentId,
       complexity: decision.complexity,
       status: "streaming",
+      // This is the one branch that called reserveDailyRequest() above for
+      // this turn — see reap_stale_streaming_messages' own doc comment for
+      // why this must be explicit rather than inferred from intent/category.
+      reservedDailyRequest: true,
     });
 
     sse.cortexStatus({ stage: "executing", label: "Executing..." });

@@ -182,8 +182,10 @@ describe("durable assistant-message persistence (source-level)", () => {
 
   it("runChat (plain chat) inserts the placeholder before streamCompletion and finalizes on every exit", () => {
     const src = read("handlers/chat.ts");
-    const insertIdx = src.indexOf('status: "streaming",\n    });\n\n    sse.cortexStatus({ stage: "executing"');
+    const insertIdx = src.indexOf('status: "streaming",\n      // This is the one branch that called reserveDailyRequest()');
     expect(insertIdx).toBeGreaterThan(-1);
+    const executingIdx = src.indexOf('sse.cortexStatus({ stage: "executing"');
+    expect(executingIdx).toBeGreaterThan(insertIdx);
     const streamIdx = src.indexOf("generation = await streamCompletion(");
     expect(streamIdx).toBeGreaterThan(insertIdx);
     // Every exit path finalizes the SAME row via updateMessageResult —
@@ -626,5 +628,54 @@ describe("Prompt Optimizer — Pro-only by explicit product decision (source-lev
     expect(deterministicIdx).toBeGreaterThan(extractIdx);
     expect(semanticIdx).toBeGreaterThan(deterministicIdx);
     expect(restoreIdx).toBeGreaterThan(semanticIdx);
+  });
+});
+
+describe("stale streaming-message reap (source-level)", () => {
+  // FINDING (production incident, 2026-09-12): a plain-chat turn's whole
+  // request died abnormally mid-generation — most consistent with the
+  // Cloudflare Worker instance itself being killed, not a normal JS
+  // exception, since runChat's own bottom-of-function catch (written
+  // specifically to prevent a message ever being stuck at 'streaming'
+  // forever) never ran. The row, and the daily_requests reservation
+  // reserveDailyRequest made for it, were both stuck permanently with no
+  // in-process code left to release them. db/migrations/0066_*.sql's
+  // reap_stale_streaming_messages() RPC is the out-of-band recovery layer;
+  // these pins assert it's actually wired up, not just that the RPC exists.
+
+  it("runChat calls reapStaleStreamingMessages once, before the try block, fire-and-forget", () => {
+    const src = read("handlers/chat.ts");
+    expect(src).toContain('import { reapStaleStreamingMessages } from "../persistence/staleMessages.js";');
+    const callIdx = src.indexOf("reapStaleStreamingMessages(fastify, scheduleBackground);");
+    expect(callIdx).toBeGreaterThan(-1);
+    // Must run before the try block that owns this turn's own reservation —
+    // it sweeps OTHER, past turns, and must never be awaited (a slow sweep
+    // must never delay or fail the current request).
+    const tryIdx = src.indexOf("\n  try {");
+    expect(tryIdx).toBeGreaterThan(callIdx);
+    expect(src.slice(callIdx, callIdx + 40)).not.toContain("await ");
+  });
+
+  it("only the plain-chat placeholder insert sets reservedDailyRequest — no other insertMessage call site in chat.ts does", () => {
+    const src = read("handlers/chat.ts");
+    const hits = src.match(/reservedDailyRequest: true/g) ?? [];
+    // Exactly one: chat.ts's plain-chat branch is the sole caller of
+    // reserveDailyRequest() (image/audio/ppt/video/web_search/deep_research/
+    // workflow all return before reaching it) — a second occurrence would
+    // mean some other branch started reserving without this file's own
+    // early-return structure actually changing, which is the exact
+    // ambiguity reap_stale_streaming_messages' design note warns against.
+    expect(hits.length).toBe(1);
+  });
+
+  it("staleMessages.ts calls the RPC by name and never awaits it inline", () => {
+    const src = read("persistence/staleMessages.ts");
+    expect(src).toContain('.rpc("reap_stale_streaming_messages")');
+    expect(src).toContain("scheduleBackground(work)");
+  });
+
+  it("insertMessage writes reserved_daily_request, defaulting false", () => {
+    const src = read("persistence/messages.ts");
+    expect(src).toContain("reserved_daily_request: params.reservedDailyRequest ?? false");
   });
 });
