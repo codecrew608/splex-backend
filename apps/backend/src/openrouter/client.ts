@@ -225,7 +225,18 @@ export async function streamCompletion(opts: StreamCompletionOptions): Promise<S
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
   let buffer = "";
-  let fullText = "";
+  // Array + single join() at the end, not fullText += delta per token —
+  // this loop is the dominant CPU cost of a long generation (this repo
+  // runs on the Workers FREE plan by design, a fixed 10ms-of-actual-JS-
+  // execution ceiling per request, Error 1102 if exceeded — see this
+  // file's own STREAM_TIMEOUT_MS comment for the wall-clock half of this
+  // story; this is the CPU half). Repeated += on a large, growing string
+  // risks real, avoidable rework even with V8's rope-string optimization;
+  // collecting parts and joining once is the predictable-cost version of
+  // the same result. Does not fix the underlying ceiling for a genuinely
+  // huge response — only removes one avoidable cost from the loop that
+  // hits it.
+  const textParts: string[] = [];
   let usage: OpenRouterUsage | null = null;
   let aborted = false;
 
@@ -253,7 +264,7 @@ export async function streamCompletion(opts: StreamCompletionOptions): Promise<S
 
         const delta = parsed.choices?.[0]?.delta?.content;
         if (delta) {
-          fullText += delta;
+          textParts.push(delta);
           onToken(delta);
         }
         if (parsed.usage) {
@@ -269,7 +280,7 @@ export async function streamCompletion(opts: StreamCompletionOptions): Promise<S
     }
   }
 
-  return { fullText, usage, aborted };
+  return { fullText: textParts.join(""), usage, aborted };
 }
 
 // OpenRouter's server-side web tools (see
