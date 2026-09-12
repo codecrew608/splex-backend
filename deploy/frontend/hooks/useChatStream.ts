@@ -36,12 +36,23 @@ const MEDIA_POLL_MAX_ATTEMPTS = 120;
 // showing status:'streaming'. Most commonly: the generation genuinely
 // finished a moment after the page's server-side fetch ran, or is still
 // running in another tab/session; rarely, a row an unexpected server-side
-// failure never got to finalize. Shorter and far more bounded than the
-// media poll above — this is confirming a normal completion that's
-// already very likely done, not watching a job that takes minutes by
-// design.
+// failure never got to finalize.
+//
+// FIX (real incident, 2026-09-12): this used to give up after ~2 minutes
+// — shorter than the backend's OWN legitimate worst case for a single
+// turn (openrouter/client.ts's STREAM_TIMEOUT_MS is 180s for ONE model
+// candidate alone, before any retry or Groq fallback attempt). A long,
+// detail-heavy request (e.g. "build this whole page as one big HTML
+// file") can genuinely still be generating well past 2 minutes — the poll
+// gave up and told the user to retry while the backend was still honestly
+// working and would have finished. Now matches
+// reap_stale_streaming_messages()'s own default staleness threshold (db/
+// migrations/0066_*.sql, 5 minutes): the frontend never gives up on a
+// turn before the backend's own dead-letter mechanism would even
+// consider it stale, so "still working" and "give up" stay consistent
+// between the two.
 const RECONCILE_POLL_INTERVAL_MS = 3_000;
-const RECONCILE_POLL_MAX_ATTEMPTS = 40; // ~2 minutes
+const RECONCILE_POLL_MAX_ATTEMPTS = 100; // ~5 minutes
 
 export interface LocalChatMessage extends ChatMessage {
   streaming?: boolean;
