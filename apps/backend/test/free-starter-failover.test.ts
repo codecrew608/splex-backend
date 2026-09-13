@@ -270,17 +270,48 @@ describe("Groq-eligible failure conditions (Free) — capacity, not auth/config"
 // Items 3, 4, 15 — API 1 / API 2 isolation
 // ===========================================================================
 describe("API 1 ↔ API 2 isolation — Free/Starter can never reach the Pro credential", () => {
-  it("OPENROUTER_API_KEY_2 exists ONLY in the two env schemas (+ a comment) — never in routing/dispatch code", () => {
+  it("OPENROUTER_API_KEY_2 exists ONLY in the two env schemas, a comment, and Pro's own provider files — never in Free/Starter routing/dispatch code", () => {
     const hits: string[] = [];
     for (const file of walk(SRC)) {
       const rel = file.slice(SRC.length + 1);
       if (readFileSync(file, "utf8").includes("OPENROUTER_API_KEY_2")) hits.push(rel);
     }
-    expect(hits.sort()).toEqual(["openrouter/health.ts", "plugins/env.ts", "worker/env.ts"]);
+    // Grew from 3 files to 8 (2026-09-13): the 5 Pro provider adapters +
+    // providers.ts now legitimately read this credential — see each
+    // file's own isolation comment. The invariant that actually matters —
+    // no Free/Starter file is in this list — is what the rest of this
+    // describe block keeps proving directly.
+    expect(hits.sort()).toEqual(
+      [
+        "openrouter/health.ts",
+        "plugins/env.ts",
+        "pro/providers.ts",
+        "pro/providers/anthropic.ts",
+        "pro/providers/gemini.ts",
+        "pro/providers/openai.ts",
+        "pro/providers/perplexity.ts",
+        "pro/providers/xai.ts",
+        "worker/env.ts",
+      ].sort(),
+    );
     // and in openrouter/health.ts it is only a comment, never code
     const healthSrc = read("openrouter/health.ts");
     const line = healthSrc.split("\n").find((l) => l.includes("OPENROUTER_API_KEY_2"))!;
     expect(line.trimStart().startsWith("//")).toBe(true);
+  });
+
+  it("no Free/Starter routing file is among the OPENROUTER_API_KEY_2 references — explicit negative check, not just an absence from the list above", () => {
+    for (const rel of [
+      "openrouter/client.ts",
+      "groq/fallback.ts",
+      "groq/client.ts",
+      "cortex/modelSelect.ts",
+      "cortex/routing.ts",
+      "cortex/modelHealth.ts",
+      "handlers/chat.ts",
+    ]) {
+      expect(read(rel), `${rel} must never reference OPENROUTER_API_KEY_2`).not.toContain("OPENROUTER_API_KEY_2");
+    }
   });
 
   it("openRouterHeaders() builds Authorization from OPENROUTER_API_KEY only — never the _2 slot", () => {

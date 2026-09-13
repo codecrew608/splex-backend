@@ -31,17 +31,25 @@ export type {
 export { ProviderCallError, unconnectedProvider, supportsFactory, computeCostUsd } from "./providerCore.js";
 
 // ---------------------------------------------------------------------
-// Real adapters (pro/providers/*.ts) — each checks its OWN API key
-// (OPENAI_API_KEY, ANTHROPIC_API_KEY, GEMINI_API_KEY, PERPLEXITY_API_KEY,
-// XAI_API_KEY) at construction time via fastify.config: absent -> the
-// same honest "no credential configured" stub this codebase has used
-// since before any real adapter existed (providerCore.ts's
-// unconnectedProvider); present -> a real HTTP call to that provider.
-// Verified by grep before this was written: no such key exists anywhere
-// in this codebase or its deployed secrets today, so defaultProviderRegistry
-// below constructs 5 stubs in production right now, identically to before
-// this file changed — activating a real adapter is a matter of setting
-// one secret, never a further code change.
+// Real adapters (pro/providers/*.ts) — ALL FIVE route through OpenRouter
+// using ONE shared credential, fastify.config.OPENROUTER_API_KEY_2 ("API
+// 2"), checked at construction time: absent -> the same honest "no
+// credential configured" stub this codebase has used since before any
+// real adapter existed (providerCore.ts's unconnectedProvider); present
+// -> a real HTTP call, via OpenRouter, to that provider's model (see each
+// providers/*.ts file's own OPENROUTER_*_MODEL_ID / *_MODEL_ID constant
+// for exactly which model). This replaced 5 separate native provider keys
+// (2026-09-13) — no such keys exist in this codebase's schema anymore.
+//
+// OPENROUTER_API_KEY_2 is a SEPARATE credential from OPENROUTER_API_KEY
+// ("API 1", the ONLY key Free/Starter's openrouter/client.ts ever reads)
+// — see test/free-starter-failover.test.ts for the isolation pins this
+// depends on. Verified: OPENROUTER_API_KEY_2 is absent from this
+// codebase's deployed secrets today, so defaultProviderRegistry below
+// constructs 5 stubs in production right now — activating every real
+// adapter at once is a matter of setting that one secret, never a
+// further code change, and Pro stays unreachable regardless
+// (SPLEX_PRO_ENABLED / system_flags.pro_enabled — see pro/gate.ts).
 // ---------------------------------------------------------------------
 export function defaultProviderRegistry(fastify: FastifyInstance): AIProvider[] {
   return [

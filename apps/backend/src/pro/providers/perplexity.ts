@@ -18,10 +18,12 @@ export const PERPLEXITY_CAPABILITIES: ProviderCapabilities = {
 
 const TIMEOUT_MS = 120_000;
 const DEFAULT_MAX_TOKENS = 4096;
-const BASE_URL = "https://api.perplexity.ai";
 
+// Routed through OpenRouter using "API 2" (OPENROUTER_API_KEY_2) — see
+// openai.ts's identical comment for the full isolation rationale (same
+// credential, same rule, every Pro provider).
 export function createPerplexityProvider(fastify: FastifyInstance): AIProvider {
-  const apiKey = fastify.config.PERPLEXITY_API_KEY;
+  const apiKey = fastify.config.OPENROUTER_API_KEY_2;
   if (!apiKey) return unconnectedProvider("perplexity", PERPLEXITY_CAPABILITIES);
 
   return {
@@ -31,7 +33,7 @@ export function createPerplexityProvider(fastify: FastifyInstance): AIProvider {
     async call(params: ProviderCallParams): Promise<ProviderCallResult> {
       const startedAt = Date.now();
       const { content, inputTokens, outputTokens } = await callOpenAICompatible(
-        { provider: "perplexity", baseUrl: BASE_URL, apiKey, model: fastify.config.PERPLEXITY_MODEL_ID, timeoutMs: TIMEOUT_MS },
+        { provider: "perplexity", baseUrl: fastify.config.OPENROUTER_BASE_URL, apiKey, model: fastify.config.PERPLEXITY_MODEL_ID, timeoutMs: TIMEOUT_MS },
         params.input,
         params.maxTokens ?? DEFAULT_MAX_TOKENS,
         params.signal,

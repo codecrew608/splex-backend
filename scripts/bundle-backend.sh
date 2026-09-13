@@ -188,7 +188,7 @@ FRONTEND_ORIGIN=
 SUPABASE_URL=
 SUPABASE_SERVICE_ROLE_KEY=
 OPENROUTER_API_KEY=
-# OPENROUTER_API_KEY_2 — SPLEX Pro ONLY (unwired slot; Pro is flag-off). Never used by Free/Starter.
+# OPENROUTER_API_KEY_2 — SPLEX Pro ONLY. Wired to every Pro provider adapter (pro/providers/*.ts); Pro itself stays flag-off. Never used by Free/Starter.
 OPENROUTER_API_KEY_2=
 OPENROUTER_BASE_URL=https://openrouter.ai/api/v1
 OPENROUTER_SITE_URL=
@@ -205,16 +205,17 @@ GROQ_PAID_SHARE_PCT=35
 GROQ_PER_USER_SHARE_PCT=5
 GROQ_PER_USER_SHARE_PCT_PAID=25
 SPLEX_PRO_ENABLED=false
-OPENAI_API_KEY=
-OPENAI_MODEL_ID=gpt-4o
-ANTHROPIC_API_KEY=
-ANTHROPIC_MODEL_ID=claude-sonnet-4-5-20250929
-GEMINI_API_KEY=
-GEMINI_MODEL_ID=gemini-2.5-flash
-PERPLEXITY_API_KEY=
-PERPLEXITY_MODEL_ID=sonar-pro
-XAI_API_KEY=
-XAI_MODEL_ID=grok-4
+# Pro's 5 real provider MODEL IDs — OpenRouter-namespaced, dispatched via
+# OPENROUTER_API_KEY_2 above. No separate native provider key exists.
+OPENAI_MODEL_ID=openai/gpt-5.6-luna
+ANTHROPIC_MODEL_ID=anthropic/claude-3-haiku
+GEMINI_MODEL_ID=google/gemini-2.5-flash-lite
+PERPLEXITY_MODEL_ID=perplexity/sonar
+XAI_MODEL_ID=x-ai/grok-build-0.1
+# Pro MEDIA model ids — config-only, unwired (no execution path exists yet).
+PRO_IMAGE_MODEL_ID=google/gemini-3.1-flash-image
+PRO_VIDEO_MODEL_ID=bytedance/seedance-2.0-mini
+PRO_TTS_MODEL_ID=deepgram/flux-tts:free
 INTELLIGENCE_SERVICE_URL=
 INTELLIGENCE_SERVICE_TOKEN=
 LOG_LEVEL=info
@@ -342,20 +343,28 @@ cat > "$OUT/wrangler.jsonc" <<'EOF'
     // writing it out means a future "enable Pro" change is a one-line
     // diff here, not a var someone has to remember to add.
     "SPLEX_PRO_ENABLED": "false",
-    // Pro's 5 real provider MODEL IDs — not secret, just a name, same
-    // category as CORTEX_CLASSIFIER_MODEL_ID above. The matching API KEY
-    // for each (OPENAI_API_KEY, ANTHROPIC_API_KEY, GEMINI_API_KEY,
-    // PERPLEXITY_API_KEY, XAI_API_KEY) is NEVER added here — same rule as
+    // Pro's 5 real provider MODEL IDs — OpenRouter-namespaced
+    // ("vendor/model"), not secret, just a name, same category as
+    // CORTEX_CLASSIFIER_MODEL_ID above. All five dispatch through
+    // OpenRouter using OPENROUTER_API_KEY_2 (pro/providers/*.ts) — there
+    // is no separate native credential per provider anymore. That
+    // credential is NEVER added here — same rule as
     // RAZORPAY_WEBHOOK_SECRET/SUPABASE_SERVICE_ROLE_KEY below: a real
-    // credential is `wrangler secret put` only. None of the 5 exist yet
-    // (verified: no such secret is configured on this Worker today), so
-    // every real adapter still constructs as the unconnected stub in
-    // production, identically to before these vars existed.
-    "OPENAI_MODEL_ID": "gpt-4o",
-    "ANTHROPIC_MODEL_ID": "claude-sonnet-4-5-20250929",
-    "GEMINI_MODEL_ID": "gemini-2.5-flash",
-    "PERPLEXITY_MODEL_ID": "sonar-pro",
-    "XAI_MODEL_ID": "grok-4",
+    // credential is `wrangler secret put` only. OPENROUTER_API_KEY_2 is
+    // not configured on this Worker today, so every real adapter still
+    // constructs as the unconnected stub in production, identically to
+    // before these vars existed.
+    "OPENAI_MODEL_ID": "openai/gpt-5.6-luna",
+    "ANTHROPIC_MODEL_ID": "anthropic/claude-3-haiku",
+    "GEMINI_MODEL_ID": "google/gemini-2.5-flash-lite",
+    "PERPLEXITY_MODEL_ID": "perplexity/sonar",
+    "XAI_MODEL_ID": "x-ai/grok-build-0.1",
+    // Pro MEDIA model ids — config-only, unwired (see plugins/env.ts's own
+    // comment: no image/video/TTS execution path exists in pro/ yet).
+    // Same OPENROUTER_API_KEY_2 credential as the 5 text models above.
+    "PRO_IMAGE_MODEL_ID": "google/gemini-3.1-flash-image",
+    "PRO_VIDEO_MODEL_ID": "bytedance/seedance-2.0-mini",
+    "PRO_TTS_MODEL_ID": "deepgram/flux-tts:free",
     // Not secret — a plan identifier. RAZORPAY_WEBHOOK_SECRET stays
     // `wrangler secret put` only, same rule as SUPABASE_SERVICE_ROLE_KEY
     // above — never add it here.
@@ -381,7 +390,7 @@ FRONTEND_ORIGIN=http://localhost:3000
 SUPABASE_URL=
 SUPABASE_SERVICE_ROLE_KEY=
 OPENROUTER_API_KEY=
-# OPENROUTER_API_KEY_2 — SPLEX Pro ONLY (unwired slot; Pro is flag-off). Never used by Free/Starter.
+# OPENROUTER_API_KEY_2 — SPLEX Pro ONLY. Wired to every Pro provider adapter (pro/providers/*.ts); Pro itself stays flag-off. Never used by Free/Starter.
 OPENROUTER_API_KEY_2=
 OPENROUTER_BASE_URL=https://openrouter.ai/api/v1
 OPENROUTER_SITE_URL=http://localhost:3000
@@ -398,16 +407,17 @@ GROQ_PAID_SHARE_PCT=35
 GROQ_PER_USER_SHARE_PCT=5
 GROQ_PER_USER_SHARE_PCT_PAID=25
 SPLEX_PRO_ENABLED=false
-OPENAI_API_KEY=
-OPENAI_MODEL_ID=gpt-4o
-ANTHROPIC_API_KEY=
-ANTHROPIC_MODEL_ID=claude-sonnet-4-5-20250929
-GEMINI_API_KEY=
-GEMINI_MODEL_ID=gemini-2.5-flash
-PERPLEXITY_API_KEY=
-PERPLEXITY_MODEL_ID=sonar-pro
-XAI_API_KEY=
-XAI_MODEL_ID=grok-4
+# Pro's 5 real provider MODEL IDs — OpenRouter-namespaced, dispatched via
+# OPENROUTER_API_KEY_2 above. No separate native provider key exists.
+OPENAI_MODEL_ID=openai/gpt-5.6-luna
+ANTHROPIC_MODEL_ID=anthropic/claude-3-haiku
+GEMINI_MODEL_ID=google/gemini-2.5-flash-lite
+PERPLEXITY_MODEL_ID=perplexity/sonar
+XAI_MODEL_ID=x-ai/grok-build-0.1
+# Pro MEDIA model ids — config-only, unwired (no execution path exists yet).
+PRO_IMAGE_MODEL_ID=google/gemini-3.1-flash-image
+PRO_VIDEO_MODEL_ID=bytedance/seedance-2.0-mini
+PRO_TTS_MODEL_ID=deepgram/flux-tts:free
 INTELLIGENCE_SERVICE_URL=
 INTELLIGENCE_SERVICE_TOKEN=
 LOG_LEVEL=info

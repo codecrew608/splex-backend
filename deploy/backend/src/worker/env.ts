@@ -23,7 +23,9 @@ const workerEnvSchema = z.object({
   // full comment (this schema is kept in sync by hand).
   OPENROUTER_API_KEY: z.string().min(1, "OPENROUTER_API_KEY is required"),
   // "API 2" — SEPARATE OpenRouter credential reserved for SPLEX Pro only.
-  // Slot only; not wired to any routing code, Pro stays flag-off. Free and
+  // Wired to every Pro provider adapter (pro/providers/*.ts) — see
+  // plugins/env.ts's identical field for the full rationale (this schema
+  // is kept in sync by hand). Pro stays flag-off regardless. Free and
   // Starter must never reach it. Optional, absent today, secret-only.
   OPENROUTER_API_KEY_2: z.string().min(1).optional(),
   OPENROUTER_BASE_URL: z.string().url().default("https://openrouter.ai/api/v1"),
@@ -81,18 +83,19 @@ const workerEnvSchema = z.object({
     .optional()
     .transform((v) => v === "true")
     .pipe(z.boolean()),
-  // Pro's 5 real provider credentials — same schema and rationale as the
-  // Fastify plugin above; see that file for the full comment.
-  OPENAI_API_KEY: z.string().min(1).optional(),
-  OPENAI_MODEL_ID: z.string().default("gpt-4o"),
-  ANTHROPIC_API_KEY: z.string().min(1).optional(),
-  ANTHROPIC_MODEL_ID: z.string().default("claude-sonnet-4-5-20250929"),
-  GEMINI_API_KEY: z.string().min(1).optional(),
-  GEMINI_MODEL_ID: z.string().default("gemini-2.5-flash"),
-  PERPLEXITY_API_KEY: z.string().min(1).optional(),
-  PERPLEXITY_MODEL_ID: z.string().default("sonar-pro"),
-  XAI_API_KEY: z.string().min(1).optional(),
-  XAI_MODEL_ID: z.string().default("grok-4"),
+  // Pro's 5 real provider MODEL IDs + 3 unwired media model IDs — same
+  // schema and rationale as the Fastify plugin above; see that file for
+  // the full comment. No separate native provider API keys exist in this
+  // schema — every one of these dispatches through OpenRouter using
+  // OPENROUTER_API_KEY_2 above.
+  OPENAI_MODEL_ID: z.string().default("openai/gpt-5.6-luna"),
+  ANTHROPIC_MODEL_ID: z.string().default("anthropic/claude-3-haiku"),
+  GEMINI_MODEL_ID: z.string().default("google/gemini-2.5-flash-lite"),
+  PERPLEXITY_MODEL_ID: z.string().default("perplexity/sonar"),
+  XAI_MODEL_ID: z.string().default("x-ai/grok-build-0.1"),
+  PRO_IMAGE_MODEL_ID: z.string().default("google/gemini-3.1-flash-image"),
+  PRO_VIDEO_MODEL_ID: z.string().default("bytedance/seedance-2.0-mini"),
+  PRO_TTS_MODEL_ID: z.string().default("deepgram/flux-tts:free"),
   // Optional here (unlike the Fastify schema, which defaults to a
   // loopback URL) — on Workers there is no "same machine" to default to;
   // an unset value means the intelligence service is genuinely

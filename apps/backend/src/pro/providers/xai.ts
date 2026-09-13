@@ -13,10 +13,16 @@ export const XAI_CAPABILITIES: ProviderCapabilities = {
 
 const TIMEOUT_MS = 120_000;
 const DEFAULT_MAX_TOKENS = 4096;
-const BASE_URL = "https://api.x.ai/v1";
 
+// Routed through OpenRouter using "API 2" (OPENROUTER_API_KEY_2) — see
+// openai.ts's identical comment for the full isolation rationale (same
+// credential, same rule, every Pro provider). This is xAI's Grok model
+// via OpenRouter — NOT Groq (the LPU inference company Free/Starter's
+// fallback uses, groq/*.ts) — two unrelated companies with similar
+// names; see groq/capacity.ts's own header for how that was confirmed
+// live for the Free/Starter side. Never conflate the two.
 export function createXAIProvider(fastify: FastifyInstance): AIProvider {
-  const apiKey = fastify.config.XAI_API_KEY;
+  const apiKey = fastify.config.OPENROUTER_API_KEY_2;
   if (!apiKey) return unconnectedProvider("xai", XAI_CAPABILITIES);
 
   return {
@@ -26,7 +32,7 @@ export function createXAIProvider(fastify: FastifyInstance): AIProvider {
     async call(params: ProviderCallParams): Promise<ProviderCallResult> {
       const startedAt = Date.now();
       const { content, inputTokens, outputTokens } = await callOpenAICompatible(
-        { provider: "xai", baseUrl: BASE_URL, apiKey, model: fastify.config.XAI_MODEL_ID, timeoutMs: TIMEOUT_MS },
+        { provider: "xai", baseUrl: fastify.config.OPENROUTER_BASE_URL, apiKey, model: fastify.config.XAI_MODEL_ID, timeoutMs: TIMEOUT_MS },
         params.input,
         params.maxTokens ?? DEFAULT_MAX_TOKENS,
         params.signal,

@@ -16,10 +16,17 @@ export const OPENAI_CAPABILITIES: ProviderCapabilities = {
 
 const TIMEOUT_MS = 120_000;
 const DEFAULT_MAX_TOKENS = 4096;
-const BASE_URL = "https://api.openai.com/v1";
 
+// Routed through OpenRouter using "API 2" (OPENROUTER_API_KEY_2) — a
+// SEPARATE credential from Free/Starter's OPENROUTER_API_KEY ("API 1",
+// openrouter/client.ts). This file never reads plain OPENROUTER_API_KEY,
+// and Free/Starter code never reads _2 — see
+// test/free-starter-failover.test.ts for the isolation pins this depends
+// on. No native OpenAI API key exists in this codebase anymore (removed
+// 2026-09-13 — see plugins/env.ts's own header for why a single shared
+// OpenRouter credential replaced 5 separate provider keys).
 export function createOpenAIProvider(fastify: FastifyInstance): AIProvider {
-  const apiKey = fastify.config.OPENAI_API_KEY;
+  const apiKey = fastify.config.OPENROUTER_API_KEY_2;
   if (!apiKey) return unconnectedProvider("openai", OPENAI_CAPABILITIES);
 
   return {
@@ -29,7 +36,7 @@ export function createOpenAIProvider(fastify: FastifyInstance): AIProvider {
     async call(params: ProviderCallParams): Promise<ProviderCallResult> {
       const startedAt = Date.now();
       const { content, inputTokens, outputTokens } = await callOpenAICompatible(
-        { provider: "openai", baseUrl: BASE_URL, apiKey, model: fastify.config.OPENAI_MODEL_ID, timeoutMs: TIMEOUT_MS },
+        { provider: "openai", baseUrl: fastify.config.OPENROUTER_BASE_URL, apiKey, model: fastify.config.OPENAI_MODEL_ID, timeoutMs: TIMEOUT_MS },
         params.input,
         params.maxTokens ?? DEFAULT_MAX_TOKENS,
         params.signal,

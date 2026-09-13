@@ -505,30 +505,92 @@ describe("SPLEX Pro — unlaunched, and the disablement is enforced server-side 
     expect(src).toContain("assertProAccess(fastify, user)");
   });
 
-  it("every real provider adapter checks its OWN API key and falls back to the unconnected stub when absent — self-activating, never a hard-wired real call (item 38)", () => {
-    const files: Array<[string, string]> = [
-      ["pro/providers/openai.ts", "OPENAI_API_KEY"],
-      ["pro/providers/anthropic.ts", "ANTHROPIC_API_KEY"],
-      ["pro/providers/gemini.ts", "GEMINI_API_KEY"],
-      ["pro/providers/perplexity.ts", "PERPLEXITY_API_KEY"],
-      ["pro/providers/xai.ts", "XAI_API_KEY"],
+  it("every real provider adapter checks the SAME shared OpenRouter credential (OPENROUTER_API_KEY_2) and falls back to the unconnected stub when absent — self-activating, never a hard-wired real call (item 38)", () => {
+    const files = [
+      "pro/providers/openai.ts",
+      "pro/providers/anthropic.ts",
+      "pro/providers/gemini.ts",
+      "pro/providers/perplexity.ts",
+      "pro/providers/xai.ts",
     ];
-    for (const [file, keyVar] of files) {
+    for (const file of files) {
       const src = read(file);
-      const keyIdx = src.indexOf(`fastify.config.${keyVar}`);
+      const keyIdx = src.indexOf("fastify.config.OPENROUTER_API_KEY_2");
       const fallbackIdx = src.indexOf("if (!apiKey) return unconnectedProvider(");
-      expect(keyIdx, `${file} must read fastify.config.${keyVar}`).toBeGreaterThan(-1);
+      expect(keyIdx, `${file} must read fastify.config.OPENROUTER_API_KEY_2`).toBeGreaterThan(-1);
       expect(fallbackIdx, `${file} must fall back to unconnectedProvider when the key is absent`).toBeGreaterThan(keyIdx);
       expect(fallbackIdx - keyIdx).toBeLessThan(60); // the very next real statement, not buried later
+      // The old per-provider native key must be completely gone — this is
+      // the whole point of the migration to one shared OpenRouter credential.
+      // Named literally (not a generic "_API_KEY" pattern) so a legitimate
+      // comment mentioning OPENROUTER_API_KEY (bare, isolation rationale)
+      // doesn't false-positive here.
+      for (const nativeKey of ["OPENAI_API_KEY", "ANTHROPIC_API_KEY", "GEMINI_API_KEY", "PERPLEXITY_API_KEY", "XAI_API_KEY"]) {
+        expect(src, `${file} must not reference the old native key ${nativeKey}`).not.toContain(nativeKey);
+      }
     }
   });
 
-  it("no provider API key is actually configured anywhere in this codebase right now — production gets 5 real stubs today, exactly as before these adapters existed", () => {
+  it("no separate native provider API key exists anywhere in either env schema — OPENROUTER_API_KEY_2 is the only credential Pro providers read", () => {
     for (const f of ["plugins/env.ts", "worker/env.ts"]) {
       const src = read(f);
       for (const keyVar of ["OPENAI_API_KEY", "ANTHROPIC_API_KEY", "GEMINI_API_KEY", "PERPLEXITY_API_KEY", "XAI_API_KEY"]) {
-        expect(src, `${f}'s ${keyVar} must stay optional with no default value`).toMatch(new RegExp(`${keyVar}: z\\.string\\(\\)\\.min\\(1\\)\\.optional\\(\\)`));
+        expect(src, `${f} must no longer declare ${keyVar} — it was removed when Pro moved to OPENROUTER_API_KEY_2`).not.toContain(`${keyVar}:`);
       }
+      expect(src).toMatch(/OPENROUTER_API_KEY_2:\s*z\.string\(\)\.min\(1\)\.optional\(\)/);
+    }
+  });
+
+  it("Pro's 5 real provider model ids are OpenRouter-namespaced (vendor/model) in both env schemas, matching the spec exactly", () => {
+    const expected: Array<[string, string]> = [
+      ["OPENAI_MODEL_ID", "openai/gpt-5.6-luna"],
+      ["ANTHROPIC_MODEL_ID", "anthropic/claude-3-haiku"],
+      ["GEMINI_MODEL_ID", "google/gemini-2.5-flash-lite"],
+      ["PERPLEXITY_MODEL_ID", "perplexity/sonar"],
+      ["XAI_MODEL_ID", "x-ai/grok-build-0.1"],
+    ];
+    for (const f of ["plugins/env.ts", "worker/env.ts"]) {
+      const src = read(f);
+      for (const [keyVar, modelId] of expected) {
+        expect(src, `${f}'s ${keyVar} must default to "${modelId}"`).toContain(`${keyVar}: z.string().default("${modelId}")`);
+      }
+    }
+  });
+
+  it("Pro's 3 media model ids are declared (config-only, unwired) in both env schemas, all OpenRouter-namespaced", () => {
+    const expected: Array<[string, string]> = [
+      ["PRO_IMAGE_MODEL_ID", "google/gemini-3.1-flash-image"],
+      ["PRO_VIDEO_MODEL_ID", "bytedance/seedance-2.0-mini"],
+      ["PRO_TTS_MODEL_ID", "deepgram/flux-tts:free"],
+    ];
+    for (const f of ["plugins/env.ts", "worker/env.ts"]) {
+      const src = read(f);
+      for (const [keyVar, modelId] of expected) {
+        expect(src, `${f}'s ${keyVar} must default to "${modelId}"`).toContain(`${keyVar}: z.string().default("${modelId}")`);
+      }
+    }
+    // No execution path reads these yet — a real, current fact, not
+    // something this test should let silently go stale as the codebase
+    // changes. If this ever fails, update the assertion deliberately,
+    // don't just delete it.
+    expect(read("pro/execution.ts")).not.toMatch(/PRO_IMAGE_MODEL_ID|PRO_VIDEO_MODEL_ID|PRO_TTS_MODEL_ID/);
+  });
+
+  it("no Pro provider file ever READS fastify.config.OPENROUTER_API_KEY (Free/Starter's API 1) — only the _2 slot (comments may still mention API 1 by name for isolation rationale)", () => {
+    for (const file of [
+      "pro/providers/openai.ts",
+      "pro/providers/anthropic.ts",
+      "pro/providers/gemini.ts",
+      "pro/providers/perplexity.ts",
+      "pro/providers/xai.ts",
+      "pro/providers.ts",
+    ]) {
+      const src = read(file);
+      // The actual functional risk is a live property access, not a
+      // comment mentioning the name — several of these files legitimately
+      // document "OPENROUTER_API_KEY_2 is separate from OPENROUTER_API_KEY"
+      // for isolation rationale, which must not trip this check.
+      expect(src, `${file} must never read fastify.config.OPENROUTER_API_KEY (bare)`).not.toMatch(/fastify\.config\.OPENROUTER_API_KEY(?!_2)/);
     }
   });
 

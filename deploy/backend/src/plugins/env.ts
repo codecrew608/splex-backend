@@ -29,13 +29,19 @@ const envSchema = z.object({
   // Starter/Paid (cheap paid-variant models) route through today. Required.
   OPENROUTER_API_KEY: z.string().min(1, "OPENROUTER_API_KEY is required"),
   // "API 2" — a SEPARATE OpenRouter credential reserved exclusively for
-  // SPLEX Pro. NOT wired to any routing code (this task added the slot
-  // only); Pro itself stays feature-flagged off. Free and Starter MUST
-  // NEVER reach this credential — there is deliberately no code path that
-  // reads it, and openRouterHeaders() (openrouter/client.ts) uses only
-  // OPENROUTER_API_KEY. Optional, absent today, secret-only (never a
-  // wrangler.jsonc plaintext var), same posture as the 5 Pro provider keys
-  // below. See test/free-starter-failover.test.ts for the isolation pins.
+  // SPLEX Pro. Wired to every Pro provider adapter (pro/providers/*.ts,
+  // 2026-09-13) — ALL FIVE text providers (OpenAI/Anthropic/Gemini/
+  // Perplexity/xAI) AND the 3 unwired Pro media model slots below route
+  // through OpenRouter using this one credential; there are no longer any
+  // separate native provider API keys anywhere in this schema. Pro itself
+  // stays feature-flagged off (system_flags.pro_enabled — pro/gate.ts)
+  // regardless of whether this credential is configured. Free and Starter
+  // MUST NEVER reach this credential — there is deliberately no code path
+  // in openrouter/client.ts, groq/*.ts, cortex/*.ts, or handlers/chat.ts
+  // that reads it, and openRouterHeaders() (openrouter/client.ts) uses
+  // only OPENROUTER_API_KEY. Optional, absent today, secret-only (never a
+  // wrangler.jsonc plaintext var). See test/free-starter-failover.test.ts
+  // for the isolation pins.
   OPENROUTER_API_KEY_2: z.string().min(1).optional(),
   OPENROUTER_BASE_URL: z.string().url().default("https://openrouter.ai/api/v1"),
   OPENROUTER_SITE_URL: z.string().url(),
@@ -157,26 +163,30 @@ const envSchema = z.object({
     .optional()
     .transform((v) => v === "true")
     .pipe(z.boolean()),
-  // Pro's 5 real provider credentials — every one optional, all absent
-  // today (verified: no such key exists anywhere in this codebase or its
-  // deployed secrets). pro/providers.ts checks each at call time: absent
-  // -> the same "no credential configured" stub behavior as before this
-  // ever existed; present -> a real API call. This is what lets a real
-  // adapter activate by setting one secret, with zero further code
-  // change or redeploy needed beyond that.
-  OPENAI_API_KEY: z.string().min(1).optional(),
-  OPENAI_MODEL_ID: z.string().default("gpt-4o"),
-  ANTHROPIC_API_KEY: z.string().min(1).optional(),
-  // PROVISIONAL default — verify against Anthropic's current model
-  // catalogue before this is ever actually called; not something this
-  // codebase can confirm live without a credential to test against.
-  ANTHROPIC_MODEL_ID: z.string().default("claude-sonnet-4-5-20250929"),
-  GEMINI_API_KEY: z.string().min(1).optional(),
-  GEMINI_MODEL_ID: z.string().default("gemini-2.5-flash"),
-  PERPLEXITY_API_KEY: z.string().min(1).optional(),
-  PERPLEXITY_MODEL_ID: z.string().default("sonar-pro"),
-  XAI_API_KEY: z.string().min(1).optional(),
-  XAI_MODEL_ID: z.string().default("grok-4"),
+  // Pro's 5 real provider MODEL IDs — OpenRouter-namespaced ("vendor/model"),
+  // not secret, just a name (same category as CORTEX_CLASSIFIER_MODEL_ID
+  // above). Every one dispatches through OpenRouter using
+  // OPENROUTER_API_KEY_2 (pro/providers/*.ts) — there is no separate
+  // native credential per provider anymore (removed 2026-09-13; each of
+  // these used to pair with its own *_API_KEY field, e.g. OPENAI_API_KEY —
+  // all five were deleted from this schema when the adapters moved to
+  // OpenRouter, since nothing reads them anymore). Operator-overridable,
+  // like every other *_MODEL_ID in this file.
+  OPENAI_MODEL_ID: z.string().default("openai/gpt-5.6-luna"),
+  ANTHROPIC_MODEL_ID: z.string().default("anthropic/claude-3-haiku"),
+  GEMINI_MODEL_ID: z.string().default("google/gemini-2.5-flash-lite"),
+  PERPLEXITY_MODEL_ID: z.string().default("perplexity/sonar"),
+  XAI_MODEL_ID: z.string().default("x-ai/grok-build-0.1"),
+  // Pro MEDIA model ids — config-only, unwired (matching this codebase's
+  // established convention for a declared-but-not-yet-executed slot; see
+  // OPENROUTER_API_KEY_2's own history above). No image/video/TTS
+  // generation execution path exists anywhere in pro/ today — these exist
+  // so that whenever one is built, it has a configured OpenRouter model id
+  // to dispatch to from day one, using the SAME OPENROUTER_API_KEY_2
+  // credential as every text provider, never a new key.
+  PRO_IMAGE_MODEL_ID: z.string().default("google/gemini-3.1-flash-image"),
+  PRO_VIDEO_MODEL_ID: z.string().default("bytedance/seedance-2.0-mini"),
+  PRO_TTS_MODEL_ID: z.string().default("deepgram/flux-tts:free"),
   // Local FastAPI sidecar — Tesseract OCR + BGE-small embeddings. See
   // services/intelligence/main.py.
   INTELLIGENCE_SERVICE_URL: z.string().url().default("http://127.0.0.1:8100"),
