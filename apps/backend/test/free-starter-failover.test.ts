@@ -314,10 +314,12 @@ describe("API 1 ↔ API 2 isolation — Free/Starter can never reach the Pro cre
 // Item 5 — Pro remains disabled
 // ===========================================================================
 describe("Pro path stays disabled and outside the Free/Starter route", () => {
-  it("SPLEX_PRO_ENABLED is 'false' in the generated bundle and the gate is strict-equality", () => {
-    const wrangler = readFileSync(join(REPO, "deploy/backend/wrangler.jsonc"), "utf8");
-    expect(wrangler).toContain('"SPLEX_PRO_ENABLED": "false"');
-    expect(read("pro/gate.ts")).toContain("fastify.config.SPLEX_PRO_ENABLED === true");
+  it("Pro's launch flag is DB-backed (system_flags.pro_enabled), gate.ts checks it strictly, and the migration seeds it disabled", () => {
+    const gate = read("pro/gate.ts");
+    expect(gate).toContain('.eq("key", "pro_enabled")');
+    expect(gate).toContain("data?.enabled === true");
+    const migration = readFileSync(join(REPO, "db/migrations/0067_pro_launch_flag_and_announcements.sql"), "utf8");
+    expect(migration).toContain("values ('pro_enabled', false)");
   });
 
   it("nothing in the Free/Starter chat path imports the Pro provider registry", () => {

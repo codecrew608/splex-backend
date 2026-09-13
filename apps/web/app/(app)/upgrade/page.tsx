@@ -107,22 +107,36 @@ export default async function UpgradePage() {
           highlighted
           cta={currentTier === "free" ? <UpgradeButton /> : undefined}
         />
-        <ProComingSoonCard priceInrPerMonth={proStatus.priceInrPerMonth} engineName={proStatus.engineName} />
+        <ProCard
+          priceInrPerMonth={proStatus.priceInrPerMonth}
+          engineName={proStatus.engineName}
+          enabled={proStatus.enabled}
+          isCurrent={currentTier === "pro"}
+          cta={proStatus.enabled && currentTier !== "pro" ? <UpgradeButton tier="pro" /> : undefined}
+        />
       </div>
     </div>
   );
 }
 
-// Pro is not launched: no checkout, no upgrade path, no way to reach this
-// tier from this page. This card exists purely to tell people it's coming
-// — see backend pro/gate.ts for the independent, UI-can't-bypass-it
-// server-side enforcement that backs this up.
-function ProComingSoonCard({
+// Renders the "Coming soon" disabled state while proStatus.enabled is
+// false (the default), and a real, working upgrade card once an admin
+// flips system_flags.pro_enabled (see pro/gate.ts) — this component reads
+// that live status from the backend, it never decides eligibility itself.
+// Real enforcement is server-side (pro/gate.ts's assertProAccess) — this
+// is presentation only, exactly like the Free/Starter cards above it.
+function ProCard({
   priceInrPerMonth,
   engineName,
+  enabled,
+  isCurrent,
+  cta,
 }: {
   priceInrPerMonth: number;
   engineName: string;
+  enabled: boolean;
+  isCurrent: boolean;
+  cta?: React.ReactNode;
 }) {
   // Deliberately no raw credit number here — SPLEX credits are an internal
   // metering unit, never a product-facing figure, same rule the Free/
@@ -138,15 +152,25 @@ function ProComingSoonCard({
   ];
 
   return (
-    <div className="relative overflow-hidden rounded-[22px] border border-dashed border-border bg-surface p-6 opacity-90">
+    <div
+      className={`relative overflow-hidden rounded-[22px] border p-6 ${
+        enabled ? "border-accent bg-accent-soft" : "border-dashed border-border bg-surface opacity-90"
+      }`}
+    >
       <div className="flex items-center justify-between">
         <h2 className="flex items-center gap-1.5 text-lg font-semibold text-foreground">
           <Sparkles size={16} className="text-accent" />
           Pro
         </h2>
-        <span className="rounded-full border border-border px-2 py-0.5 text-[11px] text-muted-foreground">
-          Coming soon
-        </span>
+        {isCurrent ? (
+          <span className="rounded-full border border-border px-2 py-0.5 text-[11px] text-muted-foreground">
+            Current plan
+          </span>
+        ) : !enabled ? (
+          <span className="rounded-full border border-border px-2 py-0.5 text-[11px] text-muted-foreground">
+            Coming soon
+          </span>
+        ) : null}
       </div>
       <p className="mt-2">
         <span className="text-3xl font-semibold text-foreground">₹{priceInrPerMonth.toLocaleString()}</span>
@@ -159,19 +183,21 @@ function ProComingSoonCard({
       <ul className="mt-5 space-y-2">
         {features.map((f) => (
           <li key={f} className="flex items-start gap-2 text-sm text-foreground">
-            <Check size={15} className="mt-0.5 shrink-0 text-muted-foreground" />
+            <Check size={15} className={`mt-0.5 shrink-0 ${enabled ? "text-accent" : "text-muted-foreground"}`} />
             <span>{f}</span>
           </li>
         ))}
       </ul>
 
       <div className="mt-6">
-        <button
-          disabled
-          className="w-full rounded-full border border-border px-4 py-2 text-sm text-muted-foreground opacity-60"
-        >
-          Coming soon
-        </button>
+        {cta ?? (
+          <button
+            disabled
+            className="w-full rounded-full border border-border px-4 py-2 text-sm text-muted-foreground opacity-60"
+          >
+            {isCurrent ? "Current plan" : "Coming soon"}
+          </button>
+        )}
       </div>
     </div>
   );

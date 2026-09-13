@@ -10,7 +10,7 @@ const proRoutes: FastifyPluginAsync = async (fastify) => {
   // Unauthenticated by design — see handlers/pro.ts's own doc comment for
   // why this specific route is the one safe thing to expose while Pro is
   // otherwise fully gated.
-  fastify.get("/pro/status", async (_request, reply) => sendResult(reply, getProStatus(fastify)));
+  fastify.get("/pro/status", async (_request, reply) => sendResult(reply, await getProStatus(fastify)));
 
   fastify.post(
     "/pro/workflows",

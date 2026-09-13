@@ -40,7 +40,11 @@ const billingRoutes: FastifyPluginAsync = async (fastify) => {
         ),
       ],
     },
-    async (request, reply) => sendResult(reply, await createSubscription(fastify, request.user.id)),
+    async (request, reply) => {
+      const body = request.body as { tier?: unknown } | undefined;
+      const tier = body?.tier === "pro" ? "pro" : "starter";
+      return sendResult(reply, await createSubscription(fastify, request.user.id, tier));
+    },
   );
 };
 

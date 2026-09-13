@@ -209,7 +209,7 @@ export async function createProWorkflow(
   user: AuthedUser,
   objective: string,
 ): Promise<CreateProWorkflowResult> {
-  assertProAccess(fastify, user);
+  await assertProAccess(fastify, user);
 
   const complexity = classifyObjectiveComplexity(objective);
   if (complexity === "simple") {

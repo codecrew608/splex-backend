@@ -4,6 +4,7 @@ import { isNextInternalControlFlowError } from "@/lib/supabase/env";
 import { Sidebar } from "@/components/sidebar/Sidebar";
 import { SidebarReopenButton } from "@/components/sidebar/SidebarReopenButton";
 import { OnboardingModal } from "@/components/onboarding/OnboardingModal";
+import { AnnouncementBanner } from "@/components/AnnouncementBanner";
 
 export default async function AppLayout({ children }: { children: React.ReactNode }) {
   // createClient() throws if Supabase env vars are missing/invalid — fail
@@ -60,11 +61,37 @@ export default async function AppLayout({ children }: { children: React.ReactNod
     console.error("[(app)/layout] full_name lookup threw, skipping onboarding gate for this request:", err);
   }
 
+  // Same fail-open posture as the onboarding lookup above: a query error
+  // here must never break the app shell, so it just means no banner shows
+  // this request rather than a 500 for every signed-in user.
+  let announcement: { id: string; message: string } | null = null;
+  try {
+    const supabase = await createClient();
+    const { data, error } = await supabase
+      .from("announcements")
+      .select("id, message")
+      .eq("active", true)
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    if (error) {
+      console.error("[(app)/layout] announcement lookup failed, skipping banner for this request:", error);
+    } else if (data) {
+      announcement = data;
+    }
+  } catch (err) {
+    if (isNextInternalControlFlowError(err)) throw err;
+    console.error("[(app)/layout] announcement lookup threw, skipping banner for this request:", err);
+  }
+
   return (
-    <div className="flex h-dvh overflow-hidden bg-background">
-      <Sidebar email={user.email ?? ""} avatarUrl={avatarUrl} />
-      <SidebarReopenButton />
-      <main className="min-w-0 flex-1">{children}</main>
+    <div className="flex h-dvh flex-col overflow-hidden bg-background">
+      <AnnouncementBanner announcement={announcement} />
+      <div className="flex min-h-0 flex-1 overflow-hidden">
+        <Sidebar email={user.email ?? ""} avatarUrl={avatarUrl} />
+        <SidebarReopenButton />
+        <main className="min-w-0 flex-1">{children}</main>
+      </div>
       {needsOnboarding && <OnboardingModal />}
     </div>
   );

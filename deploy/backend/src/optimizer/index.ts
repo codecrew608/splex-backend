@@ -59,7 +59,7 @@ export async function maybeOptimizePrompt(params: MaybeOptimizePromptParams): Pr
     return bypassOutcome(text, "not_eligible", originalTokensEst);
   }
 
-  if (!isProEnabled(fastify)) {
+  if (!(await isProEnabled(fastify))) {
     return finalizeAndRecord(fastify, messageId, userId, bypassOutcome(text, "flag_disabled", originalTokensEst));
   }
 

@@ -210,7 +210,18 @@ function makeProDbStub() {
 
 function fastifyWith(enabled: boolean, db = makeProDbStub()) {
   const log = { error: () => {}, warn: () => {}, info: () => {}, debug: () => {} };
-  return { config: { SPLEX_PRO_ENABLED: enabled, PROMPT_OPTIMIZER_MODEL_ID: "test/optimizer-model" }, supabaseAdmin: db.supabaseAdmin, log } as never;
+  // system_flags is intercepted here rather than added to makeProDbStub
+  // itself — the flag value is per-fastifyWith-call, not part of the
+  // shared workflow/task/dependency state db already tracks.
+  const supabaseAdmin = {
+    from(table: string) {
+      if (table === "system_flags") {
+        return { select: () => ({ eq: () => ({ maybeSingle: async () => ({ data: { enabled }, error: null }) }) }) };
+      }
+      return db.supabaseAdmin.from(table);
+    },
+  };
+  return { config: { PROMPT_OPTIMIZER_MODEL_ID: "test/optimizer-model" }, supabaseAdmin, log } as never;
 }
 
 describe("createProWorkflow — the gate runs BEFORE anything else", () => {

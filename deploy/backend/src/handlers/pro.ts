@@ -24,14 +24,14 @@ const PRO_ENGINE_NAME = "Cortex 2";
 // only display-safe facts: price, credit allowance, and whether the flag
 // is on — never a user's own eligibility, a provider name, or anything
 // that would need auth to be honest.
-export function getProStatus(fastify: FastifyInstance): HandlerResult<{
+export async function getProStatus(fastify: FastifyInstance): Promise<HandlerResult<{
   enabled: boolean;
   status: "coming_soon" | "available";
   priceInrPerMonth: number;
   monthlyCredits: number;
   engineName: string;
-}> {
-  const enabled = isProEnabled(fastify);
+}>> {
+  const enabled = await isProEnabled(fastify);
   return ok({
     enabled,
     status: enabled ? "available" : "coming_soon",
@@ -57,7 +57,7 @@ export async function handleCreateProWorkflow(
   body: CreateWorkflowBody,
 ): Promise<HandlerResult<{ complexity: string; workflowId?: string; taskCount?: number; message: string }>> {
   try {
-    assertProAccess(fastify, user);
+    await assertProAccess(fastify, user);
   } catch (err) {
     if (err instanceof ProUnavailableError) {
       return fail(err.message, 403);
@@ -87,7 +87,7 @@ export async function handleStepProWorkflow(
   workflowId: string,
 ): Promise<HandlerResult<ExecutionStepResult>> {
   try {
-    assertProAccess(fastify, user);
+    await assertProAccess(fastify, user);
   } catch (err) {
     if (err instanceof ProUnavailableError) {
       return fail(err.message, 403);
@@ -127,7 +127,7 @@ export async function handleClarifyProWorkflow(
   body: ClarifyWorkflowBody,
 ): Promise<HandlerResult<ExecutionStepResult>> {
   try {
-    assertProAccess(fastify, user);
+    await assertProAccess(fastify, user);
   } catch (err) {
     if (err instanceof ProUnavailableError) {
       return fail(err.message, 403);
@@ -165,7 +165,7 @@ export async function handleCancelProWorkflow(
   workflowId: string,
 ): Promise<HandlerResult<CancelWorkflowResult>> {
   try {
-    assertProAccess(fastify, user);
+    await assertProAccess(fastify, user);
   } catch (err) {
     if (err instanceof ProUnavailableError) {
       return fail(err.message, 403);
@@ -199,7 +199,7 @@ export async function handleGetProWorkflow(
   workflowId: string,
 ): Promise<HandlerResult<ProWorkflowStatus>> {
   try {
-    assertProAccess(fastify, user);
+    await assertProAccess(fastify, user);
   } catch (err) {
     if (err instanceof ProUnavailableError) {
       return fail(err.message, 403);

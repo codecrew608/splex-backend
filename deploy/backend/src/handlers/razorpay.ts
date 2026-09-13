@@ -37,9 +37,27 @@ function isKnownStatus(value: unknown): value is SubscriptionStatus {
 // that value is now reserved for SPLEX Pro (₹799), an entirely different
 // product. Writing 'pro' here would hand a ₹299 subscriber Pro
 // entitlements they never bought. See db/migrations/0059-0061.
-function planTierForStatus(status: SubscriptionStatus): "starter" | "free" | null {
-  if (status === "active") return "starter";
+//
+// tier is resolved by the caller from entity.plan_id (see
+// resolvePlanTier below) — this function no longer hardcodes which plan
+// maps to which tier, but the active/terminal-status logic itself is
+// identical for both Starter and Pro.
+function planTierForStatus(status: SubscriptionStatus, tier: "starter" | "pro"): "starter" | "pro" | "free" | null {
+  if (status === "active") return tier;
   if (status === "halted" || status === "cancelled" || status === "completed" || status === "expired") return "free";
+  return null;
+}
+
+// Maps a Razorpay plan_id back to the SPLEX tier it bills for. Built from
+// server config, never the client — the only two plan ids this webhook
+// will ever recognize. RAZORPAY_PRO_PLAN_ID is optional (unset until a
+// real Pro plan is created — see pro/gate.ts's own header), so a webhook
+// for a plan id that doesn't match EITHER configured plan (Starter, or
+// Pro once configured) is skipped exactly as an unrecognized plan_id
+// always was.
+function resolvePlanTier(fastify: FastifyInstance, planId: string): "starter" | "pro" | null {
+  if (planId === fastify.config.RAZORPAY_STARTER_PLAN_ID) return "starter";
+  if (fastify.config.RAZORPAY_PRO_PLAN_ID && planId === fastify.config.RAZORPAY_PRO_PLAN_ID) return "pro";
   return null;
 }
 
@@ -140,8 +158,9 @@ export async function processRazorpayWebhook(
     return ok({ received: true, processed: false });
   }
 
-  if (entity.plan_id !== fastify.config.RAZORPAY_STARTER_PLAN_ID) {
-    fastify.log.info({ event: body.event, subscriptionId: entity.id }, "razorpay webhook: plan_id is not the Starter plan, skipping");
+  const tier = resolvePlanTier(fastify, entity.plan_id);
+  if (!tier) {
+    fastify.log.info({ event: body.event, subscriptionId: entity.id, planId: entity.plan_id }, "razorpay webhook: plan_id matches neither configured plan, skipping");
     return ok({ received: true, processed: false });
   }
 
@@ -208,7 +227,7 @@ export async function processRazorpayWebhook(
     return fail("Failed to process event.", 500);
   }
 
-  const planTier = planTierForStatus(entity.status);
+  const planTier = planTierForStatus(entity.status, tier);
   if (planTier) {
     const { error: userError } = await fastify.supabaseAdmin.from("users").update({ plan_tier: planTier }).eq("id", userId);
     if (userError) {

@@ -6,8 +6,8 @@ import { respondWithResult, parseJsonBody, errorResponse } from "../http.js";
 
 // HTTP adapter only — behaviour lives in handlers/pro.ts, shared verbatim
 // with routes/pro.ts.
-export function handleGetProStatus(ctx: WorkerCtx): Response {
-  return respondWithResult(getProStatus(asFastifyInstance(ctx)));
+export async function handleGetProStatus(ctx: WorkerCtx): Promise<Response> {
+  return respondWithResult(await getProStatus(asFastifyInstance(ctx)));
 }
 
 export async function handleCreateProWorkflowWorker(request: Request, ctx: WorkerCtx, user: AuthedUser): Promise<Response> {

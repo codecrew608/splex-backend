@@ -8,11 +8,14 @@ function user(overrides: Partial<AuthedUser> = {}): AuthedUser {
 
 // Same minimal stub as pro-orchestrator.test.ts — only the tables
 // createProWorkflow's persistence path actually touches.
-function makeProDbStub() {
+function makeProDbStub(enabled: boolean) {
   let nextId = 1;
   const id = () => `id-${nextId++}`;
   return {
     from(table: string) {
+      if (table === "system_flags") {
+        return { select: () => ({ eq: () => ({ maybeSingle: async () => ({ data: { enabled }, error: null }) }) }) };
+      }
       if (table === "pro_workflows") {
         return {
           insert: () => ({ select: () => ({ single: async () => ({ data: { id: id() }, error: null }) }) }),
@@ -31,12 +34,12 @@ function makeProDbStub() {
 }
 
 function fastifyWith(enabled: boolean) {
-  return { config: { SPLEX_PRO_ENABLED: enabled }, supabaseAdmin: makeProDbStub() } as never;
+  return { config: {}, supabaseAdmin: makeProDbStub(enabled), log: { error: () => {} } } as never;
 }
 
 describe("GET /pro/status — getProStatus", () => {
-  it("never requires auth and always returns 200, flag off (production's real state today)", () => {
-    const result = getProStatus(fastifyWith(false));
+  it("never requires auth and always returns 200, flag off (production's real state today)", async () => {
+    const result = await getProStatus(fastifyWith(false));
     expect(result.ok).toBe(true);
     if (result.ok) {
       expect(result.status).toBe(200);
@@ -50,8 +53,8 @@ describe("GET /pro/status — getProStatus", () => {
     }
   });
 
-  it("reflects the flag honestly when on — never hardcoded false", () => {
-    const result = getProStatus(fastifyWith(true));
+  it("reflects the flag honestly when on — never hardcoded false", async () => {
+    const result = await getProStatus(fastifyWith(true));
     expect(result.ok).toBe(true);
     if (result.ok) {
       expect(result.body?.enabled).toBe(true);
@@ -59,8 +62,8 @@ describe("GET /pro/status — getProStatus", () => {
     }
   });
 
-  it("carries no field beyond price/credits/enabled/status/engineName — no real provider names, no internal ids", () => {
-    const result = getProStatus(fastifyWith(true));
+  it("carries no field beyond price/credits/enabled/status/engineName — no real provider names, no internal ids", async () => {
+    const result = await getProStatus(fastifyWith(true));
     if (result.ok) {
       expect(Object.keys(result.body ?? {}).sort()).toEqual([
         "enabled",

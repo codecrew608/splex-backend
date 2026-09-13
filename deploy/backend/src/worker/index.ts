@@ -128,7 +128,7 @@ async function route(request: Request, ctx: WorkerCtx, execCtx: ExecutionContext
     if (auth instanceof Response) return auth;
     const limited = await requireRateLimit(ctx, "billing_create_subscription", auth.id);
     if (limited) return limited;
-    return handleCreateSubscription(ctx, auth);
+    return handleCreateSubscription(request, ctx, auth);
   }
 
   // No requireAuth/requireRateLimit — Razorpay authenticates this request
@@ -197,7 +197,7 @@ async function route(request: Request, ctx: WorkerCtx, execCtx: ExecutionContext
   // rate limiting like every other write route, then is refused by
   // assertProAccess inside the shared handler regardless of who's asking.
   if (method === "GET" && pathname === "/pro/status") {
-    return handleGetProStatus(ctx);
+    return await handleGetProStatus(ctx);
   }
 
   if (method === "POST" && pathname === "/pro/workflows") {

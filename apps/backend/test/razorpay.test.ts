@@ -10,6 +10,7 @@ import { processRazorpayWebhook } from "../src/handlers/razorpay.js";
 
 const SECRET = "test_webhook_secret";
 const PLAN_ID = "plan_TYEBWcXvja8WRM";
+const PRO_PLAN_ID = "plan_pro_test_id";
 
 async function sign(body: string, secret = SECRET): Promise<string> {
   const key = await crypto.subtle.importKey("raw", new TextEncoder().encode(secret), { name: "HMAC", hash: "SHA-256" }, false, [
@@ -33,7 +34,7 @@ function thenable(fn: () => unknown) {
   return { then: (resolve: (v: unknown) => unknown) => resolve(fn()) };
 }
 
-function makeFakeFastify(db: FakeDb, secret: string | undefined) {
+function makeFakeFastify(db: FakeDb, secret: string | undefined, proPlanId?: string) {
   const log = { info: () => {}, warn: () => {}, error: () => {}, debug: () => {} };
 
   const supabaseAdmin = {
@@ -124,7 +125,7 @@ function makeFakeFastify(db: FakeDb, secret: string | undefined) {
     },
   };
 
-  return { supabaseAdmin, log, config: { RAZORPAY_WEBHOOK_SECRET: secret, RAZORPAY_STARTER_PLAN_ID: PLAN_ID } } as never;
+  return { supabaseAdmin, log, config: { RAZORPAY_WEBHOOK_SECRET: secret, RAZORPAY_STARTER_PLAN_ID: PLAN_ID, RAZORPAY_PRO_PLAN_ID: proPlanId } } as never;
 }
 
 function makeBody(overrides: {
@@ -157,7 +158,11 @@ function makeBody(overrides: {
   };
 }
 
-async function deliver(db: FakeDb, body: object, opts: { signature?: string | null; eventId?: string | null; secret?: string } = {}) {
+async function deliver(
+  db: FakeDb,
+  body: object,
+  opts: { signature?: string | null; eventId?: string | null; secret?: string; proPlanId?: string } = {},
+) {
   const raw = JSON.stringify(body);
   // "in" checks, not ?? — a test explicitly passing `secret: undefined` or
   // `eventId: null` means exactly that (no secret configured / no header
@@ -165,7 +170,7 @@ async function deliver(db: FakeDb, body: object, opts: { signature?: string | nu
   const secretForFastify = "secret" in opts ? opts.secret : SECRET;
   const signature = opts.signature === undefined ? await sign(raw, secretForFastify ?? SECRET) : opts.signature;
   const eventId = "eventId" in opts ? opts.eventId : "evt_1";
-  const fastify = makeFakeFastify(db, secretForFastify);
+  const fastify = makeFakeFastify(db, secretForFastify, opts.proPlanId);
   return processRazorpayWebhook(fastify, raw, signature, eventId);
 }
 
@@ -384,5 +389,69 @@ describe("tier rename — an active ₹299 subscription never grants SPLEX Pro",
     });
     expect(db.subscriptions.get("u1")?.plan_tier).not.toBe("pro");
     expect(db.subscriptions.get("u1")?.plan_tier).toBe("starter");
+  });
+});
+
+// SPLEX Pro launch (migration 0067) — resolvePlanTier now recognizes a
+// SECOND configured plan id, entirely independent of the Starter mapping
+// above (which stays covered, unchanged, by every existing test in this
+// file — RAZORPAY_PRO_PLAN_ID defaults to undefined unless a test opts in).
+describe("processRazorpayWebhook — Pro plan resolution", () => {
+  it("an active Pro-plan subscription grants plan_tier='pro', never 'starter'", async () => {
+    const db = makeDb(["u1"]);
+    await deliver(
+      db,
+      makeBody({ event: "subscription.activated", status: "active", planId: PRO_PLAN_ID, notes: { splex_user_id: "u1" } }),
+      { proPlanId: PRO_PLAN_ID },
+    );
+    expect(db.subscriptions.get("u1")?.plan_tier).toBe("pro");
+  });
+
+  it("a cancelled Pro subscription revokes back to free, same as Starter's terminal-status handling", async () => {
+    const db = makeDb(["u1"]);
+    await deliver(
+      db,
+      makeBody({ event: "subscription.activated", status: "active", planId: PRO_PLAN_ID, notes: { splex_user_id: "u1" }, createdAt: 100 }),
+      { proPlanId: PRO_PLAN_ID, eventId: "evt_a" },
+    );
+    expect(db.subscriptions.get("u1")?.plan_tier).toBe("pro");
+
+    await deliver(
+      db,
+      makeBody({ event: "subscription.cancelled", status: "cancelled", planId: PRO_PLAN_ID, notes: { splex_user_id: "u1" }, createdAt: 200 }),
+      { proPlanId: PRO_PLAN_ID, eventId: "evt_b" },
+    );
+    expect(db.subscriptions.get("u1")?.plan_tier).toBe("free");
+  });
+
+  it("a webhook for the Pro plan id is skipped entirely while RAZORPAY_PRO_PLAN_ID is unconfigured (today's real production state)", async () => {
+    const db = makeDb(["u1"]);
+    const result = await deliver(
+      db,
+      makeBody({ event: "subscription.activated", status: "active", planId: PRO_PLAN_ID, notes: { splex_user_id: "u1" } }),
+      // proPlanId intentionally omitted — matches production until the
+      // second manual launch step (see pro/gate.ts's own header) is done.
+    );
+    expect(result.ok).toBe(true);
+    expect(db.subscriptions.size).toBe(0);
+  });
+
+  it("Starter and Pro plan ids resolve independently — a Starter webhook never grants pro even with RAZORPAY_PRO_PLAN_ID configured", async () => {
+    const db = makeDb(["u1"]);
+    await deliver(db, makeBody({ event: "subscription.activated", status: "active", planId: PLAN_ID, notes: { splex_user_id: "u1" } }), {
+      proPlanId: PRO_PLAN_ID,
+    });
+    expect(db.subscriptions.get("u1")?.plan_tier).toBe("starter");
+  });
+
+  it("a third, unrecognized plan id is still skipped even with both real plans configured", async () => {
+    const db = makeDb(["u1"]);
+    const result = await deliver(
+      db,
+      makeBody({ event: "subscription.activated", status: "active", planId: "plan_totally_unrelated", notes: { splex_user_id: "u1" } }),
+      { proPlanId: PRO_PLAN_ID },
+    );
+    expect(result.ok).toBe(true);
+    expect(db.subscriptions.size).toBe(0);
   });
 });

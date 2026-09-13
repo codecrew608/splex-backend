@@ -84,8 +84,8 @@ describe("maybeOptimizePrompt — the Pro-only gate, first and unconditional", (
     expect(outcome.bypassReason).toBe("not_eligible");
   });
 
-  it("pro tier with SPLEX_PRO_ENABLED off: text unchanged, bypass reason recorded, telemetry DOES fire (a real, if rare, operational case worth seeing)", async () => {
-    const state = makeOptimizerState({ config: { SPLEX_PRO_ENABLED: false, PROMPT_OPTIMIZER_MODEL_ID: "test/model" } });
+  it("pro tier with the launch flag off: text unchanged, bypass reason recorded, telemetry DOES fire (a real, if rare, operational case worth seeing)", async () => {
+    const state = makeOptimizerState({ config: { PROMPT_OPTIMIZER_MODEL_ID: "test/model" }, proEnabled: false });
     const fastify = makeOptimizerFastify(state);
     const outcome = await maybeOptimizePrompt(baseParams({ fastify }));
 

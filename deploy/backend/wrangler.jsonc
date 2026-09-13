@@ -112,6 +112,12 @@
     // `wrangler secret put` only, same rule as SUPABASE_SERVICE_ROLE_KEY
     // above — never add it here.
     "RAZORPAY_STARTER_PLAN_ID": "plan_TYEBWcXvja8WRM",
+    // RAZORPAY_PRO_PLAN_ID (SPLEX Pro's ₹799/month plan) is deliberately
+    // NOT added here — no real plan exists yet (see pro/gate.ts's own
+    // header for the two separate manual launch steps). Until it's added
+    // as a plaintext var here (same non-secret treatment as
+    // RAZORPAY_STARTER_PLAN_ID above), createSubscription's "pro" tier
+    // refuses cleanly rather than falling back to the wrong plan.
     // Razorpay's publishable key id — meant to be used client-side
     // (Checkout.js), not a credential. RAZORPAY_KEY_SECRET is the actual
     // secret counterpart and, like the two above, is `wrangler secret put`

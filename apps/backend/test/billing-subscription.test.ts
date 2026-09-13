@@ -7,6 +7,7 @@ import { createSubscription } from "../src/handlers/billing.js";
 // fetch), neither of which test/helpers/fakeFastify.ts models.
 
 const PLAN_ID = "plan_TYEBWcXvja8WRM";
+const PRO_PLAN_ID = "plan_pro_test_id";
 const KEY_ID = "rzp_test_key_id";
 const KEY_SECRET = "test_key_secret";
 
@@ -97,11 +98,27 @@ function makeSubscriptionsBuilder(db: FakeDb) {
   return api;
 }
 
-function makeFakeFastify(db: FakeDb, opts: { forceRpcNull?: boolean; keyId?: string | undefined; keySecret?: string | undefined } = {}) {
+function makeFakeFastify(
+  db: FakeDb,
+  opts: {
+    forceRpcNull?: boolean;
+    keyId?: string | undefined;
+    keySecret?: string | undefined;
+    // Pro-tier options — defaults match "Pro is fully launched" so tests
+    // exercising the pro path don't need to restate both every time; the
+    // dedicated "createSubscription — Pro tier" describe block below
+    // overrides them explicitly to test each gate independently.
+    proEnabled?: boolean;
+    proPlanId?: string | undefined;
+  } = {},
+) {
   const log = { info: () => {}, warn: () => {}, error: () => {}, debug: () => {} };
 
   const supabaseAdmin = {
     from(table: string) {
+      if (table === "system_flags") {
+        return { select: () => ({ eq: () => ({ maybeSingle: async () => ({ data: { enabled: opts.proEnabled ?? true }, error: null }) }) }) };
+      }
       if (table !== "subscriptions") throw new Error(`unexpected table: ${table}`);
       return makeSubscriptionsBuilder(db);
     },
@@ -119,6 +136,7 @@ function makeFakeFastify(db: FakeDb, opts: { forceRpcNull?: boolean; keyId?: str
     log,
     config: {
       RAZORPAY_STARTER_PLAN_ID: PLAN_ID,
+      RAZORPAY_PRO_PLAN_ID: "proPlanId" in opts ? opts.proPlanId : PRO_PLAN_ID,
       RAZORPAY_KEY_ID: "keyId" in opts ? opts.keyId : KEY_ID,
       RAZORPAY_KEY_SECRET: "keySecret" in opts ? opts.keySecret : KEY_SECRET,
     },
@@ -316,5 +334,64 @@ describe("createSubscription — Razorpay API failure", () => {
 
     expect(result.ok).toBe(false);
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+});
+
+// Pro checkout reuses every mechanism above (claim_subscription_slot,
+// atomicity, resubscription) unchanged — these tests cover only what's
+// NEW for the "pro" tier: the two independent gates (isProEnabled, and
+// RAZORPAY_PRO_PLAN_ID actually being configured) and that a real Pro
+// request sends the right plan id.
+describe("createSubscription — Pro tier", () => {
+  it("refuses with 403 when the launch flag is off, without calling Razorpay or claiming a slot", async () => {
+    const db = makeDb();
+    const fetchMock = mockFetch(db, { ok: true, body: { id: "unused", status: "created" } });
+    const fastify = makeFakeFastify(db, { proEnabled: false });
+
+    const result = await createSubscription(fastify, "u1", "pro");
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.status).toBe(403);
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(db.rpcCalls).toHaveLength(0);
+  });
+
+  it("refuses with a clear 500 when the flag is on but RAZORPAY_PRO_PLAN_ID isn't configured yet", async () => {
+    const db = makeDb();
+    const fetchMock = mockFetch(db, { ok: true, body: { id: "unused", status: "created" } });
+    const fastify = makeFakeFastify(db, { proEnabled: true, proPlanId: undefined });
+
+    const result = await createSubscription(fastify, "u1", "pro");
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.status).toBe(500);
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(db.rpcCalls).toHaveLength(0);
+  });
+
+  it("flag on, plan configured: creates a real subscription against the Pro plan id, not Starter's", async () => {
+    const db = makeDb();
+    const fetchMock = mockFetch(db, { ok: true, body: { id: "sub_pro123", status: "created" } });
+    const fastify = makeFakeFastify(db, { proEnabled: true, proPlanId: PRO_PLAN_ID });
+
+    const result = await createSubscription(fastify, "u1", "pro");
+
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.body).toEqual({ subscriptionId: "sub_pro123", keyId: KEY_ID });
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(JSON.parse(init.body as string).plan_id).toBe(PRO_PLAN_ID);
+    expect(db.subscriptions.get("u1")?.razorpay_plan_id).toBe(PRO_PLAN_ID);
+  });
+
+  it("omitting tier still defaults to Starter — existing call sites are unaffected by Pro's addition", async () => {
+    const db = makeDb();
+    const fetchMock = mockFetch(db, { ok: true, body: { id: "sub_default", status: "created" } });
+    const fastify = makeFakeFastify(db, { proEnabled: false }); // Pro OFF — must not matter for the default tier
+
+    const result = await createSubscription(fastify, "u1");
+
+    expect(result.ok).toBe(true);
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(JSON.parse(init.body as string).plan_id).toBe(PLAN_ID);
   });
 });

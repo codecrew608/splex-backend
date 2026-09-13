@@ -210,6 +210,12 @@ const envSchema = z.object({
   // Not secret (a plan identifier, not a credential) — safe as a real
   // default. Must come from server config, never a client-submitted value.
   RAZORPAY_STARTER_PLAN_ID: z.string().min(1).default("plan_TYEBWcXvja8WRM"),
+  // SPLEX Pro's (₹799/month) Razorpay plan id — deliberately NO default,
+  // unlike Starter's above: no real plan exists yet (see pro/gate.ts's own
+  // header for the two separate manual launch steps). Until this is set,
+  // handlers/billing.ts::createSubscription refuses the "pro" tier
+  // cleanly rather than falling back to the wrong plan.
+  RAZORPAY_PRO_PLAN_ID: z.string().min(1).optional(),
   // Used by handlers/billing.ts::createSubscription to call Razorpay's
   // Create Subscription API (razorpay/client.ts). RAZORPAY_KEY_ID is not
   // secret — Razorpay's own Checkout widget expects the frontend to have

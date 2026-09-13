@@ -48,7 +48,12 @@ const POLL_ATTEMPTS = 15;
 
 type CheckoutPhase = "idle" | "starting" | "awaiting-activation" | "timed-out" | "error";
 
-export function UpgradeButton() {
+const TIER_COPY = {
+  starter: { description: "SPLEX Starter — ₹299/month", label: "Upgrade to Starter" },
+  pro: { description: "SPLEX Pro — ₹799/month", label: "Upgrade to Pro" },
+} as const;
+
+export function UpgradeButton({ tier = "starter" }: { tier?: "starter" | "pro" }) {
   const router = useRouter();
   const [phase, setPhase] = useState<CheckoutPhase>("idle");
   const [error, setError] = useState<string | null>(null);
@@ -61,7 +66,7 @@ export function UpgradeButton() {
 
     for (let attempt = 0; user && attempt < POLL_ATTEMPTS; attempt++) {
       const { data: profile } = await supabase.from("users").select("plan_tier").eq("id", user.id).single();
-      if (profile?.plan_tier === "starter") {
+      if (profile?.plan_tier === tier) {
         setPhase("idle");
         router.refresh();
         return;
@@ -69,7 +74,7 @@ export function UpgradeButton() {
       await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL_MS));
     }
     setPhase("timed-out");
-  }, [router]);
+  }, [router, tier]);
 
   async function handleUpgrade() {
     setPhase("starting");
@@ -95,7 +100,8 @@ export function UpgradeButton() {
 
       const res = await fetch(`${BACKEND_URL}/billing/create-subscription`, {
         method: "POST",
-        headers: { Authorization: `Bearer ${session.access_token}` },
+        headers: { Authorization: `Bearer ${session.access_token}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ tier }),
       });
       const body = await res.json().catch(() => null);
 
@@ -111,7 +117,7 @@ export function UpgradeButton() {
         key: keyId,
         subscription_id: subscriptionId,
         name: "SPLEX",
-        description: "SPLEX Starter — ₹299/month",
+        description: TIER_COPY[tier].description,
         handler: () => {
           setPhase("awaiting-activation");
           void pollForActivation();
@@ -149,7 +155,7 @@ export function UpgradeButton() {
   return (
     <div className="flex flex-col gap-2">
       <Button onClick={handleUpgrade} disabled={phase === "starting"} className="w-full">
-        {phase === "starting" ? "Starting checkout…" : "Upgrade to Starter"}
+        {phase === "starting" ? "Starting checkout…" : TIER_COPY[tier].label}
       </Button>
       {error && <p className="text-sm text-danger">{error}</p>}
     </div>

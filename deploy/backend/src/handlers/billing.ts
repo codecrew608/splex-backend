@@ -1,6 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import { type HandlerResult, ok, fail } from "./result.js";
 import { createRazorpaySubscription, RazorpayApiError } from "../razorpay/client.js";
+import { isProEnabled } from "../pro/gate.js";
 
 // Unconditionally blocking states — no reclaim path exists for any of
 // these in claim_subscription_slot (migration 0049), ever, so refusing
@@ -110,7 +111,29 @@ export async function fakeCancel(fastify: FastifyInstance, userId: string): Prom
 //     holds the exclusive claim to — a plain update, no atomicity needed
 //     here since no concurrent request for this user could have gotten
 //     this far.
-export async function createSubscription(fastify: FastifyInstance, userId: string): Promise<HandlerResult> {
+//
+// tier defaults to "starter" so every existing call site (which never
+// passed one) keeps working unchanged. The "pro" path is gated by
+// isProEnabled() on top of everything above — Pro checkout is refused by
+// the SAME switch that gates Pro execution (migration 0067's
+// system_flags.pro_enabled), not a second, independent flag that could
+// drift from it.
+export async function createSubscription(fastify: FastifyInstance, userId: string, tier: "starter" | "pro" = "starter"): Promise<HandlerResult> {
+  if (tier === "pro" && !(await isProEnabled(fastify))) {
+    return fail("SPLEX Pro is not available yet.", 403);
+  }
+
+  const planId = tier === "pro" ? fastify.config.RAZORPAY_PRO_PLAN_ID : fastify.config.RAZORPAY_STARTER_PLAN_ID;
+  if (!planId) {
+    // Pro's flag can be on before RAZORPAY_PRO_PLAN_ID is actually
+    // configured (they're two independent, deliberately separate manual
+    // steps — see pro/gate.ts's own header). Fail with a clear,
+    // diagnosable error rather than silently falling back to the wrong
+    // plan or letting a later Razorpay API call throw an opaque one.
+    fastify.log.error({ tier }, "create-subscription: no plan id configured for this tier");
+    return fail("Checkout is not configured yet. Please try again later.", 500);
+  }
+
   const { data: existing, error: fetchError } = await fastify.supabaseAdmin
     .from("subscriptions")
     .select("status")
@@ -136,7 +159,6 @@ export async function createSubscription(fastify: FastifyInstance, userId: strin
     return fail("You already have a subscription in progress or active.", 409);
   }
 
-  const planId = fastify.config.RAZORPAY_STARTER_PLAN_ID;
   let subscription: { id: string; status: string };
   try {
     subscription = await createRazorpaySubscription(fastify, planId, { splex_user_id: userId });

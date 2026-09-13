@@ -10,6 +10,11 @@
 
 export interface FakeOptimizerState {
   config: Record<string, unknown>;
+  // Backs isProEnabled's system_flags read (migration 0067) — replaces
+  // the old SPLEX_PRO_ENABLED config field, which gate.ts no longer
+  // consults. Defaults true: most tests in this shared helper exist to
+  // exercise the optimizer's own behavior, not the gate.
+  proEnabled: boolean;
   modelRegistryRows: Array<Record<string, unknown>>;
   optimizerOutcomeInserts: Array<Record<string, unknown>>;
   logs: Array<{ level: string; msg: unknown }>;
@@ -17,7 +22,8 @@ export interface FakeOptimizerState {
 
 export function makeOptimizerState(overrides: Partial<FakeOptimizerState> = {}): FakeOptimizerState {
   return {
-    config: { PROMPT_OPTIMIZER_MODEL_ID: "test/paid-optimizer-model", SPLEX_PRO_ENABLED: true },
+    config: { PROMPT_OPTIMIZER_MODEL_ID: "test/paid-optimizer-model" },
+    proEnabled: true,
     modelRegistryRows: [],
     optimizerOutcomeInserts: [],
     logs: [],
@@ -35,6 +41,9 @@ export function makeOptimizerFastify(state: FakeOptimizerState) {
 
   const supabaseAdmin = {
     from(table: string) {
+      if (table === "system_flags") {
+        return { select: () => ({ eq: () => ({ maybeSingle: async () => ({ data: { enabled: state.proEnabled }, error: null }) }) }) };
+      }
       if (table === "model_registry") {
         const api: Record<string, unknown> = {};
         const chain = () => api;

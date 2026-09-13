@@ -561,10 +561,10 @@ describe("Prompt Optimizer — Pro-only by explicit product decision (source-lev
     expect(block).toContain('typeof lastMessage.content === "string"');
   });
 
-  it("no new feature flag exists for this — it reuses SPLEX_PRO_ENABLED via isProEnabled, the same single source of truth as every other pro/ surface", () => {
+  it("no new feature flag exists for this — it reuses isProEnabled, the same single source of truth as every other pro/ surface", () => {
     const src = read("optimizer/index.ts");
     expect(src).toContain('import { isProEnabled } from "../pro/gate.js";');
-    expect(src).toContain("if (!isProEnabled(fastify))");
+    expect(src).toContain("if (!(await isProEnabled(fastify)))");
     expect(src).not.toMatch(/PROMPT_OPTIMIZER_ENABLED/);
   });
 
